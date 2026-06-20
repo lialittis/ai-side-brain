@@ -95,14 +95,15 @@ AI Side-Brain
 
 ## Repository Structure
 
+Current scaffold:
+
 ```text
 ai-side-brain/
 │
 ├── README.md
-├── assets/
-│   └── logo.svg
+├── AGENTS.md
 │
-├── vault-template/
+├── memory/
 │   ├── 00_Inbox/
 │   ├── 01_Projects/
 │   ├── 02_Areas/
@@ -112,34 +113,34 @@ ai-side-brain/
 │   ├── 06_Logs/
 │   └── 90_Archive/
 │
+├── indexes/
 ├── templates/
-│   ├── project-home.md
-│   ├── paper-note.md
-│   ├── decision-record.md
-│   ├── weekly-review.md
-│   └── automation-card.md
-│
 ├── scripts/
-│   ├── scan_inbox.py
-│   ├── generate_file_index.py
-│   ├── backup_vault.sh
-│   └── check_stale_projects.py
-│
+├── docs/
 ├── workflows/
-│   └── n8n-examples/
+│   └── n8n/
 │
-└── docs/
-    ├── philosophy.md
-    ├── architecture.md
-    ├── setup.md
-    └── security.md
+├── .agents/
+└── .codex/
 ```
+
+Most implementation folders are currently placeholders. The repository is being shaped as a working local memory system first, with reusable templates, scripts, docs, and workflow examples to be added as the system stabilizes.
+
+Planned additions include:
+
+* Markdown templates for projects, papers, decisions, reviews, and automation cards;
+* local indexing and maintenance scripts;
+* setup, architecture, philosophy, and security documentation;
+* n8n workflow examples;
+* optional visual assets such as a project logo.
 
 ---
 
 ## Current Status
 
 This project is in an early design stage.
+
+The current repository contains the initial README, agent rules, and an empty directory scaffold for the memory vault, indexes, templates, scripts, docs, and automations.
 
 The first goal is to create a minimal but usable personal Side-Brain system based on:
 

@@ -1,0 +1,103 @@
+# Personal memory and generated local state.
+# Only placeholder files are allowed inside memory/ so the public repo can show structure.
+memory/**
+!memory/**/
+!memory/**/.gitkeep
+
+indexes/**
+!indexes/
+!indexes/.gitkeep
+!indexes/README.md
+
+# Local agent/tool state
+.agents/**
+.codex/**
+!.agents/
+!.codex/
+!.agents/.gitkeep
+!.codex/.gitkeep
+
+# Inbox, logs, archives, backups, and exports
+**/00_Inbox/**
+**/06_Logs/**
+**/90_Archive/**
+**/backup*/**
+**/backups/**
+**/exports/**
+*.bak
+*.backup
+*.orig
+*.tmp
+*.log
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# Re-allow memory placeholders after the broad private-content rules above.
+!memory/**/
+!memory/**/.gitkeep
+
+# Secrets, credentials, certificates, and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.asc
+*.gpg
+id_rsa*
+id_ed25519*
+credentials.json
+token.json
+secrets.*
+*.secret
+*.secrets
+
+# Local databases and vector stores
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+*.faiss
+*.index
+chroma/
+qdrant_storage/
+lancedb/
+
+# n8n local runtime and credential exports
+.n8n/
+n8n_data/
+workflows/**/credentials*.json
+workflows/**/*credential*.json
+
+# Python/runtime caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node/runtime caches
+node_modules/
+.npm/
+.pnpm-store/
+dist/
+build/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
