@@ -53,6 +53,52 @@ AI Side-Brain is built around several principles:
 
 ---
 
+## First Feature: Talk to Side-Brain
+
+The first goal of AI Side-Brain is to provide a low-friction communication interface.
+
+Users should be able to quickly capture thoughts, tasks, questions, files, and project updates from terminal, mobile devices, or AI agents. All inputs are first stored in a structured Inbox and later reviewed, organized, and connected to long-term memory.
+
+The system follows a simple principle:
+
+> Capture first, organize later.
+
+V0.1 starts with a local CLI capture flow:
+
+```bash
+python scripts/capture.py "quick note"
+python scripts/capture.py task "task content"
+python scripts/capture.py idea "idea content"
+python scripts/capture.py question "question content"
+python scripts/capture.py review
+python scripts/capture.py review yesterday
+python scripts/capture.py review 2026-06-20
+```
+
+For daily use, you can add a shell alias:
+
+```bash
+alias sb="python /home/tianchi/ai-side-brain/scripts/capture.py"
+```
+
+Then capture from anywhere:
+
+```bash
+sb idea "Side-Brain first feature should be convenient communication"
+sb review yesterday
+sb review 2026-06-20
+```
+
+Captures are appended to a daily private inbox file:
+
+```text
+memory/00_Inbox/YYYY-MM-DD.md
+```
+
+V0.1 intentionally does not call AI services, modify long-term project notes, or write decision records. It only captures reliably.
+
+---
+
 ## System Architecture
 
 ```text
@@ -102,6 +148,7 @@ ai-side-brain/
 │
 ├── README.md
 ├── AGENTS.md
+├── .gitignore
 │
 ├── memory/
 │   ├── 00_Inbox/
@@ -116,6 +163,7 @@ ai-side-brain/
 ├── indexes/
 ├── templates/
 ├── scripts/
+│   └── capture.py
 ├── docs/
 ├── workflows/
 │   └── n8n/
@@ -140,7 +188,7 @@ Planned additions include:
 
 This project is in an early design stage.
 
-The current repository contains the initial README, agent rules, and an empty directory scaffold for the memory vault, indexes, templates, scripts, docs, and automations.
+The current repository contains the initial README, agent rules, privacy-focused ignore rules, a memory vault scaffold, and the first CLI capture script.
 
 The first goal is to create a minimal but usable personal Side-Brain system based on:
 
@@ -154,12 +202,15 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 
 ## Roadmap
 
-* [ ] Define the Side-Brain vault structure
+* [x] Define the initial Side-Brain vault structure
+* [x] Add CLI capture into the daily Inbox
+* [ ] Add review and processing workflows for the Inbox
 * [ ] Create reusable Markdown templates
 * [ ] Add project and decision record workflows
 * [ ] Build basic file indexing scripts
 * [ ] Add weekly review automation
 * [ ] Add n8n workflow examples
+* [ ] Add mobile capture through iPhone Shortcuts
 * [ ] Explore MCP-based AI tool integration
 * [ ] Design permission levels for AI-assisted actions
 
