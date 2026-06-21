@@ -73,12 +73,19 @@ python scripts/capture.py question "question content"
 python scripts/capture.py review
 python scripts/capture.py review yesterday
 python scripts/capture.py review 2026-06-20
+python scripts/capture.py process
+python scripts/capture.py process yesterday
+python scripts/capture.py process 2026-06-20
+python scripts/capture.py process 2026-06-20 --ai
+python scripts/capture.py process 2026-06-20 --ai --provider openai
+python scripts/capture.py process 2026-06-20 --ai --provider glm
+python scripts/capture.py process 2026-06-20 --ai --provider deepseek
 ```
 
 For daily use, you can add a shell alias:
 
 ```bash
-alias sb="python /home/tianchi/ai-side-brain/scripts/capture.py"
+alias sb="/home/tianchi/ai-side-brain/.venv/bin/python /home/tianchi/ai-side-brain/scripts/capture.py"
 ```
 
 Then capture from anywhere:
@@ -87,6 +94,11 @@ Then capture from anywhere:
 sb idea "Side-Brain first feature should be convenient communication"
 sb review yesterday
 sb review 2026-06-20
+sb process yesterday
+sb process 2026-06-20
+sb process 2026-06-20 --ai
+sb process 2026-06-20 --ai --provider glm
+sb process 2026-06-20 --ai --provider deepseek
 ```
 
 Captures are appended to a daily private inbox file:
@@ -96,6 +108,61 @@ memory/00_Inbox/YYYY-MM-DD.md
 ```
 
 V0.1 intentionally does not call AI services, modify long-term project notes, or write decision records. It only captures reliably.
+
+V0.2 adds local inbox processing:
+
+```text
+memory/06_Logs/inbox-process-YYYY-MM-DD.md
+```
+
+The processing report suggests entry types, projects, tags, destinations, and next actions. It uses local heuristics only, does not call external AI services, and does not modify long-term memory.
+
+Processing is incremental. Each inbox entry gets a stable private ID, and processed IDs are tracked in:
+
+```text
+indexes/inbox-process-state.json
+```
+
+If you run `process` for the same date again, only new inbox entries are appended to that date's processing log.
+
+AI-assisted processing is available as an explicit opt-in:
+
+```bash
+.venv/bin/pip install -r requirements.txt
+sb process 2026-06-20 --ai
+```
+
+Local API configuration can live in `.env`, which is ignored by Git:
+
+```text
+OPENAI_API_KEY=your-api-key
+SIDE_BRAIN_AI_PROVIDER=openai
+SIDE_BRAIN_OPENAI_MODEL=gpt-5.5
+
+GLM_API_KEY=your-glm-api-key
+SIDE_BRAIN_GLM_MODEL=glm-5.2
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
+
+DEEPSEEK_API_KEY=your-deepseek-api-key
+SIDE_BRAIN_DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+Using `--ai` sends the selected unprocessed inbox entries to the configured model provider. Supported providers are `openai`, `glm`, and `deepseek`. AI processing has separate incremental state from local processing and per provider/model, so local processing does not block later AI processing of the same entries.
+
+Provider selection can be done per command:
+
+```bash
+sb process 2026-06-20 --ai --provider openai
+sb process 2026-06-20 --ai --provider glm
+sb process 2026-06-20 --ai --provider deepseek
+```
+
+Or through `.env`:
+
+```text
+SIDE_BRAIN_AI_PROVIDER=glm
+```
 
 ---
 
@@ -149,6 +216,7 @@ ai-side-brain/
 ├── README.md
 ├── AGENTS.md
 ├── .gitignore
+├── .env.example
 │
 ├── memory/
 │   ├── 00_Inbox/
@@ -164,6 +232,7 @@ ai-side-brain/
 ├── templates/
 ├── scripts/
 │   └── capture.py
+├── requirements.txt
 ├── docs/
 ├── workflows/
 │   └── n8n/
@@ -188,7 +257,7 @@ Planned additions include:
 
 This project is in an early design stage.
 
-The current repository contains the initial README, agent rules, privacy-focused ignore rules, a memory vault scaffold, and the first CLI capture script.
+The current repository contains the initial README, agent rules, privacy-focused ignore rules, a memory vault scaffold, and the first CLI capture/process script.
 
 The first goal is to create a minimal but usable personal Side-Brain system based on:
 
@@ -204,7 +273,8 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 
 * [x] Define the initial Side-Brain vault structure
 * [x] Add CLI capture into the daily Inbox
-* [ ] Add review and processing workflows for the Inbox
+* [x] Add review and local processing workflows for the Inbox
+* [x] Add opt-in OpenAI-assisted Inbox processing
 * [ ] Create reusable Markdown templates
 * [ ] Add project and decision record workflows
 * [ ] Build basic file indexing scripts
