@@ -9,12 +9,21 @@
 </p>
 
 <p align="center">
-  <em>A personal cognitive operating system for memory, projects, knowledge, automation, and AI-assisted workflows.</em>
+  <em>A personal cognitive operating system for capture, memory, tasks, projects, and AI-assisted workflows.</em>
 </p>
 
 ---
 
 ## What is AI Side-Brain?
+
+**AI Side-Brain** is the Personal Side-Brain repository in a broader Side-Brain ecosystem.
+
+The broader ecosystem has two related but separate product lines:
+
+* **Personal Side-Brain**: a private, local-first memory and action system for capture, tasks, reminders, project context, and daily review.
+* **Team Side-Brain**: a future separate repository for team research intelligence, literature screening, paper cards, project libraries, and research briefs.
+
+This repository is focused on the Personal Side-Brain. Team-specific collaboration, paper screening, roles, and dashboards should be developed in a separate `team-side-brain` repo or package.
 
 **AI Side-Brain** is an experimental framework for building a personal cognitive extension powered by modern AI tools.
 
@@ -50,6 +59,12 @@ AI Side-Brain is built around several principles:
 
 5. **Composable automation**
    Python scripts, n8n workflows, Git, Obsidian, and AI agents can be connected gradually.
+
+6. **Cloud-buffered reliability**
+   Public capture endpoints should buffer input before local processing, so capture can still succeed when the local node is offline.
+
+7. **Migratability and traceability**
+   Core data should remain portable, and AI-generated suggestions should preserve source entries, model names, and processing logs.
 
 ---
 
@@ -215,41 +230,39 @@ The Shortcut should ask for dictated or typed text, stop if it is empty, send th
 
 ## System Architecture
 
+Current implementation:
+
 ```text
-AI Side-Brain
-│
-├── Data Layer
-│   ├── PDFs
-│   ├── code repositories
-│   ├── images
-│   ├── documents
-│   └── raw files
-│
-├── Memory Layer
-│   ├── Obsidian vault
-│   ├── project notes
-│   ├── decision records
-│   ├── weekly reviews
-│   └── reusable knowledge
-│
-├── AI Interaction Layer
-│   ├── ChatGPT
-│   ├── Codex
-│   ├── local LLMs
-│   └── future agent interfaces
-│
-├── Automation Layer
-│   ├── n8n workflows
-│   ├── Python scripts
-│   ├── cron/systemd jobs
-│   └── backup/indexing tools
-│
-└── Security & Backup Layer
-    ├── Git private repository
-    ├── encrypted external backup
-    ├── permission control
-    └── recovery strategy
+CLI / Codex / n8n webhook
+-> scripts/capture.py
+-> memory/00_Inbox/YYYY-MM-DD.md
+-> review/process
+-> memory/06_Logs/inbox-process-YYYY-MM-DD.md
+-> indexes/inbox-process-state.json
 ```
+
+Target Personal Side-Brain architecture:
+
+```text
+iPhone Shortcut / Siri / Share Sheet / Web Form
+-> capture.tianchiyu.me
+-> Cloudflare Worker
+-> Cloudflare Queue
+-> Raspberry Pi local node
+-> n8n / task engine / AI parser
+-> Obsidian Markdown + SQLite/PostgreSQL
+-> Bark / Telegram / email / daily brief
+```
+
+The Raspberry Pi should be a private processing and memory node, not the only public capture endpoint. The public entry layer should be Cloudflare Worker + Queue, with Cloudflare Access protecting private dashboards.
+
+Detailed architecture docs:
+
+* [Architecture](docs/ARCHITECTURE.md)
+* [Security](docs/SECURITY.md)
+* [Deployment](docs/DEPLOYMENT.md)
+* [Data Model](docs/DATA_MODEL.md)
+* [Team Side-Brain Boundary](docs/TEAM_SIDE_BRAIN.md)
 
 ---
 
@@ -264,6 +277,13 @@ ai-side-brain/
 ├── AGENTS.md
 ├── .gitignore
 ├── .env.example
+│
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── SECURITY.md
+│   ├── DEPLOYMENT.md
+│   ├── DATA_MODEL.md
+│   └── TEAM_SIDE_BRAIN.md
 │
 ├── memory/
 │   ├── 00_Inbox/
@@ -280,32 +300,39 @@ ai-side-brain/
 ├── scripts/
 │   └── capture.py
 ├── requirements.txt
-├── docs/
+├── shared/
+│   └── README.md
 ├── workflows/
 │   └── n8n/
 │       └── side-brain-capture-webhook.json
+├── infra/
+│   ├── cloudflare/
+│   │   └── README.md
+│   └── personal/
+│       └── README.md
 │
 ├── .agents/
 └── .codex/
 ```
 
-Most implementation folders are currently placeholders. The repository is being shaped as a working local memory system first, with reusable templates, scripts, docs, and workflow examples to be added as the system stabilizes.
+Most implementation folders are currently placeholders. The repository is being shaped as a working local memory system first, then a hybrid cloud-entry/local-processing system.
 
 Planned additions include:
 
 * Markdown templates for projects, papers, decisions, reviews, and automation cards;
 * local indexing and maintenance scripts;
-* setup, architecture, philosophy, and security documentation;
-* n8n workflow examples;
+* additional n8n workflow examples;
+* Cloudflare Worker and Queue templates;
+* Raspberry Pi deployment files;
 * optional visual assets such as a project logo.
 
 ---
 
 ## Current Status
 
-This project is in an early design stage.
+This project is in an early implementation stage.
 
-The current repository contains the initial README, agent rules, privacy-focused ignore rules, a memory vault scaffold, and the first CLI capture/process script.
+The current repository contains agent rules, privacy-focused ignore rules, a memory vault scaffold, the CLI capture/process script, optional AI inbox processing, and an n8n capture webhook template.
 
 The first goal is to create a minimal but usable personal Side-Brain system based on:
 
@@ -314,6 +341,8 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * Python for local automation;
 * n8n for workflow orchestration;
 * AI tools for reasoning, summarization, coding, and task assistance.
+
+The next architectural step is to move public capture from a direct n8n endpoint to a Cloudflare Worker + Queue buffer, then let the local node consume messages and write to the same inbox pipeline.
 
 ---
 
@@ -325,6 +354,15 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * [x] Add opt-in AI-assisted Inbox processing
 * [x] Add iPhone Shortcut capture path through n8n
 * [x] Add n8n capture workflow example
+* [x] Document Personal Side-Brain target architecture
+* [x] Document Team Side-Brain as a separate future repo
+* [ ] Define Cloudflare Worker capture API contract
+* [ ] Add Cloudflare Worker mock
+* [ ] Add queue payload schema and local consumer
+* [ ] Add structured task/reminder schema
+* [ ] Add SQLite/PostgreSQL task persistence
+* [ ] Add notification adapter
+* [ ] Add basic status/log view
 * [ ] Create reusable Markdown templates
 * [ ] Add project and decision record workflows
 * [ ] Build basic file indexing scripts

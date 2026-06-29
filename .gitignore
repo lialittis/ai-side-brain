@@ -9,6 +9,9 @@ indexes/**
 !indexes/.gitkeep
 !indexes/README.md
 
+# Implementation state
+CODEx.md
+
 # Local agent/tool state
 .agents/**
 .codex/**
