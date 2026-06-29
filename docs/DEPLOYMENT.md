@@ -154,6 +154,12 @@ Status: partially implemented.
 
 ### Phase 2: Cloudflare Capture API
 
+Contract:
+
+```text
+docs/CAPTURE_API.md
+```
+
 Implement:
 
 - Worker route at `capture.tianchiyu.me`;
@@ -166,10 +172,12 @@ Implement:
 Planned configuration names:
 
 ```text
-SIDE_BRAIN_CAPTURE_API_URL
+SIDE_BRAIN_CAPTURE_API_URL=https://capture.tianchiyu.me/capture
 CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_QUEUE_NAME
 ```
+
+`SIDE_BRAIN_CAPTURE_API_URL` is safe to document. `SIDE_BRAIN_CAPTURE_TOKEN` is the private secret and must stay in `.env` or Cloudflare secrets.
 
 ### Phase 3: Local Queue Consumer
 

@@ -259,6 +259,7 @@ The Raspberry Pi should be a private processing and memory node, not the only pu
 Detailed architecture docs:
 
 * [Architecture](docs/ARCHITECTURE.md)
+* [Capture API](docs/CAPTURE_API.md)
 * [Security](docs/SECURITY.md)
 * [Deployment](docs/DEPLOYMENT.md)
 * [Data Model](docs/DATA_MODEL.md)
@@ -280,6 +281,7 @@ ai-side-brain/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md
+│   ├── CAPTURE_API.md
 │   ├── SECURITY.md
 │   ├── DEPLOYMENT.md
 │   ├── DATA_MODEL.md
@@ -356,7 +358,7 @@ The next architectural step is to move public capture from a direct n8n endpoint
 * [x] Add n8n capture workflow example
 * [x] Document Personal Side-Brain target architecture
 * [x] Document Team Side-Brain as a separate future repo
-* [ ] Define Cloudflare Worker capture API contract
+* [x] Define Cloudflare Worker capture API contract
 * [ ] Add Cloudflare Worker mock
 * [ ] Add queue payload schema and local consumer
 * [ ] Add structured task/reminder schema

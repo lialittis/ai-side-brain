@@ -109,6 +109,8 @@ The current processor suggests actions only. It does not write long-term project
 
 ## Target Capture Payload
 
+The canonical public API contract is defined in `docs/CAPTURE_API.md`.
+
 Cloudflare Worker and local consumer should use a richer normalized payload:
 
 ```json
@@ -265,4 +267,3 @@ updated_at:
 source_trace:
 ai_model_used:
 ```
-

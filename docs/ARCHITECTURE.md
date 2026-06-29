@@ -234,7 +234,7 @@ Status: implemented.
 
 Next target.
 
-- capture API contract;
+- capture API contract in `docs/CAPTURE_API.md`;
 - Cloudflare Worker mock;
 - Cloudflare Queue payload format;
 - local queue consumer;
@@ -274,4 +274,3 @@ Next target.
 - mobile native app;
 - public n8n editor;
 - Team Side-Brain features.
-

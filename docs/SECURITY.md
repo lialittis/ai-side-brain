@@ -40,6 +40,8 @@ DEEPSEEK_API_KEY
 SIDE_BRAIN_CAPTURE_TOKEN
 ```
 
+`SIDE_BRAIN_CAPTURE_API_URL` is public configuration, not a secret. The endpoint may be visible, but every write request must require `SIDE_BRAIN_CAPTURE_TOKEN` or stronger authentication.
+
 Future deployment keys should follow the same rule: define names in `.env.example`, store real values outside Git.
 
 ## Webhook Security
@@ -144,4 +146,3 @@ Those requirements belong in a separate `team-side-brain` repository. They shoul
 - Record source trace and model names for AI output.
 - Back up memory privately.
 - Test restore procedures before relying on backups.
-

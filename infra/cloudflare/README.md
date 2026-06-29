@@ -24,6 +24,7 @@ Cloudflare Tunnel
 
 Current status:
 
+- capture API contract is defined in `docs/CAPTURE_API.md`;
 - no Worker code yet;
 - no Queue consumer yet;
 - n8n direct webhook remains the current mobile capture bridge.
@@ -31,6 +32,5 @@ Current status:
 Next implementation step:
 
 ```text
-define the capture API contract, then add a Worker mock that validates payloads and returns a stable JSON response.
+add a Worker mock that validates the capture API payload and returns a stable JSON response.
 ```
-
