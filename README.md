@@ -80,6 +80,7 @@ python scripts/capture.py process 2026-06-20 --ai
 python scripts/capture.py process 2026-06-20 --ai --provider openai
 python scripts/capture.py process 2026-06-20 --ai --provider glm
 python scripts/capture.py process 2026-06-20 --ai --provider deepseek
+python scripts/capture.py import-json /tmp/side-brain-capture.json
 ```
 
 For daily use, you can add a shell alias:
@@ -164,6 +165,52 @@ Or through `.env`:
 SIDE_BRAIN_AI_PROVIDER=glm
 ```
 
+Mobile capture can be added through iPhone Shortcuts and n8n:
+
+```text
+iPhone Shortcut
+-> n8n webhook over Tailscale/VPN
+-> scripts/capture.py import-json
+-> memory/00_Inbox/YYYY-MM-DD.md
+```
+
+Import the workflow template:
+
+```text
+workflows/n8n/side-brain-capture-webhook.json
+```
+
+Configure n8n with:
+
+```text
+SIDE_BRAIN_CAPTURE_TOKEN=your-private-token
+```
+
+Configure the Shortcut to send a POST request to:
+
+```text
+http://your-tailscale-host:5678/webhook/side-brain-capture
+```
+
+Headers:
+
+```text
+Authorization: Bearer your-private-token
+Content-Type: application/json
+```
+
+Body:
+
+```json
+{
+  "content": "dictated or typed text",
+  "type": "capture",
+  "source": "iphone-shortcut"
+}
+```
+
+The Shortcut should ask for dictated or typed text, stop if it is empty, send the JSON request, and show the returned confirmation.
+
 ---
 
 ## System Architecture
@@ -236,6 +283,7 @@ ai-side-brain/
 ├── docs/
 ├── workflows/
 │   └── n8n/
+│       └── side-brain-capture-webhook.json
 │
 ├── .agents/
 └── .codex/
@@ -274,13 +322,14 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * [x] Define the initial Side-Brain vault structure
 * [x] Add CLI capture into the daily Inbox
 * [x] Add review and local processing workflows for the Inbox
-* [x] Add opt-in OpenAI-assisted Inbox processing
+* [x] Add opt-in AI-assisted Inbox processing
+* [x] Add iPhone Shortcut capture path through n8n
+* [x] Add n8n capture workflow example
 * [ ] Create reusable Markdown templates
 * [ ] Add project and decision record workflows
 * [ ] Build basic file indexing scripts
 * [ ] Add weekly review automation
-* [ ] Add n8n workflow examples
-* [ ] Add mobile capture through iPhone Shortcuts
+* [ ] Add richer mobile capture modes
 * [ ] Explore MCP-based AI tool integration
 * [ ] Design permission levels for AI-assisted actions
 

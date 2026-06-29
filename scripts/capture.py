@@ -40,6 +40,7 @@ USAGE = """Usage:
   python scripts/capture.py process YYYY-MM-DD --ai --provider openai
   python scripts/capture.py process YYYY-MM-DD --ai --provider glm
   python scripts/capture.py process YYYY-MM-DD --ai --provider deepseek
+  python scripts/capture.py import-json /tmp/side-brain-capture.json
 """
 
 
@@ -178,6 +179,11 @@ def parse_args(argv: list[str]) -> ParsedCommand:
         raise ValueError(USAGE.rstrip())
 
     command = argv[0]
+    if command == "import-json":
+        if len(argv) != 2:
+            raise ValueError("import-json requires exactly one JSON file path.\n\n" + USAGE.rstrip())
+        return ParsedCommand(command=command, value=argv[1])
+
     if command in DATE_COMMANDS:
         args = argv[1:]
         use_ai = False
@@ -259,16 +265,16 @@ def ensure_daily_file(path: Path, now: datetime) -> None:
     path.write_text(f"# Inbox - {now:%Y-%m-%d}\n\n## Captures\n\n", encoding="utf-8")
 
 
-def append_capture(entry_type: str, content: str, now: datetime) -> Path:
+def append_capture(entry_type: str, content: str, now: datetime, source: str = "CLI") -> Path:
     path = inbox_path_for_date(now.date())
     ensure_daily_file(path, now)
     entry_id = make_capture_id(entry_type, content, now)
 
     block = (
         "---\n\n"
-        f"### {now:%H:%M} · {entry_type} · CLI\n\n"
+        f"### {now:%H:%M} · {entry_type} · {source}\n\n"
         f"{content}\n\n"
-        "- Source: CLI\n"
+        f"- Source: {source}\n"
         f"- ID: {entry_id}\n"
         "- Status: unprocessed\n\n"
     )
@@ -277,6 +283,39 @@ def append_capture(entry_type: str, content: str, now: datetime) -> Path:
         inbox.write(block)
 
     return path
+
+
+def normalize_import_source(source: object) -> str:
+    if source is None:
+        return "import-json"
+    normalized = str(source).strip()
+    if not normalized:
+        return "import-json"
+    return normalized.replace("\n", " ").replace("\r", " ").replace("·", "-")
+
+
+def import_json_capture(json_path: str, now: datetime) -> Path:
+    path = Path(json_path).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ValueError(f"Import JSON file does not exist: {path}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Import JSON file is invalid JSON: {path}") from error
+
+    if not isinstance(payload, dict):
+        raise ValueError("Import JSON payload must be an object.")
+
+    content = str(payload.get("content", "")).strip()
+    if not content:
+        raise ValueError("Import JSON content cannot be empty.")
+
+    entry_type = str(payload.get("type", "capture")).strip() or "capture"
+    if entry_type not in ENTRY_TYPES:
+        raise ValueError(f"Import JSON type must be one of: {', '.join(sorted(ENTRY_TYPES))}.")
+
+    source = normalize_import_source(payload.get("source", "import-json"))
+    return append_capture(entry_type, content, now, source=source)
 
 
 def review_inbox(selector: str | None, now: datetime) -> int:
@@ -929,6 +968,15 @@ def main(argv: list[str]) -> int:
         return review_inbox(parsed.value, now)
     if parsed.command == "process":
         return process_inbox(parsed.value, now, parsed.use_ai, parsed.ai_provider)
+    if parsed.command == "import-json":
+        assert parsed.value is not None
+        try:
+            path = import_json_capture(parsed.value, now)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 2
+        print(f"Imported capture: {path}")
+        return 0
 
     assert parsed.value is not None
     path = append_capture(parsed.command, parsed.value, now)

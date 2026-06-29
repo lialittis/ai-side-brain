@@ -1,0 +1,161 @@
+{
+  "name": "Side-Brain Capture Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "side-brain-capture",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "side-brain-capture-webhook",
+      "name": "Side-Brain Capture Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const token = $env.SIDE_BRAIN_CAPTURE_TOKEN;\nconst headers = $json.headers || {};\nconst auth = headers.authorization || headers.Authorization || '';\nconst body = $json.body || {};\nconst content = String(body.content ?? '').trim();\nconst type = String(body.type || 'capture').trim();\nconst source = String(body.source || 'iphone-shortcut').trim();\nconst allowedTypes = ['capture', 'task', 'idea', 'question'];\n\nlet ok = true;\nlet statusCode = 200;\nlet error = '';\n\nif (!token) {\n  ok = false;\n  statusCode = 500;\n  error = 'SIDE_BRAIN_CAPTURE_TOKEN is not configured in n8n.';\n} else if (auth !== `Bearer ${token}`) {\n  ok = false;\n  statusCode = 401;\n  error = 'Unauthorized';\n} else if (!content) {\n  ok = false;\n  statusCode = 400;\n  error = 'content cannot be empty';\n} else if (!allowedTypes.includes(type)) {\n  ok = false;\n  statusCode = 400;\n  error = `type must be one of: ${allowedTypes.join(', ')}`;\n}\n\nconst requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;\nconst payload = { content, type, source };\n\nreturn [{\n  json: {\n    ok,\n    statusCode,\n    error,\n    requestId,\n    payloadBase64: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64')\n  }\n}];"
+      },
+      "id": "validate-capture-request",
+      "name": "Validate Capture Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "is-valid-request",
+      "name": "Is Valid Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=tmp=\"/tmp/side-brain-capture-{{ $json.requestId }}.json\"; printf '%s' '{{ $json.payloadBase64 }}' | base64 -d > \"$tmp\"; /home/tianchi/ai-side-brain/.venv/bin/python /home/tianchi/ai-side-brain/scripts/capture.py import-json \"$tmp\"; status=$?; rm -f \"$tmp\"; exit $status"
+      },
+      "id": "run-side-brain-capture",
+      "name": "Run Side-Brain Capture",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        780,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, message: 'Captured to Side-Brain', output: $json.stdout || '' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: false, error: $json.error } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        780,
+        140
+      ]
+    }
+  ],
+  "connections": {
+    "Side-Brain Capture Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Capture Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Capture Request": {
+      "main": [
+        [
+          {
+            "node": "Is Valid Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid Request?": {
+      "main": [
+        [
+          {
+            "node": "Run Side-Brain Capture",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Side-Brain Capture": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "staticData": null,
+  "tags": []
+}
