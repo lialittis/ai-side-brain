@@ -345,7 +345,7 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * n8n for workflow orchestration;
 * AI tools for reasoning, summarization, coding, and task assistance.
 
-The next architectural step is to create the Cloudflare Queue resource, deploy the queue-ready Worker, then let the local node consume messages and write to the same inbox pipeline.
+The next architectural step is to create the Cloudflare Queue resource, deploy the queue-ready Worker, then add the local/private memory ingest path that writes queued captures to the same inbox pipeline.
 
 ---
 
@@ -362,7 +362,8 @@ The next architectural step is to create the Cloudflare Queue resource, deploy t
 * [x] Define Cloudflare Worker capture API contract
 * [x] Add Cloudflare Worker mock
 * [x] Add Cloudflare Queue producer support
-* [ ] Add local queue consumer
+* [x] Add Cloudflare Queue consumer validation/logging
+* [ ] Add local/private memory ingest path
 * [ ] Add structured task/reminder schema
 * [ ] Add SQLite/PostgreSQL task persistence
 * [ ] Add notification adapter

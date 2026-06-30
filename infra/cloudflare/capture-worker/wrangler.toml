@@ -7,6 +7,11 @@ workers_dev = true
 binding = "CAPTURE_QUEUE"
 queue = "side-brain-captures"
 
+[[queues.consumers]]
+queue = "side-brain-captures"
+max_batch_size = 10
+max_batch_timeout = 5
+
 # Do not store SIDE_BRAIN_CAPTURE_TOKEN here.
 # For local development, copy .dev.vars.example to .dev.vars.
 # For deployment, run:

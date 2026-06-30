@@ -25,12 +25,13 @@ Cloudflare Tunnel
 Current status:
 
 - capture API contract is defined in `docs/CAPTURE_API.md`;
-- Worker with Queue producer support exists in `capture-worker/`;
-- no Queue consumer yet;
+- Worker with Queue producer and consumer support exists in `capture-worker/`;
+- current Queue consumer validates messages and logs safe metadata only;
+- no local/private memory consumer yet;
 - n8n direct webhook remains the current mobile capture bridge.
 
 Next implementation step:
 
 ```text
-create the Cloudflare Queue resource, deploy the Worker, then add a local Queue consumer.
+create the Cloudflare Queue resource, deploy the Worker, then add the local/private memory ingest path.
 ```

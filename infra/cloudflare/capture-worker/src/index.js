@@ -6,7 +6,52 @@ export default {
   async fetch(request, env) {
     return handleRequest(request, env);
   },
+
+  async queue(batch, env, ctx) {
+    await handleQueue(batch, env, ctx);
+  },
 };
+
+export async function handleQueue(batch) {
+  const messages = Array.isArray(batch?.messages) ? batch.messages : [];
+  const processedMessageIds = [];
+  const invalidMessages = [];
+
+  for (const message of messages) {
+    const validation = validateQueuedCapture(message.body);
+    if (!validation.ok) {
+      invalidMessages.push({
+        id: message.id || message.body?.message_id || "unknown",
+        reason: validation.message,
+      });
+      continue;
+    }
+
+    const capture = message.body;
+    processedMessageIds.push(capture.message_id);
+    console.log(
+      "side-brain capture consumed",
+      JSON.stringify({
+        message_id: capture.message_id,
+        source: capture.source,
+        input_type: capture.input_type,
+        content_length: capture.content.length,
+        created_at: capture.created_at,
+        received_at: capture.received_at,
+      }),
+    );
+  }
+
+  if (invalidMessages.length > 0) {
+    console.error("side-brain invalid queued captures", JSON.stringify(invalidMessages));
+    throw new Error(`Invalid queued capture message count: ${invalidMessages.length}`);
+  }
+
+  return {
+    processed: processedMessageIds.length,
+    message_ids: processedMessageIds,
+  };
+}
 
 export async function handleRequest(request, env = {}) {
   const url = new URL(request.url);
@@ -146,6 +191,58 @@ function validateCapturePayload(payload) {
   return { ok: true };
 }
 
+function validateQueuedCapture(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return invalidQueuedPayload("Queued message body must be an object.");
+  }
+
+  if (typeof payload.message_id !== "string" || !payload.message_id.trim()) {
+    return invalidQueuedPayload("message_id is required.");
+  }
+
+  if (!/^cap_\d{8}_[0-9a-f]{12,}$/i.test(payload.message_id)) {
+    return invalidQueuedPayload("message_id has an invalid format.");
+  }
+
+  if (typeof payload.content !== "string" || !payload.content.trim()) {
+    return invalidQueuedPayload("content is required.");
+  }
+
+  if (payload.content.length > MAX_CONTENT_LENGTH) {
+    return invalidQueuedPayload(`content must be at most ${MAX_CONTENT_LENGTH} characters.`);
+  }
+
+  if (typeof payload.source !== "string" || !SUPPORTED_SOURCES.has(payload.source)) {
+    return invalidQueuedPayload(`source must be one of: ${Array.from(SUPPORTED_SOURCES).join(", ")}.`);
+  }
+
+  if (typeof payload.input_type !== "string" || !SUPPORTED_INPUT_TYPES.has(payload.input_type)) {
+    return invalidQueuedPayload(`input_type must be one of: ${Array.from(SUPPORTED_INPUT_TYPES).join(", ")}.`);
+  }
+
+  if (typeof payload.created_at !== "string" || !isValidDateTime(payload.created_at)) {
+    return invalidQueuedPayload("created_at must be an ISO 8601 timestamp.");
+  }
+
+  if (typeof payload.received_at !== "string" || !isValidDateTime(payload.received_at)) {
+    return invalidQueuedPayload("received_at must be an ISO 8601 timestamp.");
+  }
+
+  if (typeof payload.timezone !== "string" || !payload.timezone.trim()) {
+    return invalidQueuedPayload("timezone is required.");
+  }
+
+  if (typeof payload.locale !== "string" || !payload.locale.trim()) {
+    return invalidQueuedPayload("locale is required.");
+  }
+
+  if (payload.metadata === null || typeof payload.metadata !== "object" || Array.isArray(payload.metadata)) {
+    return invalidQueuedPayload("metadata must be a JSON object.");
+  }
+
+  return { ok: true };
+}
+
 function normalizeCapturePayload(payload, receivedAt) {
   const source = typeof payload.source === "string" && payload.source.trim() ? payload.source.trim() : "manual_api";
   const inputType =
@@ -186,6 +283,13 @@ function invalidPayload(message) {
     ok: false,
     status: 400,
     error: "invalid_payload",
+    message,
+  };
+}
+
+function invalidQueuedPayload(message) {
+  return {
+    ok: false,
     message,
   };
 }

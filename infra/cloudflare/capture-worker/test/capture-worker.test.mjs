@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleRequest } from "../src/index.js";
+import { handleQueue, handleRequest } from "../src/index.js";
 
 const MOCK_ENV = { SIDE_BRAIN_CAPTURE_TOKEN: "test-token", SIDE_BRAIN_CAPTURE_MOCK_QUEUE: "true" };
 
@@ -254,6 +254,70 @@ test("POST /capture returns queue error when queue send fails", async () => {
   });
 });
 
+test("queue consumer validates and logs queued captures without logging content", async () => {
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args);
+
+  try {
+    const result = await handleQueue({
+      messages: [
+        {
+          id: "msg-1",
+          body: normalizedCapture({
+            message_id: "cap_20260630_abcdef123456",
+            content: "Private capture content",
+          }),
+        },
+      ],
+    });
+
+    assert.deepEqual(result, {
+      processed: 1,
+      message_ids: ["cap_20260630_abcdef123456"],
+    });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0][0], "side-brain capture consumed");
+
+    const loggedPayload = JSON.parse(logs[0][1]);
+    assert.equal(loggedPayload.message_id, "cap_20260630_abcdef123456");
+    assert.equal(loggedPayload.content_length, "Private capture content".length);
+    assert.equal(loggedPayload.content, undefined);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test("queue consumer throws for invalid queued captures", async () => {
+  const errors = [];
+  const originalError = console.error;
+  console.error = (...args) => errors.push(args);
+
+  try {
+    await assert.rejects(
+      () =>
+        handleQueue({
+          messages: [
+            {
+              id: "msg-1",
+              body: {
+                message_id: "bad-id",
+                content: "Quick capture",
+              },
+            },
+          ],
+        }),
+      /Invalid queued capture message count: 1/,
+    );
+
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0][0], "side-brain invalid queued captures");
+    assert.match(errors[0][1], /message_id has an invalid format/);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 test("unknown routes return not found", async () => {
   const response = await handleRequest(new Request("https://capture.example.test/unknown"), MOCK_ENV);
   const body = await response.json();
@@ -275,4 +339,19 @@ function jsonRequest(payload, token = "test-token") {
     },
     body: JSON.stringify(payload),
   });
+}
+
+function normalizedCapture(overrides = {}) {
+  return {
+    message_id: "cap_20260630_abcdef123456",
+    source: "iphone_shortcut",
+    input_type: "text",
+    content: "Quick capture",
+    created_at: "2026-06-30T10:15:00+02:00",
+    received_at: "2026-06-30T10:15:01+02:00",
+    timezone: "Europe/Berlin",
+    locale: "en",
+    metadata: {},
+    ...overrides,
+  };
 }

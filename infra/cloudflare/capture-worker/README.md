@@ -17,6 +17,12 @@ POST /capture
 -> normalize payload
 -> send to CAPTURE_QUEUE when bound
 -> 202 { "success": true, "status": "queued" }
+
+CAPTURE_QUEUE delivery
+-> queue(batch)
+-> validate normalized queued message
+-> log message metadata
+-> acknowledge by returning successfully
 ```
 
 Local mock behavior:
@@ -164,6 +170,11 @@ The Worker binding is defined in `wrangler.toml`:
 [[queues.producers]]
 binding = "CAPTURE_QUEUE"
 queue = "side-brain-captures"
+
+[[queues.consumers]]
+queue = "side-brain-captures"
+max_batch_size = 10
+max_batch_timeout = 5
 ```
 
 When this binding exists, successful captures call:
@@ -181,6 +192,21 @@ and return:
   "status": "queued"
 }
 ```
+
+The current queue consumer only validates messages and logs safe metadata:
+
+```json
+{
+  "message_id": "cap_20260630_abcdef123456",
+  "source": "iphone_shortcut",
+  "input_type": "text",
+  "content_length": 42,
+  "created_at": "2026-06-30T10:30:00+02:00",
+  "received_at": "2026-06-30T10:30:02.000Z"
+}
+```
+
+It does not log full capture content, forward messages, call n8n, or write to `memory/00_Inbox/` yet.
 
 ## Mock Status
 

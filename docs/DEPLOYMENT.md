@@ -173,6 +173,8 @@ Implemented:
 - payload normalization;
 - message ID generation;
 - Cloudflare Queue producer binding;
+- Cloudflare Queue consumer binding;
+- queue message validation and safe metadata logging;
 - local mock mode through `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true`;
 - real queue success response when `CAPTURE_QUEUE` is bound.
 
@@ -196,7 +198,7 @@ CLOUDFLARE_QUEUE_NAME
 
 Implement:
 
-- consume Cloudflare Queue messages;
+- receive queued messages from the Cloudflare consumer path;
 - write normalized messages through the same import/capture path;
 - keep idempotency by message ID;
 - log failures;
