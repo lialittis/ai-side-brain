@@ -46,6 +46,9 @@ CODEx.md
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 *.pem
 *.key
 *.crt
@@ -92,6 +95,8 @@ venv/
 node_modules/
 .npm/
 .pnpm-store/
+.wrangler/
+**/.wrangler/
 dist/
 build/
 

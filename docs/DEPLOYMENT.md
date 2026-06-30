@@ -160,14 +160,21 @@ Contract:
 docs/CAPTURE_API.md
 ```
 
+Worker mock:
+
+```text
+infra/cloudflare/capture-worker/
+```
+
 Implement:
 
 - Worker route at `capture.tianchiyu.me`;
 - token validation;
 - payload normalization;
 - message ID generation;
-- Queue enqueue;
-- JSON success response.
+- mock JSON success response.
+
+Later Queue integration should replace the mock success status with real Queue enqueue behavior.
 
 Planned configuration names:
 

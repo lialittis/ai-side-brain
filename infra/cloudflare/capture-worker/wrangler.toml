@@ -1,0 +1,9 @@
+name = "side-brain-capture-mock"
+main = "src/index.js"
+compatibility_date = "2026-06-30"
+workers_dev = true
+
+# Do not store SIDE_BRAIN_CAPTURE_TOKEN here.
+# For local development, copy .dev.vars.example to .dev.vars.
+# For deployment, run:
+#   wrangler secret put SIDE_BRAIN_CAPTURE_TOKEN

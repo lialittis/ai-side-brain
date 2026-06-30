@@ -25,12 +25,12 @@ Cloudflare Tunnel
 Current status:
 
 - capture API contract is defined in `docs/CAPTURE_API.md`;
-- no Worker code yet;
+- Worker mock exists in `capture-worker/`;
 - no Queue consumer yet;
 - n8n direct webhook remains the current mobile capture bridge.
 
 Next implementation step:
 
 ```text
-add a Worker mock that validates the capture API payload and returns a stable JSON response.
+connect the Worker to Cloudflare Queue and return queued status only after enqueue succeeds.
 ```

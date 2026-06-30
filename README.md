@@ -309,7 +309,8 @@ ai-side-brain/
 │       └── side-brain-capture-webhook.json
 ├── infra/
 │   ├── cloudflare/
-│   │   └── README.md
+│   │   ├── README.md
+│   │   └── capture-worker/
 │   └── personal/
 │       └── README.md
 │
@@ -324,7 +325,7 @@ Planned additions include:
 * Markdown templates for projects, papers, decisions, reviews, and automation cards;
 * local indexing and maintenance scripts;
 * additional n8n workflow examples;
-* Cloudflare Worker and Queue templates;
+* Cloudflare Queue templates;
 * Raspberry Pi deployment files;
 * optional visual assets such as a project logo.
 
@@ -344,7 +345,7 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * n8n for workflow orchestration;
 * AI tools for reasoning, summarization, coding, and task assistance.
 
-The next architectural step is to move public capture from a direct n8n endpoint to a Cloudflare Worker + Queue buffer, then let the local node consume messages and write to the same inbox pipeline.
+The next architectural step is to connect the Cloudflare Worker mock to Cloudflare Queue, then let the local node consume messages and write to the same inbox pipeline.
 
 ---
 
@@ -359,7 +360,7 @@ The next architectural step is to move public capture from a direct n8n endpoint
 * [x] Document Personal Side-Brain target architecture
 * [x] Document Team Side-Brain as a separate future repo
 * [x] Define Cloudflare Worker capture API contract
-* [ ] Add Cloudflare Worker mock
+* [x] Add Cloudflare Worker mock
 * [ ] Add queue payload schema and local consumer
 * [ ] Add structured task/reminder schema
 * [ ] Add SQLite/PostgreSQL task persistence
