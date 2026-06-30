@@ -76,6 +76,23 @@ chroma/
 qdrant_storage/
 lancedb/
 
+# Team Side-Brain private/generated state
+team/data/**
+team/uploads/**
+team/object-storage/**
+team/indexes/**
+team/logs/**
+!team/data/
+!team/data/.gitkeep
+!team/uploads/
+!team/uploads/.gitkeep
+!team/object-storage/
+!team/object-storage/.gitkeep
+!team/indexes/
+!team/indexes/.gitkeep
+!team/logs/
+!team/logs/.gitkeep
+
 # n8n local runtime and credential exports
 .n8n/
 n8n_data/

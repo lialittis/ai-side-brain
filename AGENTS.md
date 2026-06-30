@@ -1,6 +1,6 @@
 # AI Side-Brain Agent Rules
 
-This repository is a local-first personal cognitive system.
+This repository is a Side-Brain workspace with Personal Side-Brain and Team Side-Brain namespaces.
 
 ## Memory access policy
 
@@ -23,3 +23,13 @@ Codex must ask for confirmation before:
 - committing or pushing to Git
 - calling external APIs
 - sending messages or emails
+
+## Product boundary policy
+
+Personal Side-Brain private memory lives under `memory/`.
+
+Team Side-Brain code, docs, schemas, prompts, topic profiles, and future deployment files live under `team/`.
+
+Shared code lives under `shared/` only when it is product-neutral and has real callers from both Personal and Team Side-Brain.
+
+Codex may create or edit public Team Side-Brain scaffolding under `team/` without confirmation. Codex must ask before adding private team data, raw paper PDFs, credentials, production database dumps, or team audit logs.

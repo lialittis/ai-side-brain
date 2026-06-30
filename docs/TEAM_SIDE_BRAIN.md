@@ -1,18 +1,14 @@
-# Team Side-Brain Boundary
+# Team Side-Brain
 
-Team Side-Brain is a related but separate product line. It should not be implemented inside this Personal Side-Brain repository unless there is a clearly separated shared package.
+Team Side-Brain is the team research-intelligence product line inside this Side-Brain workspace.
 
-## Recommended Repository
-
-```text
-team-side-brain
-```
-
-Suggested description:
+It lives under:
 
 ```text
-A deployable AI-powered research intelligence system for teams.
+team/
 ```
+
+Team Side-Brain shares only product-neutral components with Personal Side-Brain. It must keep separate application state, permissions, audit logs, team data, and deployment configuration.
 
 ## Purpose
 
@@ -27,7 +23,7 @@ Team Side-Brain should support:
 - assigning reading tasks;
 - supporting team-level research knowledge management.
 
-## Why It Should Be Separate
+## Why It Has Its Own Namespace
 
 Personal Side-Brain and Team Side-Brain have different requirements:
 
@@ -36,7 +32,7 @@ Personal: private memory, single-user trust model, local-first notes.
 Team: shared data, users, roles, permissions, audit logs, team deployment.
 ```
 
-Mixing them too early would make this repo harder to secure and harder to evolve.
+Putting both in one repository is useful because schemas, prompts, connectors, and LLM utilities may converge. Mixing their runtime state is not useful. Team code should not write into `memory/`, and Personal capture code should not depend on Team permissions or paper storage.
 
 ## Team MVP
 
@@ -101,7 +97,7 @@ Output Layer
 Docker Compose
 FastAPI
 PostgreSQL
-Qdrant or pgvector
+pgvector or Qdrant
 MinIO
 n8n
 OpenAI API or local LLM
@@ -132,7 +128,7 @@ thermal comfort
 
 ## Shared Core Boundary
 
-A future shared package may contain:
+A shared package may contain:
 
 - schemas;
 - prompts;
@@ -141,5 +137,33 @@ A future shared package may contain:
 - retry helpers;
 - connectors.
 
-Shared code should stay generic. Personal memory rules and team permission rules should stay outside the shared core.
+Shared code should stay generic. Personal memory rules and Team permission rules should stay outside the shared core.
 
+## Initial Repo Layout
+
+```text
+team/
+├── README.md
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── DATA_MODEL.md
+│   └── MVP.md
+├── prompts/
+│   ├── paper-card.md
+│   └── relevance-screening.md
+├── schemas/
+│   ├── paper-card.schema.json
+│   └── topic-profile.schema.json
+└── topic-profiles/
+    └── research-topics.example.yaml
+```
+
+Future implementation folders should be added only when the corresponding component exists:
+
+```text
+team/backend/
+team/frontend/
+team/infra/
+team/workers/
+team/tests/
+```

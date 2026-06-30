@@ -134,7 +134,9 @@ Team Side-Brain requires a different model:
 - audit logs;
 - team data retention policy.
 
-Those requirements belong in a separate `team-side-brain` repository. They should not be mixed into this personal repo until a shared package boundary is clearly defined.
+Those requirements belong under the `team/` namespace. They must not be mixed into the Personal Side-Brain memory vault or capture pipeline.
+
+Same repository does not mean shared data access. Personal memory, team paper storage, team databases, and generated indexes should be ignored and backed up as separate private assets.
 
 ## Security Checklist
 

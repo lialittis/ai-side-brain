@@ -9,26 +9,26 @@
 </p>
 
 <p align="center">
-  <em>A personal cognitive operating system for capture, memory, tasks, projects, and AI-assisted workflows.</em>
+  <em>A Side-Brain workspace for personal memory, team research intelligence, and AI-assisted workflows.</em>
 </p>
 
 ---
 
 ## What is AI Side-Brain?
 
-**AI Side-Brain** is the Personal Side-Brain repository in a broader Side-Brain ecosystem.
+**AI Side-Brain** is the local workspace for building the Side-Brain ecosystem.
 
-The broader ecosystem has two related but separate product lines:
+The ecosystem has two related product lines in this repository:
 
 * **Personal Side-Brain**: a private, local-first memory and action system for capture, tasks, reminders, project context, and daily review.
-* **Team Side-Brain**: a future separate repository for team research intelligence, literature screening, paper cards, project libraries, and research briefs.
+* **Team Side-Brain**: a team research intelligence system for literature screening, paper cards, project libraries, reading assignments, and research briefs.
 
-This repository is focused on the Personal Side-Brain. Team-specific collaboration, paper screening, roles, and dashboards should be developed in a separate `team-side-brain` repo or package.
+The repository is organized as a monorepo-style workspace. Personal and Team Side-Brain may share generic schemas, prompts, connectors, and LLM utilities, but they must keep different trust boundaries, data stores, permissions, and product-specific workflows.
 
-**AI Side-Brain** is an experimental framework for building a personal cognitive extension powered by modern AI tools.
+**AI Side-Brain** is an experimental framework for building cognitive extensions powered by modern AI tools.
 
 It is not just a note-taking system.
-It is designed as a **local-first, AI-readable, automation-friendly personal operating layer** that helps you:
+It is designed as a **local-first, AI-readable, automation-friendly operating layer** that helps you:
 
 * organize long-term memory;
 * manage research and development projects;
@@ -230,7 +230,7 @@ The Shortcut should ask for dictated or typed text, stop if it is empty, send th
 
 ## System Architecture
 
-Current implementation:
+Current Personal Side-Brain implementation:
 
 ```text
 CLI / Codex / n8n webhook
@@ -256,6 +256,24 @@ iPhone Shortcut / Siri / Share Sheet / Web Form
 
 The Raspberry Pi should be a private processing and memory node, not the only public capture endpoint. The public entry layer should be Cloudflare Worker + Queue, with Cloudflare Access protecting private dashboards.
 
+Team Side-Brain starts in:
+
+```text
+team/
+```
+
+Current Team Side-Brain scope:
+
+```text
+paper intake
+-> paper card extraction
+-> relevance screening against topic profiles
+-> project/topic libraries
+-> weekly research briefs
+```
+
+Shared code belongs in `shared/` only when both Personal and Team Side-Brain have a real caller for the same generic behavior.
+
 Detailed architecture docs:
 
 * [Architecture](docs/ARCHITECTURE.md)
@@ -263,7 +281,7 @@ Detailed architecture docs:
 * [Security](docs/SECURITY.md)
 * [Deployment](docs/DEPLOYMENT.md)
 * [Data Model](docs/DATA_MODEL.md)
-* [Team Side-Brain Boundary](docs/TEAM_SIDE_BRAIN.md)
+* [Team Side-Brain](docs/TEAM_SIDE_BRAIN.md)
 
 ---
 
@@ -298,6 +316,14 @@ ai-side-brain/
 │   └── 90_Archive/
 │
 ├── indexes/
+├── personal/
+│   └── README.md
+├── team/
+│   ├── README.md
+│   ├── docs/
+│   ├── prompts/
+│   ├── schemas/
+│   └── topic-profiles/
 ├── templates/
 ├── scripts/
 │   └── capture.py
@@ -322,6 +348,7 @@ Most implementation folders are currently placeholders. The repository is being 
 
 Planned additions include:
 
+* Team Side-Brain local paper intake and screening workers;
 * Markdown templates for projects, papers, decisions, reviews, and automation cards;
 * local indexing and maintenance scripts;
 * additional n8n workflow examples;
@@ -335,9 +362,9 @@ Planned additions include:
 
 This project is in an early implementation stage.
 
-The current repository contains agent rules, privacy-focused ignore rules, a memory vault scaffold, the CLI capture/process script, optional AI inbox processing, and an n8n capture webhook template.
+The current repository contains agent rules, privacy-focused ignore rules, a memory vault scaffold, the CLI capture/process script, optional AI inbox processing, an n8n capture webhook template, and the first Team Side-Brain scaffold.
 
-The first goal is to create a minimal but usable personal Side-Brain system based on:
+The first Personal Side-Brain goal is to create a minimal but usable private memory system based on:
 
 * Obsidian for structured memory;
 * Git for version control;
@@ -345,7 +372,9 @@ The first goal is to create a minimal but usable personal Side-Brain system base
 * n8n for workflow orchestration;
 * AI tools for reasoning, summarization, coding, and task assistance.
 
-The next architectural step is to create the Cloudflare Queue resource, deploy the queue-ready Worker, then add the local/private memory ingest path that writes queued captures to the same inbox pipeline.
+The next Personal architectural step is to create the Cloudflare Queue resource, deploy the queue-ready Worker, then add the local/private memory ingest path that writes queued captures to the same inbox pipeline.
+
+The first Team Side-Brain goal is to create a minimal paper intelligence loop: paper intake, paper-card extraction, relevance screening, project/topic libraries, and weekly briefs.
 
 ---
 
@@ -358,7 +387,7 @@ The next architectural step is to create the Cloudflare Queue resource, deploy t
 * [x] Add iPhone Shortcut capture path through n8n
 * [x] Add n8n capture workflow example
 * [x] Document Personal Side-Brain target architecture
-* [x] Document Team Side-Brain as a separate future repo
+* [x] Convert repository direction to a Personal + Team Side-Brain workspace
 * [x] Define Cloudflare Worker capture API contract
 * [x] Add Cloudflare Worker mock
 * [x] Add Cloudflare Queue producer support
@@ -378,6 +407,10 @@ The next architectural step is to create the Cloudflare Queue resource, deploy t
 * [ ] Add richer mobile capture modes
 * [ ] Explore MCP-based AI tool integration
 * [ ] Design permission levels for AI-assisted actions
+* [ ] Add Team Side-Brain local paper intake
+* [ ] Add Team Side-Brain paper-card extraction
+* [ ] Add Team Side-Brain relevance screening
+* [ ] Add Team Side-Brain weekly research brief generation
 
 ---
 

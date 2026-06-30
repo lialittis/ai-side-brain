@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://side-brain.local/team/schemas/topic-profile.schema.json",
+  "title": "Team Side-Brain Topic Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "description",
+    "keywords",
+    "include_patterns",
+    "exclude_patterns",
+    "screening_questions",
+    "relevance_rubric",
+    "owners",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "include_patterns": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "exclude_patterns": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "screening_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "relevance_rubric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["highly_relevant", "possibly_relevant", "low_relevance", "needs_review"],
+      "properties": {
+        "highly_relevant": { "type": "string" },
+        "possibly_relevant": { "type": "string" },
+        "low_relevance": { "type": "string" },
+        "needs_review": { "type": "string" }
+      }
+    },
+    "owners": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

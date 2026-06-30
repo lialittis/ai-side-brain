@@ -264,7 +264,7 @@ This makes it possible to audit where a task, suggestion, or summary came from.
 
 ## Team Paper Card Schema
 
-This belongs in the future `team-side-brain` repo, but the Personal Side-Brain docs record the boundary.
+Team Side-Brain schemas now live under `team/schemas/` and are documented in `team/docs/DATA_MODEL.md`. This section is a high-level compatibility sketch for shared terminology.
 
 ```yaml
 paper_id:

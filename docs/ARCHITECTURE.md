@@ -1,6 +1,14 @@
 # AI Side-Brain Architecture
 
-This repository is the Personal Side-Brain implementation. It is part of a broader Side-Brain ecosystem, but it should not become a monorepo for every future use case.
+This repository is the Side-Brain workspace. It contains Personal Side-Brain, Team Side-Brain, and a small shared core for code that is genuinely reused by both product lines.
+
+The repository may be a monorepo, but the products must keep separate runtime boundaries:
+
+```text
+Personal: private single-user memory, local-first trust model.
+Team: shared research data, users, roles, permissions, audit logs.
+Shared: generic schemas, prompts, connectors, LLM helpers, utilities.
+```
 
 ## Product Lines
 
@@ -14,7 +22,16 @@ Purpose:
 - local-first Markdown memory;
 - optional AI-assisted classification and summarization.
 
-This repository owns the Personal Side-Brain.
+The current Personal Side-Brain implementation lives mostly at the repository root for compatibility:
+
+```text
+scripts/
+memory/
+indexes/
+workflows/
+infra/personal/
+infra/cloudflare/capture-worker/
+```
 
 ### Team Side-Brain
 
@@ -24,11 +41,37 @@ Purpose:
 - literature intake and screening;
 - paper cards;
 - topic and project libraries;
-- weekly research briefs.
+- weekly research briefs;
+- reading assignments.
 
-Team Side-Brain should be a separate repository, likely named `team-side-brain`. This repository may later share schemas, prompts, and LLM utilities with it, but it should not absorb team permissions, user management, paper storage, or dashboards.
+Team Side-Brain lives under:
 
-## Current Implementation
+```text
+team/
+```
+
+Team-specific user management, permissions, document storage, audit logs, dashboards, and project workflows should remain inside the Team namespace. They should not write into the private Personal memory vault.
+
+### Shared Core
+
+Purpose:
+
+- schemas used by both products;
+- prompts used by both products;
+- LLM client wrappers;
+- structured output validation;
+- retry and logging helpers;
+- generic connectors.
+
+Shared code lives under:
+
+```text
+shared/
+```
+
+Shared code must stay product-neutral. Personal memory policy and Team permission policy do not belong in `shared/`.
+
+## Current Personal Implementation
 
 The current implementation is a local-first capture and review pipeline:
 
@@ -60,8 +103,28 @@ Current limitations:
 - no structured task database yet;
 - no reminder engine yet;
 - no notification adapter yet;
-- no dashboard yet;
-- no Team Side-Brain implementation in this repo.
+- no dashboard yet.
+
+## Current Team Implementation
+
+The Team Side-Brain implementation is at the scaffold stage:
+
+```text
+team/
+├── docs/
+├── prompts/
+├── schemas/
+└── topic-profiles/
+```
+
+Initial scope:
+
+- paper intake contract;
+- paper card schema;
+- relevance screening schema;
+- configurable topic profiles;
+- prompt drafts for paper-card extraction and screening;
+- MVP architecture notes.
 
 ## Target Personal Architecture
 
@@ -202,21 +265,23 @@ The public website should remain separate from the dynamic backend. The private 
 This repository should contain:
 
 - Personal Side-Brain code;
+- Team Side-Brain code;
 - local capture and processing scripts;
 - personal deployment docs and infra templates;
+- team deployment docs and infra templates;
 - n8n workflow examples;
 - Personal Side-Brain schemas and prompts;
-- reusable shared modules only when they are proven useful.
+- Team Side-Brain schemas and prompts;
+- reusable shared modules only when they are proven useful by both sides.
 
 This repository should not contain:
 
-- team user management;
-- team role/permission implementation;
-- shared lab paper databases;
-- team object storage;
-- team dashboard code;
 - public personal memory content;
+- public team private data;
+- raw PDFs or private paper libraries;
 - API keys, tokens, certificates, or private notes.
+
+Same repository does not mean same trust boundary. Personal memory, Team research data, and generated indexes must remain separately ignored, backed up, and permissioned.
 
 ## Development Phases
 
@@ -259,12 +324,44 @@ Next target.
 - weekly review automation;
 - human confirmation before long-term memory edits.
 
-### Phase 4: Private Dashboard
+### Phase 4: Private Personal Dashboard
 
 - private status/log view;
 - inbox review UI;
 - task/reminder view;
 - protected by Cloudflare Access.
+
+## Team Side-Brain Phases
+
+### Team Phase 0: Scaffold
+
+- paper-card schema;
+- topic-profile schema;
+- relevance-screening prompt;
+- paper-card prompt;
+- example topic profiles.
+
+### Team Phase 1: Local Paper Intake
+
+- manual metadata intake;
+- DOI and arXiv URL intake;
+- PDF upload path;
+- local object storage;
+- normalized paper metadata store.
+
+### Team Phase 2: Paper Cards and Screening
+
+- paper text extraction;
+- AI paper-card generation;
+- relevance screening against topic profiles;
+- human review state.
+
+### Team Phase 3: Libraries and Briefs
+
+- project reading lists;
+- topic libraries;
+- reading assignments;
+- weekly research briefs.
 
 ## Non-goals for the First Personal MVP
 
@@ -275,4 +372,4 @@ Next target.
 - complete personal CRM;
 - mobile native app;
 - public n8n editor;
-- Team Side-Brain features.
+- team paper-processing features.
