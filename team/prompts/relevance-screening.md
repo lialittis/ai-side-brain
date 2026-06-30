@@ -2,6 +2,16 @@
 
 Version: team-relevance-screening-v0.1
 
+Compatibility prompt from the first Team scaffold.
+
+Prefer the product-neutral prompt at:
+
+```text
+shared/research/prompts/relevance-screening.md
+```
+
+The shared prompt returns `suggested_contexts` and `suggested_actions`. The Team adapter maps those fields to team projects, readers, review queues, and briefs.
+
 You screen a paper card against one Team Side-Brain topic profile.
 
 Rules:
@@ -10,7 +20,7 @@ Rules:
 - Do not use outside knowledge.
 - Explain the score with concrete matches or gaps.
 - Prefer `needs_review` when evidence is ambiguous.
-- Return only valid JSON matching the relevance-screening schema.
+- Return only valid JSON matching the compatibility relevance-screening schema.
 
 Relevance labels:
 

@@ -8,16 +8,16 @@ It lives under:
 team/
 ```
 
-Team Side-Brain shares only product-neutral components with Personal Side-Brain. It must keep separate application state, permissions, audit logs, team data, and deployment configuration.
+Team Side-Brain consumes the product-neutral Shared Research Core, then adds team-specific application state, permissions, audit logs, team data, and deployment configuration.
 
 ## Purpose
 
 Team Side-Brain should support:
 
-- collecting papers;
+- collecting papers and research resources;
 - screening literature;
 - analyzing papers;
-- generating structured paper cards;
+- generating structured research cards;
 - building project and topic libraries;
 - producing weekly research briefs;
 - assigning reading tasks;
@@ -32,20 +32,21 @@ Personal: private memory, single-user trust model, local-first notes.
 Team: shared data, users, roles, permissions, audit logs, team deployment.
 ```
 
-Putting both in one repository is useful because schemas, prompts, connectors, and LLM utilities may converge. Mixing their runtime state is not useful. Team code should not write into `memory/`, and Personal capture code should not depend on Team permissions or paper storage.
+Putting both in one repository is useful because the research/source/card/screening core is genuinely shared. Mixing runtime state is not useful. Team code should not write into `memory/`, and Personal capture code should not depend on Team permissions or paper storage.
 
 ## Team MVP
 
-Initial functions:
+Initial Team functions, built on Shared Research Core:
 
-1. Paper intake:
+1. Source intake:
    - DOI;
    - arXiv URL;
    - PDF upload;
    - Zotero sync;
+   - URL or file input;
    - manual metadata input.
 
-2. AI paper card:
+2. AI research card:
    - research question;
    - method;
    - data;
@@ -56,12 +57,12 @@ Initial functions:
    - possible use.
 
 3. Relevance screening:
-   - compare papers against topic profiles;
+   - compare research cards against topic profiles;
    - assign relevance score;
    - classify as highly relevant, possibly relevant, low relevance, or needs review.
 
 4. Project library:
-   - associate papers with projects;
+   - associate research items with projects;
    - maintain project-specific reading lists.
 
 5. Weekly research brief:
@@ -128,10 +129,16 @@ thermal comfort
 
 ## Shared Core Boundary
 
-A shared package may contain:
+A shared package now contains the product-neutral research contracts in:
 
-- schemas;
-- prompts;
+```text
+shared/research/
+```
+
+It may contain:
+
+- schemas for research sources, research items, research cards, topic profiles, and relevance screening;
+- prompts for research-card extraction and relevance screening;
 - LLM client wrappers;
 - structured output validation;
 - retry helpers;
@@ -142,6 +149,12 @@ Shared code should stay generic. Personal memory rules and Team permission rules
 ## Initial Repo Layout
 
 ```text
+shared/
+└── research/
+    ├── prompts/
+    ├── schemas/
+    └── topic-profiles/
+
 team/
 ├── README.md
 ├── docs/
@@ -149,13 +162,8 @@ team/
 │   ├── DATA_MODEL.md
 │   └── MVP.md
 ├── prompts/
-│   ├── paper-card.md
-│   └── relevance-screening.md
 ├── schemas/
-│   ├── paper-card.schema.json
-│   └── topic-profile.schema.json
 └── topic-profiles/
-    └── research-topics.example.yaml
 ```
 
 Future implementation folders should be added only when the corresponding component exists:

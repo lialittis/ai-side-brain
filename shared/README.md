@@ -4,10 +4,24 @@ This folder is reserved for reusable modules shared between Personal Side-Brain 
 
 Do not move code here just because it might be reusable. Add shared modules only when at least two real callers need the same behavior.
 
+Current shared modules:
+
+```text
+shared/
+└── research/
+    ├── README.md
+    ├── prompts/
+    ├── schemas/
+    └── topic-profiles/
+```
+
+`shared/research/` is the product-neutral research and resource intelligence core for source intake, normalized research items, research cards, topic profiles, and relevance screening.
+
 Likely future modules:
 
 ```text
 shared/
+├── research/
 ├── schemas/
 │   ├── task_schema.py
 │   ├── paper_schema.py

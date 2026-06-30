@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://side-brain.local/team/schemas/paper-card.schema.json",
-  "$comment": "Compatibility schema from the first Team scaffold. New product-neutral research cards live at shared/research/schemas/research-card.schema.json.",
-  "title": "Team Side-Brain Paper Card Compatibility Schema",
+  "$id": "https://side-brain.local/shared/research/schemas/research-card.schema.json",
+  "title": "Side-Brain Research Card",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "paper_id",
+    "id",
+    "item_id",
     "research_question",
     "method",
     "data",
@@ -16,13 +16,15 @@
     "relevance",
     "possible_use",
     "confidence",
+    "review_status",
     "source_trace",
     "ai_model_used",
     "created_at",
     "updated_at"
   ],
   "properties": {
-    "paper_id": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "item_id": { "type": "string", "minLength": 1 },
     "research_question": { "type": "string" },
     "method": { "type": "string" },
     "data": { "type": "string" },
@@ -44,12 +46,16 @@
       "type": "string",
       "enum": ["low", "medium", "high"]
     },
+    "review_status": {
+      "type": "string",
+      "enum": ["draft", "needs_review", "accepted", "rejected"]
+    },
     "source_trace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["paper_id", "processor", "prompt_version", "processed_at"],
+      "required": ["item_id", "processor", "prompt_version", "processed_at"],
       "properties": {
-        "paper_id": { "type": "string" },
+        "item_id": { "type": "string" },
         "source_document": { "type": "string" },
         "text_excerpt_refs": {
           "type": "array",

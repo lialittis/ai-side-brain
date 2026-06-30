@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://side-brain.local/shared/research/schemas/research-source.schema.json",
+  "title": "Side-Brain Research Source",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "source_type",
+    "source_value",
+    "submitted_at",
+    "metadata"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "source_type": {
+      "type": "string",
+      "enum": ["doi", "arxiv", "pdf_upload", "zotero", "manual", "url", "file", "note"]
+    },
+    "source_value": { "type": "string", "minLength": 1 },
+    "submitted_by": { "type": "string" },
+    "submitted_at": { "type": "string", "format": "date-time" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://side-brain.local/shared/research/schemas/relevance-screening.schema.json",
+  "title": "Side-Brain Relevance Screening",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "item_id",
+    "topic_profile_id",
+    "score",
+    "label",
+    "reasons",
+    "matched_terms",
+    "suggested_contexts",
+    "suggested_actions",
+    "confidence",
+    "source_trace",
+    "ai_model_used",
+    "screened_at"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "item_id": { "type": "string", "minLength": 1 },
+    "topic_profile_id": { "type": "string", "minLength": 1 },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "label": {
+      "type": "string",
+      "enum": ["highly_relevant", "possibly_relevant", "low_relevance", "needs_review"]
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "matched_terms": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "suggested_contexts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "suggested_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "source_trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item_id", "topic_profile_id", "processor", "prompt_version", "processed_at"],
+      "properties": {
+        "item_id": { "type": "string" },
+        "topic_profile_id": { "type": "string" },
+        "research_card_id": { "type": "string" },
+        "processor": { "type": "string" },
+        "ai_provider": { "type": "string" },
+        "ai_model": { "type": "string" },
+        "prompt_version": { "type": "string" },
+        "processed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ai_model_used": { "type": "string" },
+    "screened_at": { "type": "string", "format": "date-time" }
+  }
+}

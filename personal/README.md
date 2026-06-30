@@ -22,4 +22,6 @@ Current responsibilities:
 - optionally call an AI provider for processing suggestions;
 - keep long-term memory writes human-confirmed.
 
+Personal research-resource workflows should use the product-neutral Shared Research Core in `shared/research/`, then require review before writing accepted outputs into private memory.
+
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

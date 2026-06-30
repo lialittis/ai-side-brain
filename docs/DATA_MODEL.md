@@ -262,19 +262,79 @@ source_trace:
 
 This makes it possible to audit where a task, suggestion, or summary came from.
 
-## Team Paper Card Schema
+## Shared Research Core Schemas
 
-Team Side-Brain schemas now live under `team/schemas/` and are documented in `team/docs/DATA_MODEL.md`. This section is a high-level compatibility sketch for shared terminology.
+Product-neutral research schemas live under `shared/research/schemas/` and are used by both Personal Side-Brain and Team Side-Brain adapters. Team-specific data models are documented in `team/docs/DATA_MODEL.md`.
 
 ```yaml
-paper_id:
+research_source:
+  id:
+  source_type: doi | arxiv | pdf_upload | zotero | manual | url | file | note
+  source_value:
+  submitted_by:
+  submitted_at:
+  metadata:
+
+research_item:
+  id:
+  item_type: paper | article | report | webpage | dataset | book | code | note | other
+  title:
+  authors:
+  abstract:
+  year:
+  venue:
+  identifiers:
+  url:
+  object_key:
+  source_ids:
+  created_at:
+  updated_at:
+
+research_card:
+  id:
+  item_id:
+  research_question:
+  method:
+  data:
+  findings:
+  innovation:
+  limitations:
+  relevance:
+  possible_use:
+  confidence:
+  review_status:
+  source_trace:
+  ai_model_used:
+  created_at:
+  updated_at:
+
+relevance_screening:
+  id:
+  item_id:
+  topic_profile_id:
+  score:
+  label: highly_relevant | possibly_relevant | low_relevance | needs_review
+  reasons:
+  matched_terms:
+  suggested_contexts:
+  suggested_actions:
+  confidence:
+  source_trace:
+  ai_model_used:
+  screened_at:
+```
+
+The older paper-card terminology maps to the shared vocabulary as:
+
+```yaml
+paper_id: item_id
 title:
 authors:
 year:
-source:
+source: research_source
 doi:
 url:
-pdf_path:
+pdf_path: object_key
 abstract:
 keywords:
 research_question:
@@ -283,11 +343,11 @@ data:
 main_findings:
 innovation:
 limitations:
-relevance_to_team:
+relevance_to_team: relevance plus Team adapter context
 possible_use:
-related_projects:
-recommended_reader:
-relevance_score:
+related_projects: suggested_contexts interpreted by Team Side-Brain
+recommended_reader: Team adapter assignment, not shared core
+relevance_score: relevance_screening.score
 confidence:
 created_at:
 updated_at:

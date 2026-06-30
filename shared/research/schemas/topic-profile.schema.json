@@ -1,8 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://side-brain.local/team/schemas/topic-profile.schema.json",
-  "$comment": "Compatibility schema from the first Team scaffold. New product-neutral topic profiles live at shared/research/schemas/topic-profile.schema.json.",
-  "title": "Team Side-Brain Topic Profile Compatibility Schema",
+  "$id": "https://side-brain.local/shared/research/schemas/topic-profile.schema.json",
+  "title": "Side-Brain Topic Profile",
   "type": "object",
   "additionalProperties": false,
   "required": [

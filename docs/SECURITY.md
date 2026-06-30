@@ -138,6 +138,8 @@ Those requirements belong under the `team/` namespace. They must not be mixed in
 
 Same repository does not mean shared data access. Personal memory, team paper storage, team databases, and generated indexes should be ignored and backed up as separate private assets.
 
+Shared Research Core under `shared/research/` may contain public schemas, prompts, and examples used by both Personal and Team Side-Brain. It must not contain private PDFs, personal resource notes, team paper libraries, team audit logs, credentials, or product-specific permission rules.
+
 ## Security Checklist
 
 - Keep `.env` ignored.

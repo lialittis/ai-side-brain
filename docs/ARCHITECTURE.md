@@ -1,13 +1,13 @@
 # AI Side-Brain Architecture
 
-This repository is the Side-Brain workspace. It contains Personal Side-Brain, Team Side-Brain, and a small shared core for code that is genuinely reused by both product lines.
+This repository is the Side-Brain workspace. It contains Personal Side-Brain, Team Side-Brain, and a shared core for code and contracts that are genuinely reused by both product lines.
 
 The repository may be a monorepo, but the products must keep separate runtime boundaries:
 
 ```text
 Personal: private single-user memory, local-first trust model.
 Team: shared research data, users, roles, permissions, audit logs.
-Shared: generic schemas, prompts, connectors, LLM helpers, utilities.
+Shared: product-neutral schemas, prompts, research contracts, connectors, LLM helpers, utilities.
 ```
 
 ## Product Lines
@@ -18,7 +18,7 @@ Purpose:
 
 - private capture and memory system;
 - task and reminder management;
-- project context and daily review;
+- project context, research resources, and daily review;
 - local-first Markdown memory;
 - optional AI-assisted classification and summarization.
 
@@ -37,9 +37,9 @@ infra/cloudflare/capture-worker/
 
 Purpose:
 
-- team research intelligence;
+- team research intelligence built around shared research contracts;
 - literature intake and screening;
-- paper cards;
+- research cards;
 - topic and project libraries;
 - weekly research briefs;
 - reading assignments.
@@ -58,6 +58,7 @@ Purpose:
 
 - schemas used by both products;
 - prompts used by both products;
+- shared research source, item, card, topic, and screening contracts;
 - LLM client wrappers;
 - structured output validation;
 - retry and logging helpers;
@@ -70,6 +71,14 @@ shared/
 ```
 
 Shared code must stay product-neutral. Personal memory policy and Team permission policy do not belong in `shared/`.
+
+The first shared product feature is Shared Research Core:
+
+```text
+shared/research/
+```
+
+Shared Research Core handles source intake contracts, normalized research items, research cards, topic profiles, and relevance screening. Personal and Team Side-Brain each provide adapters around the shared output.
 
 ## Current Personal Implementation
 
@@ -98,12 +107,39 @@ Implemented capabilities:
 
 Current limitations:
 
-- no local/private memory queue consumer yet;
-- no production Cloudflare Queue integration yet;
+- no private Cloudflare Tunnel exposure for local ingest yet;
+- no production Cloudflare Queue deployment verification yet;
 - no structured task database yet;
 - no reminder engine yet;
 - no notification adapter yet;
 - no dashboard yet.
+
+## Current Shared Research Core
+
+The product-neutral research contracts live under:
+
+```text
+shared/research/
+├── prompts/
+├── schemas/
+└── topic-profiles/
+```
+
+Initial scope:
+
+- source intake contract for DOI, arXiv, PDF upload, Zotero, manual metadata, URL, file, and note inputs;
+- research item schema;
+- research card schema;
+- relevance screening schema;
+- configurable topic profiles;
+- prompt drafts for research-card extraction and screening.
+
+Product adapters decide where accepted outputs go:
+
+```text
+Personal: private review -> memory/03_Resources or project notes.
+Team: team review -> database, libraries, assignments, audit logs, briefs.
+```
 
 ## Current Team Implementation
 
@@ -117,13 +153,13 @@ team/
 └── topic-profiles/
 ```
 
-Initial scope:
+Initial Team-specific scope:
 
-- paper intake contract;
-- paper card schema;
-- relevance screening schema;
-- configurable topic profiles;
-- prompt drafts for paper-card extraction and screening;
+- team adapter around the shared research contracts;
+- project and topic libraries;
+- reading assignments;
+- team review states;
+- team data storage and audit logs;
 - MVP architecture notes.
 
 ## Target Personal Architecture
@@ -272,6 +308,7 @@ This repository should contain:
 - n8n workflow examples;
 - Personal Side-Brain schemas and prompts;
 - Team Side-Brain schemas and prompts;
+- Shared Research Core schemas and prompts;
 - reusable shared modules only when they are proven useful by both sides.
 
 This repository should not contain:
@@ -331,32 +368,44 @@ Next target.
 - task/reminder view;
 - protected by Cloudflare Access.
 
-## Team Side-Brain Phases
+## Shared Research Core Phases
 
-### Team Phase 0: Scaffold
+### Shared Research Phase 0: Contracts
 
-- paper-card schema;
+- source schema;
+- research-item schema;
+- research-card schema;
 - topic-profile schema;
+- relevance-screening schema;
+- research-card prompt;
 - relevance-screening prompt;
-- paper-card prompt;
 - example topic profiles.
 
-### Team Phase 1: Local Paper Intake
+### Shared Research Phase 1: Local Source Intake
 
 - manual metadata intake;
 - DOI and arXiv URL intake;
-- PDF upload path;
-- local object storage;
-- normalized paper metadata store.
+- URL and local file intake;
+- optional PDF object key;
+- normalized research item metadata store.
 
-### Team Phase 2: Paper Cards and Screening
+### Shared Research Phase 2: Cards and Screening
 
 - paper text extraction;
-- AI paper-card generation;
+- AI research-card generation;
 - relevance screening against topic profiles;
-- human review state.
+- source trace and model metadata.
 
-### Team Phase 3: Libraries and Briefs
+## Team Side-Brain Phases
+
+### Team Phase 1: Team Adapter
+
+- map shared research sources to team submitters and uploads;
+- persist normalized research items in team storage;
+- apply team document access rules;
+- keep team review and audit state outside `shared/`.
+
+### Team Phase 2: Libraries and Briefs
 
 - project reading lists;
 - topic libraries;

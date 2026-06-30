@@ -20,8 +20,9 @@
 
 The ecosystem has two related product lines in this repository:
 
-* **Personal Side-Brain**: a private, local-first memory and action system for capture, tasks, reminders, project context, and daily review.
-* **Team Side-Brain**: a team research intelligence system for literature screening, paper cards, project libraries, reading assignments, and research briefs.
+* **Personal Side-Brain**: a private, local-first memory and action system for capture, tasks, reminders, project context, research resources, and daily review.
+* **Team Side-Brain**: a team research intelligence system for literature screening, research cards, project libraries, reading assignments, and research briefs.
+* **Shared Research Core**: product-neutral source intake, research item metadata, research cards, topic profiles, and relevance screening used by both Personal and Team Side-Brain.
 
 The repository is organized as a monorepo-style workspace. Personal and Team Side-Brain may share generic schemas, prompts, connectors, and LLM utilities, but they must keep different trust boundaries, data stores, permissions, and product-specific workflows.
 
@@ -256,18 +257,41 @@ iPhone Shortcut / Siri / Share Sheet / Web Form
 
 The Raspberry Pi should be a private processing and memory node, not the only public capture endpoint. The public entry layer should be Cloudflare Worker + Queue, with Cloudflare Access protecting private dashboards.
 
+Shared research intelligence starts in:
+
+```text
+shared/research/
+```
+
+It provides product-neutral research/resource intake contracts, research-card prompts, topic profiles, and relevance-screening schemas for both Personal and Team Side-Brain.
+
+Personal and Team adapters stay separate:
+
+```text
+Personal adapter: shared research output -> private memory review and resource notes.
+Team adapter: shared research output -> team database, permissions, libraries, assignments, and briefs.
+```
+
 Team Side-Brain starts in:
 
 ```text
 team/
 ```
 
+Current shared research scope:
+
+```text
+research source intake
+-> research item normalization
+-> research card extraction
+-> relevance screening against topic profiles
+```
+
 Current Team Side-Brain scope:
 
 ```text
-paper intake
--> paper card extraction
--> relevance screening against topic profiles
+shared research core
+-> team review workflow
 -> project/topic libraries
 -> weekly research briefs
 ```
@@ -282,6 +306,7 @@ Detailed architecture docs:
 * [Deployment](docs/DEPLOYMENT.md)
 * [Data Model](docs/DATA_MODEL.md)
 * [Team Side-Brain](docs/TEAM_SIDE_BRAIN.md)
+* [Shared Research Core](docs/SHARED_RESEARCH_CORE.md)
 
 ---
 
@@ -303,7 +328,8 @@ ai-side-brain/
 │   ├── SECURITY.md
 │   ├── DEPLOYMENT.md
 │   ├── DATA_MODEL.md
-│   └── TEAM_SIDE_BRAIN.md
+│   ├── TEAM_SIDE_BRAIN.md
+│   └── SHARED_RESEARCH_CORE.md
 │
 ├── memory/
 │   ├── 00_Inbox/
@@ -329,7 +355,11 @@ ai-side-brain/
 │   └── capture.py
 ├── requirements.txt
 ├── shared/
-│   └── README.md
+│   ├── README.md
+│   └── research/
+│       ├── prompts/
+│       ├── schemas/
+│       └── topic-profiles/
 ├── workflows/
 │   └── n8n/
 │       └── side-brain-capture-webhook.json
@@ -348,7 +378,8 @@ Most implementation folders are currently placeholders. The repository is being 
 
 Planned additions include:
 
-* Team Side-Brain local paper intake and screening workers;
+* Shared Research Core local source intake and screening workers;
+* Personal and Team adapters for reviewed research outputs;
 * Markdown templates for projects, papers, decisions, reviews, and automation cards;
 * local indexing and maintenance scripts;
 * additional n8n workflow examples;
@@ -362,7 +393,7 @@ Planned additions include:
 
 This project is in an early implementation stage.
 
-The current repository contains agent rules, privacy-focused ignore rules, a memory vault scaffold, the CLI capture/process script, optional AI inbox processing, an n8n capture webhook template, and the first Team Side-Brain scaffold.
+The current repository contains agent rules, privacy-focused ignore rules, a memory vault scaffold, the CLI capture/process script, optional AI inbox processing, an n8n capture webhook template, the first Team Side-Brain scaffold, and the shared research contracts.
 
 The first Personal Side-Brain goal is to create a minimal but usable private memory system based on:
 
@@ -374,7 +405,7 @@ The first Personal Side-Brain goal is to create a minimal but usable private mem
 
 The next Personal architectural step is to create the Cloudflare Queue resource, deploy the queue-ready Worker, then add the local/private memory ingest path that writes queued captures to the same inbox pipeline.
 
-The first Team Side-Brain goal is to create a minimal paper intelligence loop: paper intake, paper-card extraction, relevance screening, project/topic libraries, and weekly briefs.
+The first shared research goal is to create a minimal research intelligence loop that both Personal and Team can use: source intake, research-card extraction, relevance screening, and reviewed output routing.
 
 ---
 
@@ -407,9 +438,11 @@ The first Team Side-Brain goal is to create a minimal paper intelligence loop: p
 * [ ] Add richer mobile capture modes
 * [ ] Explore MCP-based AI tool integration
 * [ ] Design permission levels for AI-assisted actions
-* [ ] Add Team Side-Brain local paper intake
-* [ ] Add Team Side-Brain paper-card extraction
-* [ ] Add Team Side-Brain relevance screening
+* [ ] Add Shared Research Core local source intake
+* [ ] Add Shared Research Core research-card extraction
+* [ ] Add Shared Research Core relevance screening
+* [ ] Add Personal research-resource adapter
+* [ ] Add Team Side-Brain research adapter
 * [ ] Add Team Side-Brain weekly research brief generation
 
 ---
