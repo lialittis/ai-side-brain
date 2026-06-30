@@ -363,7 +363,10 @@ The next architectural step is to create the Cloudflare Queue resource, deploy t
 * [x] Add Cloudflare Worker mock
 * [x] Add Cloudflare Queue producer support
 * [x] Add Cloudflare Queue consumer validation/logging
-* [ ] Add local/private memory ingest path
+* [x] Add local/private memory ingest path
+* [x] Forward Cloudflare Queue consumer messages to local ingest
+* [x] Add local ingest idempotency by message ID
+* [ ] Expose local ingest privately through Cloudflare Tunnel
 * [ ] Add structured task/reminder schema
 * [ ] Add SQLite/PostgreSQL task persistence
 * [ ] Add notification adapter

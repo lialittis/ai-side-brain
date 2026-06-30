@@ -12,7 +12,7 @@ export default {
   },
 };
 
-export async function handleQueue(batch) {
+export async function handleQueue(batch, env = {}) {
   const messages = Array.isArray(batch?.messages) ? batch.messages : [];
   const processedMessageIds = [];
   const invalidMessages = [];
@@ -28,6 +28,10 @@ export async function handleQueue(batch) {
     }
 
     const capture = message.body;
+    if (isQueueForwardEnabled(env)) {
+      await forwardCaptureToLocalIngest(capture, env);
+    }
+
     processedMessageIds.push(capture.message_id);
     console.log(
       "side-brain capture consumed",
@@ -135,6 +139,43 @@ function hasQueueBinding(env) {
 
 function isMockQueueEnabled(env) {
   return ["1", "true", "yes"].includes(String(env.SIDE_BRAIN_CAPTURE_MOCK_QUEUE || "").toLowerCase());
+}
+
+function isQueueForwardEnabled(env) {
+  return ["1", "true", "yes"].includes(String(env.SIDE_BRAIN_QUEUE_FORWARD_ENABLED || "").toLowerCase());
+}
+
+async function forwardCaptureToLocalIngest(capture, env) {
+  const ingestUrl = String(env.SIDE_BRAIN_LOCAL_INGEST_URL || "").trim();
+  const ingestToken = String(env.SIDE_BRAIN_LOCAL_INGEST_TOKEN || "").trim();
+
+  if (!ingestUrl || !ingestToken) {
+    throw new Error("Local ingest forwarding is enabled but URL or token is missing.");
+  }
+
+  let response;
+  try {
+    response = await fetch(ingestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ingestToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(capture),
+    });
+  } catch (error) {
+    throw new Error(`Local ingest request failed: ${error.message}`);
+  }
+
+  if (!response.ok) {
+    let responseText = "";
+    try {
+      responseText = await response.text();
+    } catch {
+      responseText = "";
+    }
+    throw new Error(`Local ingest returned HTTP ${response.status}: ${responseText}`);
+  }
 }
 
 function validateCapturePayload(payload) {

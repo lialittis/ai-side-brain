@@ -21,6 +21,7 @@ POST /capture
 CAPTURE_QUEUE delivery
 -> queue(batch)
 -> validate normalized queued message
+-> optionally forward to local ingest endpoint
 -> log message metadata
 -> acknowledge by returning successfully
 ```
@@ -206,7 +207,68 @@ The current queue consumer only validates messages and logs safe metadata:
 }
 ```
 
-It does not log full capture content, forward messages, call n8n, or write to `memory/00_Inbox/` yet.
+It does not log full capture content or call n8n.
+
+If `SIDE_BRAIN_QUEUE_FORWARD_ENABLED=true`, the queue consumer forwards the normalized capture to:
+
+```text
+SIDE_BRAIN_LOCAL_INGEST_URL
+```
+
+with:
+
+```text
+Authorization: Bearer <SIDE_BRAIN_LOCAL_INGEST_TOKEN>
+```
+
+When the local ingest server is running, this writes to `memory/00_Inbox/YYYY-MM-DD.md`.
+
+## Local End-to-End Test
+
+Run local ingest from the repo root:
+
+```bash
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=local-test-token \
+  .venv/bin/python scripts/local_ingest_server.py
+```
+
+Configure `.dev.vars` in this folder:
+
+```text
+SIDE_BRAIN_CAPTURE_TOKEN=local-capture-token
+SIDE_BRAIN_QUEUE_FORWARD_ENABLED=true
+SIDE_BRAIN_LOCAL_INGEST_URL=http://127.0.0.1:8765/ingest/capture
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=local-test-token
+```
+
+Remove or comment out `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true`, because mock mode bypasses the Queue.
+
+Start the Worker:
+
+```bash
+npm run dev
+```
+
+Send a capture:
+
+```bash
+curl -i -X POST http://127.0.0.1:8787/capture \
+  -H "Authorization: Bearer local-capture-token" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "source": "iphone_shortcut",
+    "input_type": "text",
+    "content": "Local Worker to Queue to Inbox test.",
+    "timezone": "Europe/Berlin",
+    "locale": "en"
+  }'
+```
+
+Then check the repo inbox:
+
+```bash
+tail -n 20 ../../memory/00_Inbox/$(date +%F).md
+```
 
 ## Mock Status
 

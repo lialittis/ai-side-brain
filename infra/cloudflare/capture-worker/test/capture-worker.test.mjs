@@ -288,6 +288,122 @@ test("queue consumer validates and logs queued captures without logging content"
   }
 });
 
+test("queue consumer forwards queued captures to local ingest when enabled", async () => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return new Response(JSON.stringify({ success: true, status: "ingested" }), { status: 201 });
+  };
+
+  try {
+    const result = await handleQueue(
+      {
+        messages: [
+          {
+            id: "msg-1",
+            body: normalizedCapture({
+              message_id: "cap_20260630_abcdef123456",
+              content: "Private capture content",
+            }),
+          },
+        ],
+      },
+      {
+        SIDE_BRAIN_QUEUE_FORWARD_ENABLED: "true",
+        SIDE_BRAIN_LOCAL_INGEST_URL: "http://127.0.0.1:8765/ingest/capture",
+        SIDE_BRAIN_LOCAL_INGEST_TOKEN: "local-token",
+      },
+    );
+
+    assert.equal(result.processed, 1);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "http://127.0.0.1:8765/ingest/capture");
+    assert.equal(requests[0].options.method, "POST");
+    assert.equal(requests[0].options.headers.Authorization, "Bearer local-token");
+    assert.deepEqual(JSON.parse(requests[0].options.body), normalizedCapture({
+      message_id: "cap_20260630_abcdef123456",
+      content: "Private capture content",
+    }));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue consumer does not forward when forwarding is disabled", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("fetch should not be called");
+  };
+
+  try {
+    const result = await handleQueue({
+      messages: [
+        {
+          id: "msg-1",
+          body: normalizedCapture(),
+        },
+      ],
+    });
+
+    assert.equal(result.processed, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("queue consumer throws when forwarding is enabled without ingest config", async () => {
+  await assert.rejects(
+    () =>
+      handleQueue(
+        {
+          messages: [
+            {
+              id: "msg-1",
+              body: normalizedCapture(),
+            },
+          ],
+        },
+        {
+          SIDE_BRAIN_QUEUE_FORWARD_ENABLED: "true",
+        },
+      ),
+    /Local ingest forwarding is enabled but URL or token is missing/,
+  );
+});
+
+test("queue consumer throws when local ingest returns an error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+      status: 401,
+    });
+
+  try {
+    await assert.rejects(
+      () =>
+        handleQueue(
+          {
+            messages: [
+              {
+                id: "msg-1",
+                body: normalizedCapture(),
+              },
+            ],
+          },
+          {
+            SIDE_BRAIN_QUEUE_FORWARD_ENABLED: "true",
+            SIDE_BRAIN_LOCAL_INGEST_URL: "http://127.0.0.1:8765/ingest/capture",
+            SIDE_BRAIN_LOCAL_INGEST_TOKEN: "bad-token",
+          },
+        ),
+      /Local ingest returned HTTP 401/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("queue consumer throws for invalid queued captures", async () => {
   const errors = [];
   const originalError = console.error;

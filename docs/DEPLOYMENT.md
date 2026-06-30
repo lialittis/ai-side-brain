@@ -196,13 +196,100 @@ CLOUDFLARE_QUEUE_NAME
 
 ### Phase 3: Local Queue Consumer
 
-Implement:
+Local ingest endpoint:
 
-- receive queued messages from the Cloudflare consumer path;
-- write normalized messages through the same import/capture path;
-- keep idempotency by message ID;
-- log failures;
-- retry safely.
+```text
+scripts/local_ingest_server.py
+```
+
+Implemented:
+
+- local/private `POST /ingest/capture` endpoint;
+- bearer token validation through `SIDE_BRAIN_LOCAL_INGEST_TOKEN`;
+- normalized queue payload validation;
+- conversion to the current `scripts/capture.py import-json` shape;
+- write through the existing Markdown capture path.
+- optional Cloudflare Queue consumer forwarding to the local ingest endpoint.
+- idempotency by `message_id` through `indexes/local-ingest-state.json`.
+
+Run locally:
+
+```bash
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=local-test-token \
+  .venv/bin/python scripts/local_ingest_server.py
+```
+
+Test locally:
+
+```bash
+curl -i -X POST http://127.0.0.1:8765/ingest/capture \
+  -H "Authorization: Bearer local-test-token" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "message_id": "cap_20260630_abcdef123456",
+    "source": "iphone_shortcut",
+    "input_type": "text",
+    "content": "Local ingest test capture.",
+    "created_at": "2026-06-30T10:15:00+02:00",
+    "received_at": "2026-06-30T10:15:01+02:00",
+    "timezone": "Europe/Berlin",
+    "locale": "en",
+    "metadata": {}
+  }'
+```
+
+Still to implement:
+
+- expose the endpoint privately through Cloudflare Tunnel or an equivalent private channel;
+- log forwarding failures and retry safely.
+
+Local end-to-end test:
+
+1. Start local ingest:
+
+```bash
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=local-test-token \
+  .venv/bin/python scripts/local_ingest_server.py
+```
+
+2. Configure `infra/cloudflare/capture-worker/.dev.vars`:
+
+```text
+SIDE_BRAIN_CAPTURE_TOKEN=local-capture-token
+SIDE_BRAIN_QUEUE_FORWARD_ENABLED=true
+SIDE_BRAIN_LOCAL_INGEST_URL=http://127.0.0.1:8765/ingest/capture
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=local-test-token
+```
+
+Remove or comment out `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true` for this end-to-end test.
+
+3. Start the Worker:
+
+```bash
+cd infra/cloudflare/capture-worker
+npm run dev
+```
+
+4. Send a capture:
+
+```bash
+curl -i -X POST http://127.0.0.1:8787/capture \
+  -H "Authorization: Bearer local-capture-token" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "source": "iphone_shortcut",
+    "input_type": "text",
+    "content": "Local Worker to Queue to Inbox test.",
+    "timezone": "Europe/Berlin",
+    "locale": "en"
+  }'
+```
+
+5. Verify the capture appears in:
+
+```text
+memory/00_Inbox/YYYY-MM-DD.md
+```
 
 ### Phase 4: Structured Task Store
 

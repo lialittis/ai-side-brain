@@ -84,6 +84,33 @@ State is grouped by processor:
 
 This lets the same date be processed incrementally by different processors without replacing earlier logs.
 
+## Current Local Ingest State
+
+Local ingest idempotency state is stored in:
+
+```text
+indexes/local-ingest-state.json
+```
+
+State is keyed by Cloudflare capture `message_id`:
+
+```json
+{
+  "version": 1,
+  "messages": {
+    "cap_20260630_abcdef123456": {
+      "status": "ingested",
+      "inbox_path": "/home/tianchi/ai-side-brain/memory/00_Inbox/2026-06-30.md",
+      "ingested_at": "2026-06-30T10:20:00+02:00",
+      "source": "iphone_shortcut",
+      "input_type": "text"
+    }
+  }
+}
+```
+
+If the same `message_id` is delivered again, the local ingest endpoint returns `status: duplicate` and does not append another inbox entry.
+
 ## Current Processing Suggestion
 
 Processing logs are written to:

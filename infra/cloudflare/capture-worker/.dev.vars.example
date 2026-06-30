@@ -1,2 +1,5 @@
 SIDE_BRAIN_CAPTURE_TOKEN=replace-with-local-dev-token
 SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true
+SIDE_BRAIN_QUEUE_FORWARD_ENABLED=false
+SIDE_BRAIN_LOCAL_INGEST_URL=http://127.0.0.1:8765/ingest/capture
+SIDE_BRAIN_LOCAL_INGEST_TOKEN=replace-with-local-ingest-token
