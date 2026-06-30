@@ -166,15 +166,21 @@ Worker mock:
 infra/cloudflare/capture-worker/
 ```
 
-Implement:
+Implemented:
 
 - Worker route at `capture.tianchiyu.me`;
 - token validation;
 - payload normalization;
 - message ID generation;
-- mock JSON success response.
+- Cloudflare Queue producer binding;
+- local mock mode through `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true`;
+- real queue success response when `CAPTURE_QUEUE` is bound.
 
-Later Queue integration should replace the mock success status with real Queue enqueue behavior.
+Create the Cloudflare Queue before deployed queue testing:
+
+```bash
+wrangler queues create side-brain-captures
+```
 
 Planned configuration names:
 

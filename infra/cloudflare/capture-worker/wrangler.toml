@@ -3,6 +3,10 @@ main = "src/index.js"
 compatibility_date = "2026-06-30"
 workers_dev = true
 
+[[queues.producers]]
+binding = "CAPTURE_QUEUE"
+queue = "side-brain-captures"
+
 # Do not store SIDE_BRAIN_CAPTURE_TOKEN here.
 # For local development, copy .dev.vars.example to .dev.vars.
 # For deployment, run:

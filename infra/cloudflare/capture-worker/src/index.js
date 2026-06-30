@@ -48,15 +48,48 @@ export async function handleRequest(request, env = {}) {
   const receivedAt = new Date().toISOString();
   const normalized = normalizeCapturePayload(payload, receivedAt);
 
-  return jsonResponse(
-    {
-      success: true,
-      message_id: normalized.message_id,
-      status: "accepted_mock",
-      normalized,
-    },
-    202,
+  if (isMockQueueEnabled(env)) {
+    return jsonResponse(
+      {
+        success: true,
+        message_id: normalized.message_id,
+        status: "accepted_mock",
+        normalized,
+      },
+      202,
+    );
+  }
+
+  if (hasQueueBinding(env)) {
+    try {
+      await env.CAPTURE_QUEUE.send(normalized);
+    } catch {
+      return jsonError(503, "queue_unavailable", "Capture could not be queued. Try again later.");
+    }
+
+    return jsonResponse(
+      {
+        success: true,
+        message_id: normalized.message_id,
+        status: "queued",
+      },
+      202,
+    );
+  }
+
+  return jsonError(
+    500,
+    "server_misconfigured",
+    "CAPTURE_QUEUE is not configured. Set SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true for local mock mode.",
   );
+}
+
+function hasQueueBinding(env) {
+  return Boolean(env.CAPTURE_QUEUE && typeof env.CAPTURE_QUEUE.send === "function");
+}
+
+function isMockQueueEnabled(env) {
+  return ["1", "true", "yes"].includes(String(env.SIDE_BRAIN_CAPTURE_MOCK_QUEUE || "").toLowerCase());
 }
 
 function validateCapturePayload(payload) {
@@ -170,4 +203,3 @@ function jsonResponse(body, status = 200, extraHeaders = {}) {
     },
   });
 }
-

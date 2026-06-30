@@ -161,6 +161,31 @@ HTTP status:
 202 Accepted
 ```
 
+Local mock mode may return `accepted_mock` instead of `queued`:
+
+```json
+{
+  "success": true,
+  "message_id": "cap_20260629_abcdef123456",
+  "status": "accepted_mock",
+  "normalized": {
+    "message_id": "cap_20260629_abcdef123456",
+    "source": "iphone_shortcut",
+    "input_type": "text",
+    "content": "Remind me tomorrow afternoon to update the DRC paper cover letter.",
+    "created_at": "2026-06-29T13:30:00+02:00",
+    "received_at": "2026-06-29T13:30:02+02:00",
+    "timezone": "Europe/Berlin",
+    "locale": "en",
+    "metadata": {
+      "shortcut_version": "v1"
+    }
+  }
+}
+```
+
+`accepted_mock` means the capture was validated but not persisted to Cloudflare Queue.
+
 ## Error Responses
 
 All errors should return JSON.
@@ -275,6 +300,22 @@ HTTP status:
 
 ```text
 503 Service Unavailable
+```
+
+Queue missing outside mock mode:
+
+```json
+{
+  "success": false,
+  "error": "server_misconfigured",
+  "message": "CAPTURE_QUEUE is not configured. Set SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true for local mock mode."
+}
+```
+
+HTTP status:
+
+```text
+500 Internal Server Error
 ```
 
 ## Compatibility With Current Local Capture

@@ -1,6 +1,8 @@
-# Capture Worker Mock
+# Capture Worker
 
-This Worker validates the Side-Brain Capture API contract and returns stable JSON responses without writing to Cloudflare Queue yet.
+This Worker validates the Side-Brain Capture API contract and writes accepted captures to Cloudflare Queue when a `CAPTURE_QUEUE` binding is available.
+
+For local development without a real Cloudflare Queue, set `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true` in `.dev.vars`. Mock mode validates and normalizes the capture, then returns `accepted_mock` without persisting it. Mock mode takes precedence over queue bindings and should not be enabled in deployment.
 
 Current behavior:
 
@@ -13,6 +15,14 @@ POST /capture
 -> parse JSON
 -> validate payload
 -> normalize payload
+-> send to CAPTURE_QUEUE when bound
+-> 202 { "success": true, "status": "queued" }
+```
+
+Local mock behavior:
+
+```text
+POST /capture with SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true and no CAPTURE_QUEUE
 -> 202 { "success": true, "status": "accepted_mock", ... }
 ```
 
@@ -37,6 +47,12 @@ cp .dev.vars.example .dev.vars
 ```
 
 Then set a private local token in `.dev.vars`.
+
+Keep this line for local development before a real Cloudflare Queue exists:
+
+```text
+SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true
+```
 
 Run tests:
 
@@ -92,6 +108,22 @@ Expected response:
 202 Accepted
 ```
 
+With local mock mode, the response status field should be:
+
+```json
+{
+  "status": "accepted_mock"
+}
+```
+
+With a real `CAPTURE_QUEUE` binding, the response status field should be:
+
+```json
+{
+  "status": "queued"
+}
+```
+
 Negative tests that should reach payload validation:
 
 ```bash
@@ -118,9 +150,41 @@ Use:
 wrangler secret put SIDE_BRAIN_CAPTURE_TOKEN
 ```
 
+## Queue Setup
+
+Create the Queue in your Cloudflare account before deploying queue mode:
+
+```bash
+wrangler queues create side-brain-captures
+```
+
+The Worker binding is defined in `wrangler.toml`:
+
+```toml
+[[queues.producers]]
+binding = "CAPTURE_QUEUE"
+queue = "side-brain-captures"
+```
+
+When this binding exists, successful captures call:
+
+```js
+env.CAPTURE_QUEUE.send(normalized)
+```
+
+and return:
+
+```json
+{
+  "success": true,
+  "message_id": "cap_20260630_abcdef123456",
+  "status": "queued"
+}
+```
+
 ## Mock Status
 
-Successful captures return:
+When `SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true` and no `CAPTURE_QUEUE` binding exists, successful captures return:
 
 ```json
 {
@@ -130,4 +194,4 @@ Successful captures return:
 }
 ```
 
-The status is intentionally `accepted_mock`, not `queued`, because this Worker does not write to Cloudflare Queue yet.
+The status is intentionally `accepted_mock`, not `queued`, because no message was written to Cloudflare Queue.

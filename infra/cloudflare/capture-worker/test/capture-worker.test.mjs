@@ -3,17 +3,26 @@ import test from "node:test";
 
 import { handleRequest } from "../src/index.js";
 
-const ENV = { SIDE_BRAIN_CAPTURE_TOKEN: "test-token" };
+const MOCK_ENV = { SIDE_BRAIN_CAPTURE_TOKEN: "test-token", SIDE_BRAIN_CAPTURE_MOCK_QUEUE: "true" };
 
 test("GET /health returns ok", async () => {
-  const response = await handleRequest(new Request("https://capture.example.test/health"), ENV);
+  const response = await handleRequest(new Request("https://capture.example.test/health"), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 200);
   assert.deepEqual(body, { success: true, status: "ok" });
 });
 
-test("POST /capture accepts and normalizes a valid capture", async () => {
+test("POST /capture queues a valid capture when CAPTURE_QUEUE is bound", async () => {
+  const sentMessages = [];
+  const env = {
+    SIDE_BRAIN_CAPTURE_TOKEN: "test-token",
+    CAPTURE_QUEUE: {
+      async send(message) {
+        sentMessages.push(message);
+      },
+    },
+  };
   const response = await handleRequest(
     jsonRequest({
       source: "iphone_shortcut",
@@ -24,7 +33,38 @@ test("POST /capture accepts and normalizes a valid capture", async () => {
       locale: "en",
       metadata: { shortcut_version: "v1" },
     }),
-    ENV,
+    env,
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 202);
+  assert.equal(body.success, true);
+  assert.equal(body.status, "queued");
+  assert.match(body.message_id, /^cap_\d{8}_[0-9a-f]{16}$/);
+  assert.equal(body.normalized, undefined);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].message_id, body.message_id);
+  assert.equal(sentMessages[0].source, "iphone_shortcut");
+  assert.equal(sentMessages[0].input_type, "text");
+  assert.equal(sentMessages[0].content, "Remind me tomorrow afternoon to update the cover letter.");
+  assert.equal(sentMessages[0].created_at, "2026-06-30T10:15:00+02:00");
+  assert.equal(sentMessages[0].timezone, "Europe/Berlin");
+  assert.equal(sentMessages[0].locale, "en");
+  assert.deepEqual(sentMessages[0].metadata, { shortcut_version: "v1" });
+});
+
+test("POST /capture accepts and normalizes a valid capture in mock mode", async () => {
+  const response = await handleRequest(
+    jsonRequest({
+      source: "iphone_shortcut",
+      input_type: "text",
+      content: "  Remind me tomorrow afternoon to update the cover letter.  ",
+      created_at: "2026-06-30T10:15:00+02:00",
+      timezone: "Europe/Berlin",
+      locale: "en",
+      metadata: { shortcut_version: "v1" },
+    }),
+    MOCK_ENV,
   );
   const body = await response.json();
 
@@ -42,8 +82,26 @@ test("POST /capture accepts and normalizes a valid capture", async () => {
   assert.deepEqual(body.normalized.metadata, { shortcut_version: "v1" });
 });
 
+test("POST /capture uses mock mode before queue binding when explicitly enabled", async () => {
+  const sentMessages = [];
+  const response = await handleRequest(jsonRequest({ content: "Quick capture" }), {
+    SIDE_BRAIN_CAPTURE_TOKEN: "test-token",
+    SIDE_BRAIN_CAPTURE_MOCK_QUEUE: "true",
+    CAPTURE_QUEUE: {
+      async send(message) {
+        sentMessages.push(message);
+      },
+    },
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 202);
+  assert.equal(body.status, "accepted_mock");
+  assert.equal(sentMessages.length, 0);
+});
+
 test("POST /capture applies defaults for optional fields", async () => {
-  const response = await handleRequest(jsonRequest({ content: "Quick capture" }), ENV);
+  const response = await handleRequest(jsonRequest({ content: "Quick capture" }), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 202);
@@ -55,7 +113,7 @@ test("POST /capture applies defaults for optional fields", async () => {
 });
 
 test("POST /capture rejects missing or invalid bearer token", async () => {
-  const response = await handleRequest(jsonRequest({ content: "Quick capture" }, "wrong-token"), ENV);
+  const response = await handleRequest(jsonRequest({ content: "Quick capture" }, "wrong-token"), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 401);
@@ -76,7 +134,7 @@ test("POST /capture rejects invalid JSON", async () => {
       },
       body: "{",
     }),
-    ENV,
+    MOCK_ENV,
   );
   const body = await response.json();
 
@@ -89,7 +147,7 @@ test("POST /capture rejects invalid JSON", async () => {
 });
 
 test("POST /capture rejects empty content", async () => {
-  const response = await handleRequest(jsonRequest({ content: "   " }), ENV);
+  const response = await handleRequest(jsonRequest({ content: "   " }), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 400);
@@ -101,7 +159,7 @@ test("POST /capture rejects empty content", async () => {
 });
 
 test("POST /capture rejects oversized content", async () => {
-  const response = await handleRequest(jsonRequest({ content: "x".repeat(20001) }), ENV);
+  const response = await handleRequest(jsonRequest({ content: "x".repeat(20001) }), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 413);
@@ -113,7 +171,7 @@ test("POST /capture rejects oversized content", async () => {
 });
 
 test("POST /capture rejects unsupported source", async () => {
-  const response = await handleRequest(jsonRequest({ source: "sms", content: "Quick capture" }), ENV);
+  const response = await handleRequest(jsonRequest({ source: "sms", content: "Quick capture" }), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 400);
@@ -125,7 +183,7 @@ test("POST /capture rejects unsupported source", async () => {
 });
 
 test("POST /capture rejects unsupported input type", async () => {
-  const response = await handleRequest(jsonRequest({ input_type: "audio", content: "Quick capture" }), ENV);
+  const response = await handleRequest(jsonRequest({ input_type: "audio", content: "Quick capture" }), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 400);
@@ -137,7 +195,10 @@ test("POST /capture rejects unsupported input type", async () => {
 });
 
 test("POST /capture rejects non-object metadata", async () => {
-  const response = await handleRequest(jsonRequest({ metadata: ["not", "object"], content: "Quick capture" }), ENV);
+  const response = await handleRequest(
+    jsonRequest({ metadata: ["not", "object"], content: "Quick capture" }),
+    MOCK_ENV,
+  );
   const body = await response.json();
 
   assert.equal(response.status, 400);
@@ -160,8 +221,41 @@ test("POST /capture returns server error when token is not configured", async ()
   });
 });
 
+test("POST /capture returns server error when queue and mock mode are not configured", async () => {
+  const response = await handleRequest(jsonRequest({ content: "Quick capture" }), {
+    SIDE_BRAIN_CAPTURE_TOKEN: "test-token",
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(body, {
+    success: false,
+    error: "server_misconfigured",
+    message: "CAPTURE_QUEUE is not configured. Set SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true for local mock mode.",
+  });
+});
+
+test("POST /capture returns queue error when queue send fails", async () => {
+  const response = await handleRequest(jsonRequest({ content: "Quick capture" }), {
+    SIDE_BRAIN_CAPTURE_TOKEN: "test-token",
+    CAPTURE_QUEUE: {
+      async send() {
+        throw new Error("queue unavailable");
+      },
+    },
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(body, {
+    success: false,
+    error: "queue_unavailable",
+    message: "Capture could not be queued. Try again later.",
+  });
+});
+
 test("unknown routes return not found", async () => {
-  const response = await handleRequest(new Request("https://capture.example.test/unknown"), ENV);
+  const response = await handleRequest(new Request("https://capture.example.test/unknown"), MOCK_ENV);
   const body = await response.json();
 
   assert.equal(response.status, 404);
@@ -182,4 +276,3 @@ function jsonRequest(payload, token = "test-token") {
     body: JSON.stringify(payload),
   });
 }
-

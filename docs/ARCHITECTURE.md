@@ -50,7 +50,7 @@ Implemented capabilities:
 - optional AI processing with OpenAI, GLM, or DeepSeek providers;
 - provider/model-specific processing state;
 - n8n webhook template for iPhone Shortcut capture;
-- Cloudflare Worker mock for capture API validation;
+- Cloudflare Worker with local mock mode and Queue producer binding;
 - `.env` based local secret configuration.
 
 Current limitations:
@@ -237,7 +237,7 @@ Next target.
 
 - capture API contract in `docs/CAPTURE_API.md` - implemented;
 - Cloudflare Worker mock - implemented;
-- Cloudflare Queue payload format;
+- Cloudflare Queue producer binding - implemented;
 - local queue consumer;
 - retry and dead-letter strategy;
 - status logging.

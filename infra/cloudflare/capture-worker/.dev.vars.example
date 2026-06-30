@@ -1,1 +1,2 @@
 SIDE_BRAIN_CAPTURE_TOKEN=replace-with-local-dev-token
+SIDE_BRAIN_CAPTURE_MOCK_QUEUE=true
