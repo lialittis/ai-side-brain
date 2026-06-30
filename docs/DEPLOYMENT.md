@@ -227,7 +227,7 @@ curl -i -X POST http://127.0.0.1:8765/ingest/capture \
   -H "Content-Type: application/json" \
   --data '{
     "message_id": "cap_20260630_abcdef123456",
-    "source": "iphone_shortcut",
+    "source": "manual_api",
     "input_type": "text",
     "content": "Local ingest test capture.",
     "created_at": "2026-06-30T10:15:00+02:00",
@@ -277,7 +277,7 @@ curl -i -X POST http://127.0.0.1:8787/capture \
   -H "Authorization: Bearer local-capture-token" \
   -H "Content-Type: application/json" \
   --data '{
-    "source": "iphone_shortcut",
+    "source": "manual_api",
     "input_type": "text",
     "content": "Local Worker to Queue to Inbox test.",
     "timezone": "Europe/Berlin",

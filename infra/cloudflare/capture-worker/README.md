@@ -97,7 +97,7 @@ curl -i -X POST http://localhost:8787/capture \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   --data '{
-    "source": "iphone_shortcut",
+    "source": "manual_api",
     "input_type": "text",
     "content": "Test capture from local Cloudflare Worker mock.",
     "created_at": "2026-06-30T10:30:00+02:00",
@@ -256,7 +256,7 @@ curl -i -X POST http://127.0.0.1:8787/capture \
   -H "Authorization: Bearer local-capture-token" \
   -H "Content-Type: application/json" \
   --data '{
-    "source": "iphone_shortcut",
+    "source": "manual_api",
     "input_type": "text",
     "content": "Local Worker to Queue to Inbox test.",
     "timezone": "Europe/Berlin",
