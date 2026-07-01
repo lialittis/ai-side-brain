@@ -11,6 +11,8 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    append_radar_source_errors_to_report,
+    append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_recommendation_report,
@@ -20,15 +22,19 @@ from shared.literature_radar import (
     build_venue_coverage_summary,
     cache_open_access_pdf,
     cache_recommendation_pdfs,
+    collect_radar_source,
     create_radar_paper,
     default_radar_topic_profile,
     dblp_venue_profiles,
+    enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
+    format_radar_source_stats,
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
     radar_history_review_status,
     radar_review_counts,
+    radar_source_error,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
@@ -306,6 +312,172 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(arxiv_decision["access_date"], "2026-07-01T12:00:00+00:00")
         self.assertIn("download allowed", pdf_access_report_text(arxiv_decision))
         self.assertIn("source=https://arxiv.org/pdf/2601.00001.pdf", pdf_access_report_text(arxiv_decision))
+
+    def test_enriches_radar_papers_with_unpaywall_and_records_source_health(self) -> None:
+        now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+        success = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/success",
+            title="Successful Unpaywall Enrichment",
+            identifiers={"doi": "10.1145/success"},
+        )
+        failure = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/failure",
+            title="Failing Unpaywall Enrichment",
+            identifiers={"doi": "10.1145/failure"},
+        )
+        no_doi = create_radar_paper(
+            source_id="dblp",
+            source_paper_id="conf/example/no-doi",
+            title="No DOI Candidate",
+        )
+        source_errors: list[dict[str, object]] = []
+        source_stats: list[dict[str, object]] = []
+
+        def fake_enricher(paper: dict[str, object], *, email: str, now: datetime | None = None) -> dict[str, object]:
+            identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
+            if identifiers.get("doi") == "10.1145/failure":
+                raise RuntimeError("Unpaywall unavailable")
+            updated = dict(paper)
+            updated["license"] = "cc-by"
+            updated["oa_status"] = "gold"
+            updated["updated_by"] = email
+            return updated
+
+        enriched = enrich_radar_papers_with_unpaywall(
+            [success, failure, no_doi],
+            email="radar@example.org",
+            enricher=fake_enricher,
+            source_errors=source_errors,
+            source_stats=source_stats,
+            now=now,
+        )
+
+        self.assertEqual(enriched[0]["license"], "cc-by")
+        self.assertEqual(enriched[0]["updated_by"], "radar@example.org")
+        self.assertEqual(enriched[1]["source_records"][-1]["source_id"], "unpaywall")
+        self.assertEqual(enriched[1]["source_records"][-1]["status"], "failed")
+        self.assertEqual(enriched[1]["source_records"][-1]["collected_at"], "2026-07-01T12:00:00+00:00")
+        self.assertEqual(enriched[2]["title"], "No DOI Candidate")
+        self.assertEqual(source_errors[0]["source_id"], "unpaywall")
+        self.assertEqual(source_errors[0]["source_paper_id"], "10.1145/failure")
+        self.assertEqual(source_errors[0]["error_type"], "RuntimeError")
+        self.assertEqual(source_stats[0]["source_id"], "unpaywall")
+        self.assertEqual(source_stats[0]["status"], "partial")
+        self.assertEqual(source_stats[0]["collected_count"], 1)
+        self.assertEqual(source_stats[0]["attempted_count"], 2)
+        self.assertEqual(source_stats[0]["failed_count"], 1)
+        self.assertEqual(source_stats[0]["skipped_no_doi_count"], 1)
+
+    def test_radar_source_error_records_timestamp(self) -> None:
+        error = radar_source_error(
+            "dblp",
+            RuntimeError("DBLP unavailable"),
+            now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(error["source_id"], "dblp")
+        self.assertEqual(error["error_type"], "RuntimeError")
+        self.assertEqual(error["occurred_at"], "2026-07-01T12:00:00+00:00")
+
+    def test_collect_radar_source_records_success_and_failure_health(self) -> None:
+        now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00001",
+            title="Collected Source Paper",
+        )
+        source_errors: list[dict[str, object]] = []
+        source_stats: list[dict[str, object]] = []
+
+        collected = collect_radar_source(
+            source_id="arxiv",
+            source_errors=source_errors,
+            source_stats=source_stats,
+            now=now,
+            collector=lambda: [paper],
+        )
+        failed = collect_radar_source(
+            source_id="dblp",
+            source_errors=source_errors,
+            source_stats=source_stats,
+            now=now,
+            collector=lambda: (_ for _ in ()).throw(RuntimeError("DBLP unavailable")),
+        )
+
+        self.assertEqual(collected, [paper])
+        self.assertEqual(failed, [])
+        self.assertEqual(source_errors[0]["source_id"], "dblp")
+        self.assertEqual(source_errors[0]["error_type"], "RuntimeError")
+        self.assertEqual(source_stats[0]["source_id"], "arxiv")
+        self.assertEqual(source_stats[0]["status"], "succeeded")
+        self.assertEqual(source_stats[0]["collected_count"], 1)
+        self.assertEqual(source_stats[1]["source_id"], "dblp")
+        self.assertEqual(source_stats[1]["status"], "failed")
+        self.assertEqual(source_stats[1]["collected_count"], 0)
+        self.assertEqual(source_stats[1]["error_type"], "RuntimeError")
+
+    def test_collect_radar_source_reraises_without_error_sink(self) -> None:
+        with self.assertRaises(RuntimeError):
+            collect_radar_source(
+                source_id="dblp",
+                source_errors=None,
+                source_stats=[],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                collector=lambda: (_ for _ in ()).throw(RuntimeError("DBLP unavailable")),
+            )
+
+    def test_appends_source_health_sections_to_report(self) -> None:
+        report = append_radar_source_stats_to_report(
+            "# Radar\n",
+            [
+                {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
+                {
+                    "source_id": "dblp",
+                    "status": "failed",
+                    "collected_count": 0,
+                    "error_type": "RuntimeError",
+                },
+            ],
+        )
+        report = append_radar_source_errors_to_report(
+            report,
+            [
+                {
+                    "source_id": "dblp",
+                    "error_type": "RuntimeError",
+                    "error": "DBLP unavailable",
+                }
+            ],
+        )
+
+        self.assertIn("## Source Stats", report)
+        self.assertIn("`arxiv`: 2 candidate(s) (succeeded)", report)
+        self.assertIn("`dblp`: 0 candidate(s) (failed) - RuntimeError", report)
+        self.assertIn("## Source Errors", report)
+        self.assertIn("`dblp`: RuntimeError: DBLP unavailable", report)
+
+    def test_formats_compact_source_stats_for_cli_output(self) -> None:
+        formatted = format_radar_source_stats(
+            [
+                {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
+                {"source_id": "dblp", "status": "failed", "collected_count": 0},
+                {
+                    "source_id": "unpaywall",
+                    "status": "partial",
+                    "collected_count": 1,
+                    "attempted_count": 2,
+                    "failed_count": 1,
+                    "skipped_no_doi_count": 3,
+                },
+            ],
+        )
+
+        self.assertEqual(
+            formatted,
+            "arxiv: 2, dblp: 0 failed, unpaywall: 1 partial (attempted=2, failed=1, skipped_no_doi=3)",
+        )
 
     def test_caches_only_policy_allowed_open_access_pdfs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

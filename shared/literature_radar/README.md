@@ -143,6 +143,12 @@ Current implemented collectors:
   by year and stores title, authors, and paper/source links.
 - `enrich_paper_with_unpaywall(...)` checks DOI OA status and records the best
   legal OA landing/PDF URL and license information, but does not download PDFs.
+- `enrich_radar_papers_with_unpaywall(...)` is the shared Personal/Team wrapper
+  that applies Unpaywall enrichment across collected candidates and records
+  run-level source stats/errors when OA checks fail or are skipped.
+- `collect_radar_source(...)` and the source-health report appenders keep
+  collector failure accounting and Markdown report sections consistent across
+  Personal and Team adapters.
 
 Collector parsers are pure functions and are tested with offline fixtures. This
 keeps scheduling and network failure handling outside the core.

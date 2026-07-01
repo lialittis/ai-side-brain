@@ -588,6 +588,198 @@ def pdf_access_decision(
     }
 
 
+def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
+    return {
+        "source_id": source_id,
+        "error_type": error.__class__.__name__,
+        "error": str(error),
+        "occurred_at": iso_timestamp(now or datetime.now(timezone.utc)),
+    }
+
+
+def radar_source_stat(
+    source_id: str,
+    *,
+    status: str,
+    collected_count: int,
+    now: datetime | None = None,
+    error_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stat = {
+        "source_id": source_id,
+        "status": status,
+        "collected_count": int(collected_count),
+        "recorded_at": iso_timestamp(now or datetime.now(timezone.utc)),
+    }
+    if error_record:
+        stat["error_type"] = error_record.get("error_type") or "Error"
+        stat["error"] = error_record.get("error") or ""
+    return stat
+
+
+def collect_radar_source(
+    *,
+    source_id: str,
+    source_errors: list[dict[str, Any]] | None,
+    now: datetime | None,
+    collector: Callable[[], list[dict[str, Any]]],
+    source_stats: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        papers = collector()
+    except Exception as error:
+        if source_errors is None:
+            raise
+        error_record = radar_source_error(source_id, error, now=now)
+        source_errors.append(error_record)
+        if source_stats is not None:
+            source_stats.append(
+                radar_source_stat(
+                    source_id,
+                    status="failed",
+                    collected_count=0,
+                    now=now,
+                    error_record=error_record,
+                )
+            )
+        return []
+    if source_stats is not None:
+        source_stats.append(
+            radar_source_stat(
+                source_id,
+                status="succeeded",
+                collected_count=len(papers),
+                now=now,
+            )
+        )
+    return papers
+
+
+def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str, Any]]) -> str:
+    if not source_stats:
+        return report
+    lines = [report.rstrip(), "", "## Source Stats", ""]
+    for stat in source_stats:
+        status = stat.get("status") or "unknown"
+        collected_count = int(stat.get("collected_count") or 0)
+        line = f"- `{stat.get('source_id')}`: {collected_count} candidate(s) ({status})"
+        if status == "failed" and stat.get("error_type"):
+            line += f" - {stat.get('error_type')}"
+        lines.append(line)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
+    if not source_errors:
+        return report
+    lines = [report.rstrip(), "", "## Source Errors", ""]
+    for error in source_errors:
+        lines.append(f"- `{error.get('source_id')}`: {error.get('error_type')}: {error.get('error')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
+    return ", ".join(format_radar_source_stat(stat) for stat in source_stats)
+
+
+def format_radar_source_stat(stat: dict[str, Any]) -> str:
+    source_id = stat.get("source_id")
+    status = stat.get("status") or "unknown"
+    collected_count = int(stat.get("collected_count") or 0)
+    line = f"{source_id}: {collected_count}"
+    if status != "succeeded":
+        line += f" {status}"
+    details = []
+    for key, label in [
+        ("attempted_count", "attempted"),
+        ("failed_count", "failed"),
+        ("skipped_no_doi_count", "skipped_no_doi"),
+    ]:
+        if key in stat:
+            details.append(f"{label}={int(stat.get(key) or 0)}")
+    if details:
+        line += f" ({', '.join(details)})"
+    return line
+
+
+def enrich_radar_papers_with_unpaywall(
+    papers: list[dict[str, Any]],
+    *,
+    email: str,
+    enricher: Callable[..., dict[str, Any]],
+    source_errors: list[dict[str, Any]] | None = None,
+    source_stats: list[dict[str, Any]] | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    enriched = []
+    attempted_count = 0
+    success_count = 0
+    failed_count = 0
+    skipped_no_doi_count = 0
+    first_error: dict[str, Any] | None = None
+    for paper in papers:
+        doi = (paper.get("identifiers") or {}).get("doi")
+        if not doi:
+            skipped_no_doi_count += 1
+            enriched.append(paper)
+            continue
+        attempted_count += 1
+        try:
+            enriched.append(enricher(paper, email=email, now=now))
+            success_count += 1
+        except Exception as error:
+            failed_count += 1
+            error_record = radar_source_error("unpaywall", error, now=now)
+            error_record["source_paper_id"] = doi
+            if first_error is None:
+                first_error = error_record
+            if source_errors is not None:
+                source_errors.append(error_record)
+            enriched.append(unpaywall_failed_paper_record(paper, doi=doi, error=error, now=now))
+    if source_stats is not None:
+        if failed_count and success_count:
+            status = "partial"
+        elif failed_count:
+            status = "failed"
+        else:
+            status = "succeeded"
+        stat = radar_source_stat(
+            "unpaywall",
+            status=status,
+            collected_count=success_count,
+            now=now,
+            error_record=first_error if status == "failed" else None,
+        )
+        stat["attempted_count"] = attempted_count
+        stat["failed_count"] = failed_count
+        stat["skipped_no_doi_count"] = skipped_no_doi_count
+        source_stats.append(stat)
+    return enriched
+
+
+def unpaywall_failed_paper_record(
+    paper: dict[str, Any],
+    *,
+    doi: str,
+    error: Exception,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    updated = dict(paper)
+    updated["source_records"] = [
+        *(updated.get("source_records") or []),
+        {
+            "source_id": "unpaywall",
+            "source_paper_id": doi,
+            "status": "failed",
+            "error": str(error),
+            "collected_at": iso_timestamp(now or datetime.now(timezone.utc)),
+        },
+    ]
+    return updated
+
+
 def cache_open_access_pdf(
     paper: dict[str, Any],
     output_dir: Path,

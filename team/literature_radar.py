@@ -11,6 +11,8 @@ from typing import Any, Callable
 from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
+    append_radar_source_errors_to_report,
+    append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
@@ -28,6 +30,7 @@ from shared.literature_radar import (
     collect_openalex_works,
     collect_openreview_notes,
     collect_openreview_venue_submissions,
+    collect_radar_source,
     collect_semantic_scholar_author_papers,
     collect_semantic_scholar_related_papers,
     collect_semantic_scholar_recommendations,
@@ -35,6 +38,7 @@ from shared.literature_radar import (
     collect_usenix_security_accepted_papers,
     default_radar_topic_profile,
     enrich_paper_with_unpaywall,
+    enrich_radar_papers_with_unpaywall,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -679,98 +683,6 @@ def unique_preserving_order(values: list[str]) -> list[str]:
     return unique
 
 
-def collect_radar_source(
-    *,
-    source_id: str,
-    source_errors: list[dict[str, Any]] | None,
-    now: datetime | None,
-    collector: Callable[[], list[dict[str, Any]]],
-    source_stats: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
-    try:
-        papers = collector()
-    except Exception as error:
-        if source_errors is None:
-            raise
-        error_record = radar_source_error(source_id, error, now=now)
-        source_errors.append(error_record)
-        if source_stats is not None:
-            source_stats.append(
-                radar_source_stat(
-                    source_id,
-                    status="failed",
-                    collected_count=0,
-                    now=now,
-                    error_record=error_record,
-                )
-            )
-        return []
-    if source_stats is not None:
-        source_stats.append(
-            radar_source_stat(
-                source_id,
-                status="succeeded",
-                collected_count=len(papers),
-                now=now,
-            )
-        )
-    return papers
-
-
-def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
-    return {
-        "source_id": source_id,
-        "error_type": error.__class__.__name__,
-        "error": str(error),
-        "occurred_at": iso_timestamp(now or datetime.now(timezone.utc)),
-    }
-
-
-def radar_source_stat(
-    source_id: str,
-    *,
-    status: str,
-    collected_count: int,
-    now: datetime | None = None,
-    error_record: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    stat = {
-        "source_id": source_id,
-        "status": status,
-        "collected_count": int(collected_count),
-        "recorded_at": iso_timestamp(now or datetime.now(timezone.utc)),
-    }
-    if error_record:
-        stat["error_type"] = error_record.get("error_type") or "Error"
-        stat["error"] = error_record.get("error") or ""
-    return stat
-
-
-def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str, Any]]) -> str:
-    if not source_stats:
-        return report
-    lines = [report.rstrip(), "", "## Source Stats", ""]
-    for stat in source_stats:
-        status = stat.get("status") or "unknown"
-        collected_count = int(stat.get("collected_count") or 0)
-        line = f"- `{stat.get('source_id')}`: {collected_count} candidate(s) ({status})"
-        if status == "failed" and stat.get("error_type"):
-            line += f" - {stat.get('error_type')}"
-        lines.append(line)
-    lines.append("")
-    return "\n".join(lines)
-
-
-def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
-    if not source_errors:
-        return report
-    lines = [report.rstrip(), "", "## Source Errors", ""]
-    for error in source_errors:
-        lines.append(f"- `{error.get('source_id')}`: {error.get('error_type')}: {error.get('error')}")
-    lines.append("")
-    return "\n".join(lines)
-
-
 def collect_team_radar_candidates(
     *,
     sources: list[str],
@@ -984,14 +896,14 @@ def collect_team_radar_candidates(
         )
     selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
     if selected_unpaywall_email:
-        papers = [
-            enrich_team_radar_paper_with_unpaywall(
-                paper,
-                email=selected_unpaywall_email,
-                now=now,
-            )
-            for paper in papers
-        ]
+        papers = enrich_radar_papers_with_unpaywall(
+            papers,
+            email=selected_unpaywall_email,
+            enricher=enrich_paper_with_unpaywall,
+            source_errors=source_errors,
+            source_stats=source_stats,
+            now=now,
+        )
     return papers
 
 
@@ -1047,32 +959,6 @@ def radar_year(now: datetime | None = None) -> int:
     if selected_now.tzinfo is None:
         selected_now = selected_now.replace(tzinfo=timezone.utc)
     return selected_now.year
-
-
-def enrich_team_radar_paper_with_unpaywall(
-    paper: dict[str, Any],
-    *,
-    email: str,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    doi = (paper.get("identifiers") or {}).get("doi")
-    if not doi:
-        return paper
-    try:
-        return enrich_paper_with_unpaywall(paper, email=email, now=now)
-    except Exception as error:
-        updated = dict(paper)
-        updated["source_records"] = [
-            *(updated.get("source_records") or []),
-            {
-                "source_id": "unpaywall",
-                "source_paper_id": doi,
-                "status": "failed",
-                "error": str(error),
-                "collected_at": iso_timestamp(now or datetime.now(timezone.utc)),
-            },
-        ]
-        return updated
 
 
 def build_team_run_from_radar_paper(

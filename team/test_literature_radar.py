@@ -911,6 +911,52 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             unpaywall.assert_called_once()
             self.assertEqual(unpaywall.call_args.args[0]["dedupe_key"], paper["dedupe_key"])
             self.assertEqual(unpaywall.call_args.kwargs["email"], "radar@example.com")
+            source_stats = {stat["source_id"]: stat for stat in result["source_stats"]}
+            self.assertEqual(source_stats["unpaywall"]["status"], "succeeded")
+            self.assertEqual(source_stats["unpaywall"]["collected_count"], 1)
+            self.assertEqual(source_stats["unpaywall"]["attempted_count"], 1)
+            self.assertEqual(source_stats["unpaywall"]["failed_count"], 0)
+            self.assertIn("`unpaywall`: 1 candidate(s) (succeeded)", result["report"])
+
+    def test_run_team_literature_radar_records_unpaywall_enrichment_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.1145/failing-example",
+                title="Failing Unpaywall Metadata for Memory Safety",
+                abstract="Memory safety and system security.",
+                identifiers={"doi": "10.1145/failing-example"},
+                links={"landing": "https://doi.org/10.1145/failing-example"},
+            )
+            with mock.patch("team.literature_radar.collect_crossref_works", return_value=[paper]):
+                with mock.patch(
+                    "team.literature_radar.enrich_paper_with_unpaywall",
+                    side_effect=RuntimeError("Unpaywall unavailable"),
+                ):
+                    result = run_team_literature_radar(
+                        database,
+                        sources=["crossref"],
+                        query_terms=["memory safety"],
+                        max_results=2,
+                        unpaywall_email="radar@example.com",
+                    )
+
+            self.assertEqual(result["run"]["status"], "partial")
+            self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(result["source_errors"][0]["source_id"], "unpaywall")
+            self.assertEqual(result["source_errors"][0]["source_paper_id"], "10.1145/failing-example")
+            self.assertIn("Unpaywall unavailable", result["source_errors"][0]["error"])
+            source_stats = {stat["source_id"]: stat for stat in result["source_stats"]}
+            self.assertEqual(source_stats["unpaywall"]["status"], "failed")
+            self.assertEqual(source_stats["unpaywall"]["collected_count"], 0)
+            self.assertEqual(source_stats["unpaywall"]["attempted_count"], 1)
+            self.assertEqual(source_stats["unpaywall"]["failed_count"], 1)
+            stored_paper = database.get_literature_radar_paper(paper["dedupe_key"])
+            source_records = stored_paper["paper"]["source_records"]
+            self.assertEqual(source_records[-1]["source_id"], "unpaywall")
+            self.assertEqual(source_records[-1]["status"], "failed")
+            self.assertIn("`unpaywall`: RuntimeError: Unpaywall unavailable", result["report"])
 
     def test_run_team_literature_radar_collects_openreview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1310,6 +1356,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "cache_pdfs": True,
                     "pdf_cache_dir": "team/data/saved-pdf-cache",
                     "pdf_cache_max_bytes": 12345,
+                    "source_contact_email": "radar@example.org",
                     "conference_year": 2026,
                     "usenix_security_cycles": [1, 2],
                     "include_openreview_unaccepted": True,
@@ -1353,6 +1400,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(runner.call_args.kwargs["cache_pdfs"])
             self.assertEqual(runner.call_args.kwargs["pdf_cache_dir"], Path("team/data/saved-pdf-cache"))
             self.assertEqual(runner.call_args.kwargs["pdf_cache_max_bytes"], 12345)
+            self.assertEqual(runner.call_args.kwargs["openalex_mailto"], "radar@example.org")
+            self.assertEqual(runner.call_args.kwargs["crossref_mailto"], "radar@example.org")
+            self.assertEqual(runner.call_args.kwargs["unpaywall_email"], "radar@example.org")
             self.assertEqual(runner.call_args.kwargs["conference_year"], 2026)
             self.assertEqual(runner.call_args.kwargs["usenix_security_cycles"], [1, 2])
             self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])

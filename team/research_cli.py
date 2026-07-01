@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.literature_radar import build_radar_history_brief, build_radar_review_queue
+from shared.literature_radar import build_radar_history_brief, build_radar_review_queue, format_radar_source_stats
 from shared.research import topic_profile_by_id
 from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
@@ -490,14 +490,6 @@ def print_radar_review(record: dict[str, Any]) -> None:
     print(f"{record.get('dedupe_key')} | review={status} | reviewed_by={actor}{suffix} | {record.get('title')}")
 
 
-def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
-    return ", ".join(
-        f"{stat.get('source_id')}: {int(stat.get('collected_count') or 0)}"
-        + (" failed" if stat.get("status") == "failed" else "")
-        for stat in source_stats
-    )
-
-
 def print_radar_report(run: dict[str, Any], recommendations: list[dict[str, Any]]) -> None:
     print(run.get("report") or "")
     if recommendations and not run.get("report"):
@@ -564,6 +556,14 @@ def saved_radar_bool(settings: dict[str, Any], key: str, default: bool = False) 
 def saved_radar_path(settings: dict[str, Any], key: str) -> Path | None:
     value = str(settings.get(key) or "").strip()
     return Path(value) if value else None
+
+
+def saved_radar_text(settings: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = str(settings.get(key) or "").strip()
+        if value:
+            return value
+    return None
 
 
 def saved_radar_summary_provider(settings: dict[str, Any]) -> str:
@@ -637,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "radar-run":
         saved_defaults = radar_saved_defaults(database, args.use_saved_defaults)
         summary_provider = args.summary_provider or saved_radar_summary_provider(saved_defaults)
+        saved_source_contact_email = saved_radar_text(saved_defaults, "source_contact_email")
         result = run_team_literature_radar(
             database,
             sources=args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES),
@@ -658,7 +659,9 @@ def main(argv: list[str] | None = None) -> int:
             negative_seed_paper_ids=args.negative_seed_paper_id
             or saved_radar_list(saved_defaults, "negative_seed_paper_ids")
             or None,
-            openalex_mailto=args.openalex_mailto,
+            openalex_mailto=args.openalex_mailto
+            or saved_radar_text(saved_defaults, "openalex_mailto")
+            or saved_source_contact_email,
             openalex_author_ids=args.openalex_author_id
             or saved_radar_list(saved_defaults, "openalex_author_ids")
             or None,
@@ -672,8 +675,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.include_openreview_unaccepted
                 or saved_radar_bool(saved_defaults, "include_openreview_unaccepted")
             ),
-            crossref_mailto=args.crossref_mailto,
-            unpaywall_email=args.unpaywall_email,
+            crossref_mailto=args.crossref_mailto
+            or saved_radar_text(saved_defaults, "crossref_mailto")
+            or saved_source_contact_email,
+            unpaywall_email=args.unpaywall_email
+            or saved_radar_text(saved_defaults, "unpaywall_email")
+            or saved_source_contact_email,
             cache_pdfs=args.cache_pdfs or saved_radar_bool(saved_defaults, "cache_pdfs"),
             pdf_cache_dir=args.pdf_cache_dir or saved_radar_path(saved_defaults, "pdf_cache_dir"),
             pdf_cache_max_bytes=args.pdf_cache_max_bytes

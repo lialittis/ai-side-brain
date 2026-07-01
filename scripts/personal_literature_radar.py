@@ -24,6 +24,7 @@ from personal.literature_radar import (
 from shared.literature_radar import (
     build_radar_history_brief,
     build_radar_review_queue,
+    format_radar_source_stats,
     radar_history_review_status,
     radar_review_counts,
 )
@@ -168,14 +169,6 @@ def print_history(runs: list[dict[str, Any]]) -> None:
             f"recommended={run.get('recommendation_count', 0)} | "
             f"{format_radar_source_stats(run.get('source_stats') or []) or run.get('report_path') or 'no report'}"
         )
-
-
-def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
-    return ", ".join(
-        f"{stat.get('source_id')}: {int(stat.get('collected_count') or 0)}"
-        + (" failed" if stat.get("status") == "failed" else "")
-        for stat in source_stats
-    )
 
 
 def print_paper_history(

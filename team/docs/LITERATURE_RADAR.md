@@ -85,7 +85,7 @@ that run.
 
 The form can save source choices, limits, summary provider, conference year,
 USENIX Security cycles, OpenReview accepted-only behavior, PDF cache settings,
-tracked authors, positive and negative seed papers, and venue profiles as Team defaults. Saved
+source contact email, tracked authors, positive and negative seed papers, and venue profiles as Team defaults. Saved
 defaults live in the existing `team_settings` table under
 `literature_radar_defaults`, so the team can configure daily-use radar settings
 once and reuse them for later ad hoc or scheduled runs.
@@ -147,7 +147,9 @@ Useful options:
   `CROSSREF_MAILTO` is also supported.
 - `--unpaywall-email`: optional email for Unpaywall legal OA/PDF enrichment;
   `UNPAYWALL_EMAIL` is also supported. When unset, the runner skips Unpaywall
-  and does not resolve extra OA PDFs.
+  and does not resolve extra OA PDFs. The `/radar` form's saved source contact
+  email is reused for OpenAlex, Crossref, and Unpaywall in web-triggered runs
+  and scheduled CLI runs with `--use-saved-defaults`.
 - `--conference-year`: accepted-paper page year for USENIX Security and NDSS;
   defaults to the current calendar year.
 - `--venue-profile`: DBLP venue profile or group for the `dblp_venues` source;
@@ -303,7 +305,8 @@ team/scripts/build_literature_radar_brief.sh
 The cycle script is the recommended team-facing scheduled command. It runs a
 collection pass and then immediately builds a stored-run brief. By default it
 sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse the sources, limits,
-authors, positive and negative seed papers, venue profiles, summary settings, and PDF-cache settings
+authors, positive and negative seed papers, venue profiles, summary settings,
+source contact email, and PDF-cache settings
 saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
 

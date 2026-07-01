@@ -121,8 +121,8 @@ daily users can review scheduled Radar output without remembering a separate URL
 recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
 paper relevance. The Radar form can save source choices, tracked authors, seed
-papers, venue profiles, conference year, USENIX cycles, PDF cache settings, and
-run limits as reusable Team defaults.
+papers, venue profiles, conference year, USENIX cycles, source contact email,
+PDF cache settings, and run limits as reusable Team defaults.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI. Scheduled collection
 writes matching text and JSON queue snapshots under `team/logs/` by default.

@@ -808,6 +808,45 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(related.call_args.kwargs["relation"], "references")
             self.assertEqual(related.call_args.kwargs["api_key"], "test-key")
 
+    def test_personal_literature_radar_records_unpaywall_enrichment_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.1145/personal-failing-example",
+                title="Personal Failing Unpaywall Metadata for Memory Safety",
+                abstract="Memory safety and system security.",
+                identifiers={"doi": "10.1145/personal-failing-example"},
+                links={"landing": "https://doi.org/10.1145/personal-failing-example"},
+            )
+            with mock.patch("personal.literature_radar.collect_crossref_works", return_value=[paper]):
+                with mock.patch(
+                    "personal.literature_radar.enrich_paper_with_unpaywall",
+                    side_effect=RuntimeError("Unpaywall unavailable"),
+                ):
+                    result = run_personal_literature_radar(
+                        root_path=root,
+                        sources=["crossref"],
+                        query_terms=["memory safety"],
+                        max_results=2,
+                        unpaywall_email="radar@example.com",
+                        now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                    )
+
+            self.assertEqual(result["run"]["status"], "partial")
+            self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(result["source_errors"][0]["source_id"], "unpaywall")
+            self.assertEqual(result["source_errors"][0]["source_paper_id"], "10.1145/personal-failing-example")
+            source_stats = {stat["source_id"]: stat for stat in result["source_stats"]}
+            self.assertEqual(source_stats["unpaywall"]["status"], "failed")
+            self.assertEqual(source_stats["unpaywall"]["attempted_count"], 1)
+            self.assertEqual(source_stats["unpaywall"]["failed_count"], 1)
+            self.assertIn("`unpaywall`: RuntimeError: Unpaywall unavailable", result["report"])
+            history = read_personal_radar_paper_history(root)
+            source_records = history[paper["dedupe_key"]]["paper"]["source_records"]
+            self.assertEqual(source_records[-1]["source_id"], "unpaywall")
+            self.assertEqual(source_records[-1]["status"], "failed")
+
     def test_personal_literature_radar_collects_dblp_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

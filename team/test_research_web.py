@@ -213,6 +213,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Weekly Brief", html)
             self.assertIn("/radar/papers?limit=50", html)
             self.assertIn("Paper History", html)
+            self.assertIn("Radar Profile", html)
+            self.assertIn("sources: arXiv, DBLP, Semantic Scholar +4 more", html)
+            self.assertIn("max/source: 20", html)
+            self.assertIn("last run: 2026-07-01 10:00", html)
+            self.assertIn("collected: 1", html)
             self.assertIn('href="/radar/papers?limit=50">All 1</a>', html)
             self.assertIn('href="/radar/papers?limit=50&amp;review=unreviewed">Unreviewed 1</a>', html)
             self.assertIn('href="/radar/papers?limit=50&amp;review=watch">Watch 0</a>', html)
@@ -330,6 +335,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "usenix_security_cycles": "1, 2",
                         "include_openreview_unaccepted": "1",
                         "cache_pdfs": "1",
+                        "source_contact_email": "radar@example.org",
                         "pdf_cache_dir": "team/data/web-pdf-cache",
                         "pdf_cache_max_bytes": "12345",
                         "semantic_scholar_author_ids": "author-1",
@@ -367,6 +373,9 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(kwargs["usenix_security_cycles"], [1, 2])
         self.assertFalse(kwargs["openreview_accepted_only"])
         self.assertTrue(kwargs["cache_pdfs"])
+        self.assertEqual(kwargs["openalex_mailto"], "radar@example.org")
+        self.assertEqual(kwargs["crossref_mailto"], "radar@example.org")
+        self.assertEqual(kwargs["unpaywall_email"], "radar@example.org")
         self.assertEqual(kwargs["pdf_cache_dir"], Path("team/data/web-pdf-cache"))
         self.assertEqual(kwargs["pdf_cache_max_bytes"], 12345)
         self.assertEqual(kwargs["semantic_scholar_author_ids"], ["author-1"])
@@ -397,6 +406,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "usenix_security_cycles": "1 2",
                         "include_openreview_unaccepted": "1",
                         "cache_pdfs": "1",
+                        "source_contact_email": "radar@example.org",
                         "pdf_cache_dir": "team/data/saved-pdf-cache",
                         "pdf_cache_max_bytes": "12345",
                         "openalex_author_ids": "A123456789",
@@ -417,6 +427,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(settings["usenix_security_cycles"], [1, 2])
             self.assertTrue(settings["include_openreview_unaccepted"])
             self.assertTrue(settings["cache_pdfs"])
+            self.assertEqual(settings["source_contact_email"], "radar@example.org")
             self.assertEqual(settings["pdf_cache_dir"], "team/data/saved-pdf-cache")
             self.assertEqual(settings["pdf_cache_max_bytes"], 12345)
             self.assertEqual(settings["openalex_author_ids"], ["A123456789"])
@@ -432,12 +443,23 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="usenix_security_cycles" placeholder="1, 2" value="1\n2"', html)
             self.assertIn('name="include_openreview_unaccepted" value="1" checked', html)
             self.assertIn('name="cache_pdfs" value="1" checked', html)
+            self.assertIn('name="source_contact_email" placeholder="radar@example.org" value="radar@example.org"', html)
             self.assertIn('name="pdf_cache_dir" placeholder="team/data/literature-radar-pdfs" value="team/data/saved-pdf-cache"', html)
             self.assertIn('name="pdf_cache_max_bytes" min="1024"', html)
             self.assertIn('value="12345"', html)
             self.assertIn(">A123456789</textarea>", html)
             self.assertIn(">seed-negative</textarea>", html)
             self.assertIn('name="venue_profiles" placeholder="security, systems" value="security"', html)
+            self.assertIn("Radar Profile", html)
+            self.assertIn("sources: OpenAlex Authors, DBLP Venues", html)
+            self.assertIn("max/source: 7", html)
+            self.assertIn("recommendations: 3", html)
+            self.assertIn("provider: openrouter", html)
+            self.assertIn("cache PDFs: yes", html)
+            self.assertIn("source contact: yes", html)
+            self.assertIn("conference year: 2026", html)
+            self.assertIn("tracked lists: 3", html)
+            self.assertIn("last run: none", html)
             self.assertIn("Save as defaults", html)
 
     def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:

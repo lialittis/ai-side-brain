@@ -478,6 +478,14 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       padding-top: 12px;
       border-top: 1px solid var(--line);
     }}
+    .radar-status {{
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }}
+    .radar-status h2 {{ margin-bottom: 0; }}
     .radar-source-grid {{
       display: grid;
       grid-template-columns: 1fr;
@@ -796,6 +804,7 @@ def render_literature_radar_page(
     <div class="radar-grid">
       <section class="panel">
         <h2>Runs</h2>
+        {render_radar_status_summary(database, runs)}
         {render_radar_run_list(runs, selected_run)}
         {render_radar_history_actions(database)}
         {render_radar_run_form(database)}
@@ -862,6 +871,53 @@ def render_literature_radar_papers_page(
     </section>
     """
     return page("Radar Papers", body, active="radar")
+
+
+def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[str, Any]]) -> str:
+    settings = radar_form_settings(database)
+    latest_run = runs[0] if runs else None
+    review_counts = database.literature_radar_paper_review_counts()
+    chips = [
+        render_radar_metric_chip("sources", radar_list_preview(radar_source_setting_labels(settings), limit=3)),
+        render_radar_metric_chip("max/source", settings["max_results"]),
+        render_radar_metric_chip("recommendations", settings["limit"]),
+        render_radar_metric_chip("summaries", "yes" if settings.get("summarize") else "no"),
+        render_radar_metric_chip("provider", settings.get("summary_provider") or "local"),
+        render_radar_metric_chip("cache PDFs", "yes" if settings.get("cache_pdfs") else "no"),
+        render_radar_metric_chip("source contact", "yes" if settings.get("source_contact_email") else "no"),
+        render_radar_metric_chip("unreviewed", review_counts.get("unreviewed", 0)),
+        render_radar_metric_chip("watch", review_counts.get("watch", 0)),
+    ]
+    if settings.get("conference_year"):
+        chips.append(render_radar_metric_chip("conference year", settings["conference_year"]))
+    tracker_count = radar_tracker_count(settings)
+    if tracker_count:
+        chips.append(render_radar_metric_chip("tracked lists", tracker_count))
+    if latest_run:
+        chips.extend(
+            [
+                render_radar_metric_chip("last run", display_radar_datetime(str(latest_run.get("started_at") or ""))),
+                render_radar_metric_chip("status", latest_run.get("status") or "unknown"),
+                render_radar_metric_chip("collected", latest_run.get("collected_count") or 0),
+            ]
+        )
+    else:
+        chips.append(render_radar_metric_chip("last run", "none"))
+    return f"""
+    <div class="radar-status">
+      <h2>Radar Profile</h2>
+      <div class="tags">{''.join(chips)}</div>
+    </div>
+    """
+
+
+def radar_source_setting_labels(settings: dict[str, Any]) -> list[str]:
+    labels = {source_id: label for source_id, label in RADAR_WEB_SOURCE_OPTIONS}
+    return [labels.get(source, source) for source in settings.get("sources") or []]
+
+
+def radar_tracker_count(settings: dict[str, Any]) -> int:
+    return sum(len(settings.get(key) or []) for key in RADAR_LIST_SETTING_KEYS)
 
 
 def render_radar_history_actions(database: TeamResearchDatabase) -> str:
@@ -938,6 +994,10 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
       <label class="radar-option-line">
         <input type="checkbox" name="cache_pdfs" value="1"{checked_attr(bool(settings.get('cache_pdfs')))}>
         <span>Cache legal PDFs</span>
+      </label>
+      <label>
+        <span class="muted">Source contact email</span>
+        <input name="source_contact_email" placeholder="radar@example.org" value="{html_escape(str(settings.get('source_contact_email') or ''))}">
       </label>
       <label>
         <span class="muted">PDF cache dir</span>
@@ -1142,6 +1202,7 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
         "cache_pdfs": False,
         "pdf_cache_dir": RADAR_DEFAULT_PDF_CACHE_DIR,
         "pdf_cache_max_bytes": RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
+        "source_contact_email": "",
         "conference_year": "",
         "usenix_security_cycles": [],
         "include_openreview_unaccepted": False,
@@ -1181,6 +1242,8 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
             default=RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
             maximum=RADAR_PDF_CACHE_MAX_BYTES_LIMIT,
         )
+    if "source_contact_email" in settings:
+        normalized["source_contact_email"] = clean_contact_email(settings.get("source_contact_email"))
     if "conference_year" in settings:
         normalized["conference_year"] = clean_optional_year(settings.get("conference_year"))
     if "usenix_security_cycles" in settings:
@@ -2570,9 +2633,12 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         openalex_author_ids=settings["openalex_author_ids"],
         seed_paper_ids=settings["seed_paper_ids"],
         negative_seed_paper_ids=settings["negative_seed_paper_ids"],
+        openalex_mailto=settings["source_contact_email"] or None,
         openreview_invitations=settings["openreview_invitations"],
         openreview_venue_profiles=settings["openreview_venue_profiles"],
         openreview_accepted_only=not settings["include_openreview_unaccepted"],
+        crossref_mailto=settings["source_contact_email"] or None,
+        unpaywall_email=settings["source_contact_email"] or None,
         conference_year=settings["conference_year"] or None,
         dblp_venue_profiles=settings["venue_profiles"],
         usenix_security_cycles=settings["usenix_security_cycles"] or None,
@@ -2600,6 +2666,7 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
             default=RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
             maximum=RADAR_PDF_CACHE_MAX_BYTES_LIMIT,
         ),
+        "source_contact_email": clean_contact_email(fields.get("source_contact_email", "")),
         "semantic_scholar_author_ids": split_form_list(fields.get("semantic_scholar_author_ids", "")),
         "dblp_author_pids": split_form_list(fields.get("dblp_author_pids", "")),
         "openalex_author_ids": split_form_list(fields.get("openalex_author_ids", "")),
@@ -2641,6 +2708,13 @@ def selected_radar_sources(fields: dict[str, str]) -> list[str]:
 
 def checkbox_enabled(fields: dict[str, str], name: str) -> bool:
     return (fields.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def clean_contact_email(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", text) else ""
 
 
 def clean_summary_provider(value: str) -> str:
