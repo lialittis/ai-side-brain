@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from shared.literature_radar import dedupe_key as radar_dedupe_key
 from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import (
     TeamResearchRunResult,
@@ -204,6 +205,43 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS literature_radar_runs (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    sources_json TEXT NOT NULL,
+                    query_terms_json TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    collected_count INTEGER NOT NULL,
+                    recommendation_count INTEGER NOT NULL,
+                    imported_count INTEGER NOT NULL,
+                    report_markdown TEXT NOT NULL,
+                    error TEXT,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS literature_radar_papers (
+                    dedupe_key TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    latest_seen_at TEXT NOT NULL,
+                    source_ids_json TEXT NOT NULL,
+                    imported_item_id TEXT,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS literature_radar_recommendations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    dedupe_key TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    score REAL NOT NULL,
+                    label TEXT NOT NULL,
+                    imported_item_id TEXT,
+                    record_json TEXT NOT NULL,
+                    UNIQUE(run_id, dedupe_key)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
@@ -222,6 +260,12 @@ class TeamResearchDatabase:
                     ON ai_analysis_runs(item_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_status
                     ON ai_analysis_runs(status, started_at);
+                CREATE INDEX IF NOT EXISTS idx_literature_radar_runs_started
+                    ON literature_radar_runs(started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_literature_radar_papers_latest
+                    ON literature_radar_papers(latest_seen_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_literature_radar_recommendations_run
+                    ON literature_radar_recommendations(run_id, rank);
                 """
             )
             self._ensure_default_interest_keywords(connection)
@@ -984,6 +1028,163 @@ class TeamResearchDatabase:
             self._ensure_tag_catalog(connection, normalized_tags, source="ai", timestamp=timestamp)
             self._update_library_entries_for_analysis(connection, item["id"], card["id"], screening)
 
+    def create_literature_radar_run(
+        self,
+        *,
+        sources: list[str],
+        query_terms: list[str],
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_sources = [str(source).strip() for source in sources if str(source).strip()]
+        selected_terms = [str(term).strip() for term in query_terms if str(term).strip()]
+        run = {
+            "id": stable_literature_radar_run_id(selected_sources, selected_terms, timestamp),
+            "status": "running",
+            "sources": selected_sources,
+            "query_terms": selected_terms,
+            "started_at": timestamp,
+            "completed_at": None,
+            "collected_count": 0,
+            "recommendation_count": 0,
+            "imported_count": 0,
+            "report": "",
+            "error": "",
+        }
+        with self.connect() as connection:
+            self._upsert_literature_radar_run(connection, run)
+        return run
+
+    def complete_literature_radar_run(
+        self,
+        run_id: str,
+        *,
+        collected_papers: list[dict[str, Any]],
+        recommendations: list[dict[str, Any]],
+        imported: list[dict[str, Any]] | None = None,
+        report: str = "",
+        status: str = "succeeded",
+        error: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        imported_results = imported or []
+        imported_by_dedupe_key = {
+            result["dedupe_key"]: result
+            for result in imported_results
+            if result.get("dedupe_key")
+        }
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM literature_radar_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown literature radar run: {run_id}")
+            run = loads(row["record_json"])
+            recorded_paper_keys = set()
+            for paper in collected_papers:
+                dedupe_key = radar_paper_key(paper)
+                recorded_paper_keys.add(dedupe_key)
+                import_result = imported_by_dedupe_key.get(dedupe_key) or {}
+                self._upsert_literature_radar_paper(
+                    connection,
+                    paper,
+                    timestamp=timestamp,
+                    imported_item_id=import_result.get("item_id"),
+                )
+            for rank, recommendation in enumerate(recommendations, start=1):
+                paper = recommendation.get("paper") or {}
+                dedupe_key = radar_paper_key(paper)
+                import_result = imported_by_dedupe_key.get(dedupe_key) or {}
+                self._upsert_literature_radar_paper(
+                    connection,
+                    paper,
+                    timestamp=timestamp,
+                    imported_item_id=import_result.get("item_id"),
+                    count_seen=dedupe_key not in recorded_paper_keys,
+                )
+                self._upsert_literature_radar_recommendation(
+                    connection,
+                    build_literature_radar_recommendation_record(
+                        run_id=run_id,
+                        dedupe_key=dedupe_key,
+                        rank=rank,
+                        recommendation=recommendation,
+                        import_result=import_result or None,
+                        timestamp=timestamp,
+                    ),
+                )
+            run.update(
+                {
+                    "status": status,
+                    "completed_at": None if status in {"pending", "running"} else timestamp,
+                    "collected_count": len(collected_papers),
+                    "recommendation_count": len(recommendations),
+                    "imported_count": len(imported_results),
+                    "report": report,
+                    "error": error,
+                }
+            )
+            self._upsert_literature_radar_run(connection, run)
+        return run
+
+    def list_literature_radar_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_runs
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def get_literature_radar_run(self, run_id: str | None = None) -> dict[str, Any] | None:
+        self.initialize()
+        if run_id:
+            query = "SELECT record_json FROM literature_radar_runs WHERE id = ?"
+            params: tuple[Any, ...] = (run_id,)
+        else:
+            query = """
+                SELECT record_json
+                FROM literature_radar_runs
+                ORDER BY started_at DESC
+                LIMIT 1
+            """
+            params = ()
+        with self.connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def list_literature_radar_recommendations(self, run_id: str) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_recommendations
+                WHERE run_id = ?
+                ORDER BY rank ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def get_literature_radar_paper(self, dedupe_key: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
     def list_latest_relevant_papers(
         self,
         *,
@@ -1319,6 +1520,98 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _upsert_literature_radar_run(self, connection: sqlite3.Connection, run: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO literature_radar_runs
+            (id, status, sources_json, query_terms_json, started_at, completed_at,
+             collected_count, recommendation_count, imported_count, report_markdown, error, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run["id"],
+                run["status"],
+                dumps(run.get("sources") or []),
+                dumps(run.get("query_terms") or []),
+                run["started_at"],
+                run.get("completed_at"),
+                int(run.get("collected_count") or 0),
+                int(run.get("recommendation_count") or 0),
+                int(run.get("imported_count") or 0),
+                run.get("report") or "",
+                run.get("error") or "",
+                dumps(run),
+            ),
+        )
+
+    def _upsert_literature_radar_paper(
+        self,
+        connection: sqlite3.Connection,
+        paper: dict[str, Any],
+        *,
+        timestamp: str,
+        imported_item_id: str | None = None,
+        count_seen: bool = True,
+    ) -> dict[str, Any]:
+        dedupe_key = radar_paper_key(paper)
+        existing_row = connection.execute(
+            "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
+        existing = loads(existing_row["record_json"]) if existing_row else {}
+        source_ids = sorted(set(existing.get("source_ids") or []) | set(radar_paper_source_ids(paper)))
+        record = {
+            "dedupe_key": dedupe_key,
+            "title": paper.get("title") or existing.get("title") or dedupe_key,
+            "first_seen_at": existing.get("first_seen_at") or timestamp,
+            "latest_seen_at": timestamp,
+            "seen_count": int(existing.get("seen_count") or 0) + (1 if count_seen else 0),
+            "source_ids": source_ids,
+            "imported_item_id": imported_item_id or existing.get("imported_item_id"),
+            "paper": paper,
+        }
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO literature_radar_papers
+            (dedupe_key, title, first_seen_at, latest_seen_at, source_ids_json, imported_item_id, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["dedupe_key"],
+                record["title"],
+                record["first_seen_at"],
+                record["latest_seen_at"],
+                dumps(record["source_ids"]),
+                record.get("imported_item_id"),
+                dumps(record),
+            ),
+        )
+        return record
+
+    def _upsert_literature_radar_recommendation(
+        self,
+        connection: sqlite3.Connection,
+        recommendation: dict[str, Any],
+    ) -> None:
+        scoring = recommendation.get("scoring") or {}
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO literature_radar_recommendations
+            (id, run_id, dedupe_key, rank, score, label, imported_item_id, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                recommendation["id"],
+                recommendation["run_id"],
+                recommendation["dedupe_key"],
+                int(recommendation["rank"]),
+                float(scoring.get("score") or 0),
+                str(scoring.get("label") or "needs_review"),
+                recommendation.get("imported_item_id"),
+                dumps(recommendation),
+            ),
+        )
+
     def _insert_paper_comment(self, connection: sqlite3.Connection, comment: dict[str, Any]) -> None:
         connection.execute(
             """
@@ -1510,6 +1803,61 @@ def stable_run_id(item_id: str, provider: str, model: str, prompt_version: str, 
             "started_at": timestamp,
         },
     ).removeprefix("run_")
+
+
+def stable_literature_radar_run_id(sources: list[str], query_terms: list[str], timestamp: str) -> str:
+    return stable_id(
+        "radarrun",
+        {
+            "sources": sources,
+            "query_terms": query_terms,
+            "started_at": timestamp,
+        },
+    )
+
+
+def radar_paper_key(paper: dict[str, Any]) -> str:
+    if paper.get("dedupe_key"):
+        return str(paper["dedupe_key"])
+    return radar_dedupe_key(paper)
+
+
+def radar_paper_source_ids(paper: dict[str, Any]) -> list[str]:
+    source_ids = set()
+    if paper.get("source_id"):
+        source_ids.add(str(paper["source_id"]))
+    for source_record in paper.get("source_records") or []:
+        source_id = source_record.get("source_id")
+        if source_id:
+            source_ids.add(str(source_id))
+    return sorted(source_ids)
+
+
+def build_literature_radar_recommendation_record(
+    *,
+    run_id: str,
+    dedupe_key: str,
+    rank: int,
+    recommendation: dict[str, Any],
+    import_result: dict[str, Any] | None,
+    timestamp: str,
+) -> dict[str, Any]:
+    paper = recommendation.get("paper") or {}
+    scoring = recommendation.get("scoring") or {}
+    return {
+        "id": stable_id("radarrec", {"run_id": run_id, "dedupe_key": dedupe_key}),
+        "run_id": run_id,
+        "dedupe_key": dedupe_key,
+        "rank": rank,
+        "title": paper.get("title") or dedupe_key,
+        "scoring": scoring,
+        "label": scoring.get("label") or "needs_review",
+        "score": float(scoring.get("score") or 0),
+        "imported_item_id": (import_result or {}).get("item_id"),
+        "import_result": import_result,
+        "recommendation": recommendation,
+        "created_at": timestamp,
+    }
 
 
 def library_importance(library_entry: dict[str, Any] | None) -> int:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -9,8 +10,15 @@ from typing import Any
 from shared.literature_radar import (
     build_recommendation_report,
     collect_arxiv,
+    collect_crossref_works,
     collect_dblp_publications,
+    collect_ndss_accepted_papers,
+    collect_openalex_works,
+    collect_openreview_notes,
+    collect_semantic_scholar_search,
+    collect_usenix_security_accepted_papers,
     default_radar_topic_profile,
+    enrich_paper_with_unpaywall,
     recommend_papers,
 )
 from shared.research.core import iso_timestamp
@@ -41,7 +49,15 @@ TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
 }
 
 
-DEFAULT_RADAR_SOURCES = ("arxiv", "dblp")
+DEFAULT_RADAR_SOURCES = (
+    "arxiv",
+    "dblp",
+    "semantic_scholar",
+    "openalex",
+    "crossref",
+    "usenix_security",
+    "ndss",
+)
 
 
 def run_team_literature_radar(
@@ -56,40 +72,86 @@ def run_team_literature_radar(
     min_import_score: int = 35,
     project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
     actor: str = "literature-radar",
+    semantic_scholar_api_key: str | None = None,
+    openalex_mailto: str | None = None,
+    openreview_invitations: list[str] | None = None,
+    crossref_mailto: str | None = None,
+    unpaywall_email: str | None = None,
+    conference_year: int | None = None,
+    usenix_security_cycles: list[int] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_terms = query_terms or team_radar_query_terms(database)
     selected_sources = list(sources or DEFAULT_RADAR_SOURCES)
-    collected = collect_team_radar_candidates(
+    run = database.create_literature_radar_run(
         sources=selected_sources,
         query_terms=selected_terms,
-        max_results=max_results,
+        now=now,
     )
-    recommendations = recommend_papers(
-        collected,
-        topic_profile=default_radar_topic_profile(),
-        limit=recommendation_limit,
-    )
-    imported = []
-    if import_results:
-        for recommendation in recommendations[:import_limit]:
-            if int(recommendation["scoring"]["score"]) < min_import_score:
-                continue
-            imported.append(
-                import_radar_recommendation(
+    collected: list[dict[str, Any]] = []
+    recommendations: list[dict[str, Any]] = []
+    imported: list[dict[str, Any]] = []
+    report = ""
+    try:
+        collected = collect_team_radar_candidates(
+            sources=selected_sources,
+            query_terms=selected_terms,
+            max_results=max_results,
+            semantic_scholar_api_key=semantic_scholar_api_key,
+            openalex_mailto=openalex_mailto,
+            openreview_invitations=openreview_invitations,
+            crossref_mailto=crossref_mailto,
+            unpaywall_email=unpaywall_email,
+            conference_year=conference_year,
+            usenix_security_cycles=usenix_security_cycles,
+            now=now,
+        )
+        recommendations = recommend_papers(
+            collected,
+            topic_profile=default_radar_topic_profile(),
+            limit=recommendation_limit,
+        )
+        if import_results:
+            for recommendation in recommendations[:import_limit]:
+                if int(recommendation["scoring"]["score"]) < min_import_score:
+                    continue
+                import_result = import_radar_recommendation(
                     database,
                     recommendation,
                     project_id=project_id,
                     actor=actor,
                     now=now,
                 )
-            )
-    report = build_recommendation_report(
-        recommendations,
-        title="Team Literature Radar Report",
-        generated_at=now,
+                import_result["dedupe_key"] = (recommendation.get("paper") or {}).get("dedupe_key")
+                imported.append(import_result)
+        report = build_recommendation_report(
+            recommendations,
+            title="Team Literature Radar Report",
+            generated_at=now,
+        )
+    except Exception as error:
+        database.complete_literature_radar_run(
+            run["id"],
+            collected_papers=collected,
+            recommendations=recommendations,
+            imported=imported,
+            report=report,
+            status="failed",
+            error=str(error),
+            now=now,
+        )
+        raise
+    completed_run = database.complete_literature_radar_run(
+        run["id"],
+        collected_papers=collected,
+        recommendations=recommendations,
+        imported=imported,
+        report=report,
+        now=now,
     )
     return {
+        "run_id": run["id"],
+        "run": completed_run,
         "sources": selected_sources,
         "query_terms": selected_terms,
         "collected_count": len(collected),
@@ -118,17 +180,133 @@ def collect_team_radar_candidates(
     sources: list[str],
     query_terms: list[str],
     max_results: int,
+    semantic_scholar_api_key: str | None = None,
+    openalex_mailto: str | None = None,
+    openreview_invitations: list[str] | None = None,
+    crossref_mailto: str | None = None,
+    unpaywall_email: str | None = None,
+    conference_year: int | None = None,
+    usenix_security_cycles: list[int] | None = None,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    unsupported = sorted(set(sources) - {"arxiv", "dblp"})
+    supported_sources = {
+        "arxiv",
+        "dblp",
+        "semantic_scholar",
+        "openalex",
+        "openreview",
+        "crossref",
+        "usenix_security",
+        "ndss",
+    }
+    unsupported = sorted(set(sources) - supported_sources)
     if unsupported:
         raise ValueError(f"Unsupported radar source(s): {', '.join(unsupported)}")
     papers = []
+    selected_conference_year = conference_year or radar_year(now)
     if "arxiv" in sources:
         papers.extend(collect_arxiv(query_terms=query_terms, max_results=max_results))
+    if "crossref" in sources:
+        papers.extend(
+            collect_crossref_works(
+                query_terms=query_terms,
+                max_results=max_results,
+                mailto=crossref_mailto or os.environ.get("CROSSREF_MAILTO"),
+            )
+        )
     if "dblp" in sources:
         for term in query_terms:
             papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+    if "semantic_scholar" in sources:
+        papers.extend(
+            collect_semantic_scholar_search(
+                query_terms=query_terms,
+                max_results=max_results,
+                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+            )
+        )
+    if "openalex" in sources:
+        papers.extend(
+            collect_openalex_works(
+                query_terms=query_terms,
+                max_results=max_results,
+                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+            )
+        )
+    if "openreview" in sources:
+        selected_invitations = openreview_invitations or env_list("OPENREVIEW_INVITATIONS")
+        if not selected_invitations:
+            raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
+        papers.extend(
+            collect_openreview_notes(
+                invitations=selected_invitations,
+                max_results=max_results,
+            )
+        )
+    if "usenix_security" in sources:
+        for cycle in usenix_security_cycles or [1]:
+            papers.extend(
+                collect_usenix_security_accepted_papers(
+                    year=selected_conference_year,
+                    cycle=cycle,
+                    max_results=max_results,
+                )
+            )
+    if "ndss" in sources:
+        papers.extend(
+            collect_ndss_accepted_papers(
+                year=selected_conference_year,
+                max_results=max_results,
+            )
+        )
+    selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
+    if selected_unpaywall_email:
+        papers = [
+            enrich_team_radar_paper_with_unpaywall(
+                paper,
+                email=selected_unpaywall_email,
+                now=now,
+            )
+            for paper in papers
+        ]
     return papers
+
+
+def env_list(name: str) -> list[str]:
+    return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
+
+
+def radar_year(now: datetime | None = None) -> int:
+    selected_now = now or datetime.now(timezone.utc)
+    if selected_now.tzinfo is None:
+        selected_now = selected_now.replace(tzinfo=timezone.utc)
+    return selected_now.year
+
+
+def enrich_team_radar_paper_with_unpaywall(
+    paper: dict[str, Any],
+    *,
+    email: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    doi = (paper.get("identifiers") or {}).get("doi")
+    if not doi:
+        return paper
+    try:
+        return enrich_paper_with_unpaywall(paper, email=email, now=now)
+    except Exception as error:
+        updated = dict(paper)
+        updated["source_records"] = [
+            *(updated.get("source_records") or []),
+            {
+                "source_id": "unpaywall",
+                "source_paper_id": doi,
+                "status": "failed",
+                "error": str(error),
+                "collected_at": iso_timestamp(now or datetime.now(timezone.utc)),
+            },
+        ]
+        return updated
 
 
 def build_team_run_from_radar_paper(

@@ -84,7 +84,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     radar = subparsers.add_parser("radar-run", help="collect and rank Literature Radar recommendations")
     add_db_args(radar)
-    radar.add_argument("--source", action="append", choices=["arxiv", "dblp"], help="source to collect; repeatable")
+    radar.add_argument(
+        "--source",
+        action="append",
+        choices=[
+            "arxiv",
+            "dblp",
+            "semantic_scholar",
+            "openalex",
+            "openreview",
+            "crossref",
+            "usenix_security",
+            "ndss",
+        ],
+        help="source to collect; repeatable",
+    )
     radar.add_argument("--query-term", action="append", default=[], help="interest term override; repeatable")
     radar.add_argument("--max-results", type=int, default=25, help="maximum results per source query")
     radar.add_argument("--limit", type=int, default=10, help="maximum recommendations to report")
@@ -92,8 +106,26 @@ def build_parser() -> argparse.ArgumentParser:
     radar.add_argument("--import-limit", type=int, default=5, help="maximum recommendations to import")
     radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
     radar.add_argument("--project", default="team-library", help="team library project id for imported papers")
+    radar.add_argument("--semantic-scholar-api-key", help="optional Semantic Scholar API key")
+    radar.add_argument("--openalex-mailto", help="optional email for OpenAlex polite-pool requests")
+    radar.add_argument("--openreview-invitation", action="append", default=[], help="OpenReview invitation id; repeatable")
+    radar.add_argument("--crossref-mailto", help="optional email for Crossref polite-pool requests")
+    radar.add_argument("--unpaywall-email", help="optional email for legal OA PDF enrichment via Unpaywall")
+    radar.add_argument("--conference-year", type=int, help="accepted-paper conference year for venue sources")
+    radar.add_argument("--usenix-cycle", action="append", type=int, default=[], help="USENIX Security cycle; repeatable")
     radar.add_argument("--output", type=Path, help="write Markdown recommendation report")
     radar.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_history = subparsers.add_parser("radar-history", help="list Literature Radar run history")
+    add_db_args(radar_history)
+    radar_history.add_argument("--limit", type=int, default=10)
+    radar_history.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_report = subparsers.add_parser("radar-report", help="show a stored Literature Radar report")
+    add_db_args(radar_report)
+    radar_report.add_argument("run_id", nargs="?", help="run id; defaults to the latest run")
+    radar_report.add_argument("--output", type=Path, help="write stored Markdown report")
+    radar_report.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     return parser
 
@@ -250,6 +282,7 @@ def print_analysis_runs(runs: list[dict[str, Any]]) -> None:
 
 def print_radar_run(result: dict[str, Any]) -> None:
     print("Team Literature Radar")
+    print(f"Run: {result['run_id']}")
     print(f"Sources: {', '.join(result['sources'])}")
     print(f"Query terms: {', '.join(result['query_terms'])}")
     print(f"Collected: {result['collected_count']}")
@@ -262,6 +295,28 @@ def print_radar_run(result: dict[str, Any]) -> None:
         paper = recommendation["paper"]
         scoring = recommendation["scoring"]
         print(f"- {scoring['label']} {scoring['score']}/100 | {paper.get('title')}")
+
+
+def print_radar_history(runs: list[dict[str, Any]]) -> None:
+    if not runs:
+        print("No Literature Radar runs yet.")
+        return
+    for run in runs:
+        print(
+            f"{run['id']} | {run['status']} | {run.get('started_at')} | "
+            f"collected={run.get('collected_count', 0)} "
+            f"recommended={run.get('recommendation_count', 0)} "
+            f"imported={run.get('imported_count', 0)} | "
+            f"{', '.join(run.get('sources') or [])}"
+        )
+
+
+def print_radar_report(run: dict[str, Any], recommendations: list[dict[str, Any]]) -> None:
+    print(run.get("report") or "")
+    if recommendations and not run.get("report"):
+        print(f"# Literature Radar Report - {run['id']}")
+        for recommendation in recommendations:
+            print(f"- {recommendation.get('label')} {recommendation.get('score')}/100 | {recommendation.get('title')}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -330,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "radar-run":
         result = run_team_literature_radar(
             database,
-            sources=args.source or ["arxiv", "dblp"],
+            sources=args.source
+            or ["arxiv", "dblp", "semantic_scholar", "openalex", "crossref", "usenix_security", "ndss"],
             query_terms=args.query_term or None,
             max_results=args.max_results,
             recommendation_limit=args.limit,
@@ -338,6 +394,13 @@ def main(argv: list[str] | None = None) -> int:
             import_limit=args.import_limit,
             min_import_score=args.min_score,
             project_id=args.project,
+            semantic_scholar_api_key=args.semantic_scholar_api_key,
+            openalex_mailto=args.openalex_mailto,
+            openreview_invitations=args.openreview_invitation or None,
+            crossref_mailto=args.crossref_mailto,
+            unpaywall_email=args.unpaywall_email,
+            conference_year=args.conference_year,
+            usenix_security_cycles=args.usenix_cycle or None,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -347,6 +410,31 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_radar_run(result)
+        return 0
+
+    if args.command == "radar-history":
+        runs = database.list_literature_radar_runs(limit=args.limit)
+        if args.json:
+            print_json(runs)
+        else:
+            print_radar_history(runs)
+        return 0
+
+    if args.command == "radar-report":
+        run = database.get_literature_radar_run(args.run_id)
+        if not run:
+            selected = args.run_id or "latest"
+            raise KeyError(f"Unknown Literature Radar run: {selected}")
+        recommendations = database.list_literature_radar_recommendations(run["id"])
+        result = {"run": run, "recommendations": recommendations}
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(run.get("report") or "", encoding="utf-8")
+            result["report_path"] = str(args.output)
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_report(run, recommendations)
         return 0
 
     parser.error(f"unsupported command: {args.command}")

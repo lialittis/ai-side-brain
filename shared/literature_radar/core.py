@@ -53,14 +53,14 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "name": "OpenAlex",
         "access": "api",
         "primary_role": "large_scale_metadata_topics_citations_doi_resolution",
-        "mvp_collector": False,
+        "mvp_collector": True,
     },
     {
         "id": "crossref",
         "name": "Crossref",
         "access": "api",
         "primary_role": "doi_publisher_metadata_publication_status",
-        "mvp_collector": False,
+        "mvp_collector": True,
     },
     {
         "id": "openreview",

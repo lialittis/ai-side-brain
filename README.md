@@ -23,6 +23,7 @@ The ecosystem has two related product lines in this repository:
 * **Personal Side-Brain**: a private, local-first memory and action system for capture, tasks, reminders, project context, research resources, and daily review.
 * **Team Side-Brain**: a team research intelligence system for literature screening, research cards, project libraries, reading assignments, and research briefs.
 * **Shared Research Core**: product-neutral source intake, research item metadata, research cards, topic profiles, and relevance screening used by both Personal and Team Side-Brain.
+* **Shared Literature Radar**: product-neutral paper discovery, source collection, deduplication, legal PDF/OA metadata, relevance scoring, and recommendation reports reused by Personal and Team Side-Brain.
 
 The repository is organized as a monorepo-style workspace. Personal and Team Side-Brain may share generic schemas, prompts, connectors, and LLM utilities, but they must keep different trust boundaries, data stores, permissions, and product-specific workflows.
 

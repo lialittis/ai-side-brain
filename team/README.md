@@ -77,7 +77,9 @@ Useful commands:
 python team/research_cli.py add-manual --title "..." --abstract "..."
 python team/research_cli.py inbox
 python team/research_cli.py analyze-pending --retry-failed
-python team/research_cli.py radar-run --source arxiv --source dblp --output team/logs/literature-radar.md
+python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --source usenix_security --source ndss --output team/logs/literature-radar.md
+python team/research_cli.py radar-history
+python team/research_cli.py radar-report
 python team/research_cli.py show ITEM_ID
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
