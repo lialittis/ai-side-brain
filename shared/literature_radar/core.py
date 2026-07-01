@@ -687,6 +687,29 @@ def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str
     return "\n".join(lines)
 
 
+def append_radar_source_coverage_to_report(
+    report: str,
+    source_stats: list[dict[str, Any]],
+    source_errors: list[dict[str, Any]] | None = None,
+    expected_sources: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    if not source_stats and not source_errors and not expected_sources:
+        return report
+    summary = radar_source_coverage_summary(source_stats, source_errors, expected_sources)
+    lines = [report.rstrip(), "", "## Source Coverage", "", f"- {radar_source_coverage_details(summary)}"]
+    for key, label in (
+        ("failed_source_ids", "Failed"),
+        ("partial_source_ids", "Partial"),
+        ("not_run_source_ids", "Missing"),
+        ("empty_source_ids", "Empty"),
+    ):
+        values = summary.get(key) if isinstance(summary.get(key), list) else []
+        if values:
+            lines.append(f"- {label}: {', '.join(f'`{value}`' for value in values)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
     if not source_errors:
         return report
@@ -719,6 +742,201 @@ def format_radar_source_stat(stat: dict[str, Any]) -> str:
     if details:
         line += f" ({', '.join(details)})"
     return line
+
+
+def radar_source_coverage_summary(
+    source_stats: list[dict[str, Any]] | None,
+    source_errors: list[dict[str, Any]] | None = None,
+    expected_sources: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    expected_ids = unique_source_ids(expected_sources or [])
+    stats = source_stats if isinstance(source_stats, list) else []
+    errors = source_errors if isinstance(source_errors, list) else []
+    records: dict[str, dict[str, Any]] = {
+        source_id: {
+            "source_id": source_id,
+            "status": "not_run",
+            "collected_count": 0,
+            "attempted_count": 0,
+            "failed_count": 0,
+            "skipped_no_doi_count": 0,
+            "error_count": 0,
+        }
+        for source_id in expected_ids
+    }
+    status_flags: dict[str, set[str]] = {source_id: set() for source_id in expected_ids}
+    for stat in stats:
+        if not isinstance(stat, dict):
+            continue
+        source_id = clean_radar_source_id(stat.get("source_id"))
+        if not source_id:
+            continue
+        record = records.setdefault(
+            source_id,
+            {
+                "source_id": source_id,
+                "status": "unknown",
+                "collected_count": 0,
+                "attempted_count": 0,
+                "failed_count": 0,
+                "skipped_no_doi_count": 0,
+                "error_count": 0,
+            },
+        )
+        status_flags.setdefault(source_id, set()).add(clean_radar_source_status(stat.get("status")))
+        record["collected_count"] += int(stat.get("collected_count") or 0)
+        for key in ("attempted_count", "failed_count", "skipped_no_doi_count"):
+            if key in stat:
+                record[key] += int(stat.get(key) or 0)
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        source_id = clean_radar_source_id(error.get("source_id"))
+        if not source_id:
+            continue
+        record = records.setdefault(
+            source_id,
+            {
+                "source_id": source_id,
+                "status": "unknown",
+                "collected_count": 0,
+                "attempted_count": 0,
+                "failed_count": 0,
+                "skipped_no_doi_count": 0,
+                "error_count": 0,
+            },
+        )
+        record["error_count"] += 1
+        status_flags.setdefault(source_id, set()).add("failed")
+    sources = []
+    for source_id in sorted(records):
+        record = dict(records[source_id])
+        flags = status_flags.get(source_id) or set()
+        record["status"] = aggregate_radar_source_status(flags, record["status"])
+        sources.append(record)
+    status_counts: dict[str, int] = {}
+    for record in sources:
+        status = str(record.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+    failed_ids = [
+        record["source_id"]
+        for record in sources
+        if record.get("status") == "failed"
+    ]
+    partial_ids = [
+        record["source_id"]
+        for record in sources
+        if record.get("status") == "partial"
+    ]
+    not_run_ids = [
+        record["source_id"]
+        for record in sources
+        if record.get("status") == "not_run"
+    ]
+    empty_ids = [
+        record["source_id"]
+        for record in sources
+        if record.get("status") == "succeeded" and int(record.get("collected_count") or 0) == 0
+    ]
+    if not sources:
+        status = "no_sources"
+    elif failed_ids and len(failed_ids) == len(sources):
+        status = "failed"
+    elif failed_ids or partial_ids or not_run_ids:
+        status = "partial"
+    else:
+        status = "succeeded"
+    return {
+        "status": status,
+        "expected_count": len(expected_ids),
+        "source_count": len(sources),
+        "reported_count": len([record for record in sources if record.get("status") != "not_run"]),
+        "succeeded_count": int(status_counts.get("succeeded") or 0),
+        "partial_count": int(status_counts.get("partial") or 0),
+        "failed_count": int(status_counts.get("failed") or 0),
+        "not_run_count": int(status_counts.get("not_run") or 0),
+        "unknown_count": int(status_counts.get("unknown") or 0),
+        "collected_count": sum(int(record.get("collected_count") or 0) for record in sources),
+        "error_count": len(errors),
+        "failed_source_ids": failed_ids,
+        "partial_source_ids": partial_ids,
+        "not_run_source_ids": not_run_ids,
+        "empty_source_ids": empty_ids,
+        "sources": sources,
+    }
+
+
+def format_radar_source_coverage(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    parts = [
+        "Source coverage:",
+        f"status={summary.get('status') or 'unknown'}",
+        f"sources={int(summary.get('reported_count') or 0)}/{int(summary.get('source_count') or 0)}",
+        f"succeeded={int(summary.get('succeeded_count') or 0)}",
+        f"partial={int(summary.get('partial_count') or 0)}",
+        f"failed={int(summary.get('failed_count') or 0)}",
+        f"collected={int(summary.get('collected_count') or 0)}",
+        f"errors={int(summary.get('error_count') or 0)}",
+    ]
+    failed_ids = summary.get("failed_source_ids") if isinstance(summary.get("failed_source_ids"), list) else []
+    partial_ids = summary.get("partial_source_ids") if isinstance(summary.get("partial_source_ids"), list) else []
+    empty_ids = summary.get("empty_source_ids") if isinstance(summary.get("empty_source_ids"), list) else []
+    if failed_ids:
+        parts.append(f"failed_sources={', '.join(str(value) for value in failed_ids[:3])}")
+    if partial_ids:
+        parts.append(f"partial_sources={', '.join(str(value) for value in partial_ids[:3])}")
+    if empty_ids:
+        parts.append(f"empty_sources={', '.join(str(value) for value in empty_ids[:3])}")
+    return " | ".join(parts)
+
+
+def radar_source_coverage_details(summary: dict[str, Any]) -> str:
+    return (
+        f"status={summary.get('status') or 'unknown'}; "
+        f"sources={int(summary.get('reported_count') or 0)}/{int(summary.get('source_count') or 0)}; "
+        f"succeeded={int(summary.get('succeeded_count') or 0)}; "
+        f"partial={int(summary.get('partial_count') or 0)}; "
+        f"failed={int(summary.get('failed_count') or 0)}; "
+        f"missing={int(summary.get('not_run_count') or 0)}; "
+        f"collected={int(summary.get('collected_count') or 0)}; "
+        f"errors={int(summary.get('error_count') or 0)}"
+    )
+
+
+def unique_source_ids(values: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    source_ids = []
+    for value in values:
+        source_id = clean_radar_source_id(value)
+        if source_id and source_id not in seen:
+            seen.add(source_id)
+            source_ids.append(source_id)
+    return source_ids
+
+
+def clean_radar_source_id(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def clean_radar_source_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    return status if status in {"succeeded", "partial", "failed", "not_run"} else "unknown"
+
+
+def aggregate_radar_source_status(flags: set[str], fallback: Any = "unknown") -> str:
+    clean_flags = {clean_radar_source_status(flag) for flag in flags if clean_radar_source_status(flag)}
+    if not clean_flags:
+        return clean_radar_source_status(fallback)
+    if "partial" in clean_flags or ("failed" in clean_flags and "succeeded" in clean_flags):
+        return "partial"
+    if "failed" in clean_flags:
+        return "failed"
+    if "succeeded" in clean_flags:
+        return "succeeded"
+    if "not_run" in clean_flags:
+        return "not_run"
+    return "unknown"
 
 
 def enrich_radar_papers_with_unpaywall(
@@ -1211,8 +1429,20 @@ def score_context_item_for_paper(paper: dict[str, Any], context_item: dict[str, 
             if keyword_matches(paper_text, term) or keyword_matches(item_text, term)
         }
     )
+    matched_discussion_terms = sorted(
+        {
+            term
+            for term in context_item.get("discussion_terms") or []
+            if keyword_matches(paper_text, term)
+        }
+    )
     title_overlap = sorted(title_token_set(paper.get("title", "")) & title_token_set(context_item.get("title", "")))
-    score = len(matched_tags) * 5 + len(matched_terms) * 3 + min(3, len(title_overlap))
+    score = (
+        len(matched_tags) * 5
+        + len(matched_terms) * 3
+        + len(matched_discussion_terms) * 2
+        + min(3, len(title_overlap))
+    )
     if score <= 0:
         return None
     return {
@@ -1222,8 +1452,9 @@ def score_context_item_for_paper(paper: dict[str, Any], context_item: dict[str, 
         "score": score,
         "matched_tags": matched_tags,
         "matched_terms": matched_terms,
+        "matched_discussion_terms": matched_discussion_terms,
         "title_overlap": title_overlap[:5],
-        "relationship": context_relationship_text(matched_tags, matched_terms, title_overlap),
+        "relationship": context_relationship_text(matched_tags, matched_terms, title_overlap, matched_discussion_terms),
     }
 
 
@@ -1239,12 +1470,19 @@ def relationship_to_context(matched_interest_terms: list[str], related_items: li
     return " ".join(parts)
 
 
-def context_relationship_text(matched_tags: list[str], matched_terms: list[str], title_overlap: list[str]) -> str:
+def context_relationship_text(
+    matched_tags: list[str],
+    matched_terms: list[str],
+    title_overlap: list[str],
+    matched_discussion_terms: list[str] | None = None,
+) -> str:
     parts = []
     if matched_tags:
         parts.append(f"shared tags: {', '.join(matched_tags)}")
     if matched_terms:
         parts.append(f"shared interests: {', '.join(matched_terms)}")
+    if matched_discussion_terms:
+        parts.append(f"discussion terms: {', '.join(matched_discussion_terms)}")
     if title_overlap:
         parts.append(f"title overlap: {', '.join(title_overlap[:5])}")
     return "; ".join(parts) or "related context"
@@ -1731,6 +1969,9 @@ def build_radar_history_brief(
     pipeline_lines = radar_brief_pipeline_trace_lines([bundle["run"] for bundle in bundles])
     if pipeline_lines:
         lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
+    source_coverage_lines = radar_brief_source_coverage_lines([bundle["run"] for bundle in bundles])
+    if source_coverage_lines:
+        lines.extend(["## Source Coverage", "", *source_coverage_lines, ""])
     if source_lines:
         lines.extend(["## Source Stats", "", *source_lines, ""])
     venue_coverage_lines = radar_brief_venue_coverage_lines([bundle["run"] for bundle in bundles])
@@ -1793,6 +2034,95 @@ def radar_brief_run_time(run: dict[str, Any]) -> datetime | None:
         if timestamp:
             return timestamp
     return None
+
+
+def radar_history_source_coverage_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    run_summaries = []
+    source_totals: dict[str, dict[str, Any]] = {}
+    status_counts: dict[str, int] = {}
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+        source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+        expected_sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        if not source_stats and not source_errors and not expected_sources:
+            continue
+        coverage = radar_source_coverage_summary(source_stats, source_errors, expected_sources)
+        status = str(coverage.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "status": status,
+                "source_count": int(coverage.get("source_count") or 0),
+                "reported_count": int(coverage.get("reported_count") or 0),
+                "succeeded_count": int(coverage.get("succeeded_count") or 0),
+                "partial_count": int(coverage.get("partial_count") or 0),
+                "failed_count": int(coverage.get("failed_count") or 0),
+                "missing_count": int(coverage.get("not_run_count") or 0),
+                "collected_count": int(coverage.get("collected_count") or 0),
+                "error_count": int(coverage.get("error_count") or 0),
+                "failed_source_ids": list(coverage.get("failed_source_ids") or []),
+                "partial_source_ids": list(coverage.get("partial_source_ids") or []),
+                "missing_source_ids": list(coverage.get("not_run_source_ids") or []),
+                "empty_source_ids": list(coverage.get("empty_source_ids") or []),
+            }
+        )
+        for source in coverage.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            source_id = clean_radar_source_id(source.get("source_id"))
+            if not source_id:
+                continue
+            source_record = source_totals.setdefault(
+                source_id,
+                {
+                    "source_id": source_id,
+                    "run_count": 0,
+                    "succeeded_count": 0,
+                    "partial_count": 0,
+                    "failed_count": 0,
+                    "missing_count": 0,
+                    "collected_count": 0,
+                    "error_count": 0,
+                },
+            )
+            source_record["run_count"] += 1
+            source_record["collected_count"] += int(source.get("collected_count") or 0)
+            source_record["error_count"] += int(source.get("error_count") or 0)
+            source_status = clean_radar_source_status(source.get("status"))
+            if source_status == "succeeded":
+                source_record["succeeded_count"] += 1
+            elif source_status == "partial":
+                source_record["partial_count"] += 1
+            elif source_status == "failed":
+                source_record["failed_count"] += 1
+            elif source_status == "not_run":
+                source_record["missing_count"] += 1
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        "run_count": len(run_summaries),
+        "status_counts": dict(sorted(status_counts.items())),
+        "source_count": len(source_totals),
+        "sources": sorted(source_totals.values(), key=lambda source: str(source.get("source_id") or "")),
+        "runs": run_summaries,
+    }
 
 
 def parse_radar_brief_timestamp(value: str) -> datetime | None:
@@ -2021,6 +2351,33 @@ def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:
         f"{record['failed']} failure(s)"
         for source_id, record in sorted(totals.items())
     ]
+
+
+def radar_brief_source_coverage_lines(runs: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    for run in runs:
+        source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+        source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+        expected_sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        if not source_stats and not source_errors and not expected_sources:
+            continue
+        summary = radar_source_coverage_summary(source_stats, source_errors, expected_sources)
+        label = str(run.get("started_at") or run.get("id") or "run")
+        line = f"- {label}: {radar_source_coverage_details(summary)}"
+        failed_ids = summary.get("failed_source_ids") if isinstance(summary.get("failed_source_ids"), list) else []
+        partial_ids = summary.get("partial_source_ids") if isinstance(summary.get("partial_source_ids"), list) else []
+        missing_ids = summary.get("not_run_source_ids") if isinstance(summary.get("not_run_source_ids"), list) else []
+        details = []
+        if failed_ids:
+            details.append(f"failed={', '.join(str(source_id) for source_id in failed_ids[:3])}")
+        if partial_ids:
+            details.append(f"partial={', '.join(str(source_id) for source_id in partial_ids[:3])}")
+        if missing_ids:
+            details.append(f"missing={', '.join(str(source_id) for source_id in missing_ids[:3])}")
+        if details:
+            line += f"; {'; '.join(details)}"
+        lines.append(line)
+    return lines
 
 
 def radar_brief_venue_coverage_lines(runs: list[dict[str, Any]]) -> list[str]:
@@ -2324,7 +2681,7 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
 
     add_line("Signal", summary.get("short_summary"))
     add_line("Why", summary.get("relationship_to_interests") or latest.get("why_relevant"))
-    add_line("Context", context.get("relationship_summary"))
+    add_line("Context", context_report_text(context) if context else "")
 
     scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
     matched_terms = unique_normalized_terms(
@@ -2417,7 +2774,20 @@ def review_report_text(review: dict[str, Any]) -> str:
 def context_report_text(context: dict[str, Any]) -> str:
     if not context:
         return "not linked"
-    return context.get("relationship_summary") or "not linked"
+    summary = str(context.get("relationship_summary") or "").strip()
+    related_items = context.get("related_items") if isinstance(context.get("related_items"), list) else []
+    detail_parts = []
+    for item in related_items[:2]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        relationship = str(item.get("relationship") or "").strip()
+        if title and relationship:
+            detail_parts.append(f"{title}: {relationship}")
+    if detail_parts:
+        detail = " Related details: " + "; ".join(detail_parts) + "."
+        return f"{summary}{detail}" if summary else detail.strip()
+    return summary or "not linked"
 
 
 def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:

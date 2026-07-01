@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.literature_radar import (
+    format_radar_source_coverage,
     format_radar_source_stats,
     radar_latest_signal_lines,
 )
@@ -471,11 +472,12 @@ def print_radar_papers(
             if latest
             else ""
         )
+        action = (latest.get("recommended_action") or "human_review") if latest else "human_review"
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={review_state} | "
             f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
-            f"{access} | {imported}{latest_signal} | {record.get('title')}"
+            f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
         for line in radar_latest_signal_lines(latest):
             print(f"  {line}")
@@ -493,6 +495,13 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     latest_run = result.get("latest_run") if isinstance(result.get("latest_run"), dict) else {}
     if latest_run:
         print(format_radar_queue_latest_run(latest_run))
+        source_coverage = (
+            latest_run.get("source_coverage")
+            if isinstance(latest_run.get("source_coverage"), dict)
+            else {}
+        )
+        if source_coverage:
+            print(format_radar_source_coverage(source_coverage))
     access_summary = result.get("access_summary") if isinstance(result.get("access_summary"), dict) else {}
     if access_summary:
         print(format_radar_queue_access_summary(access_summary))

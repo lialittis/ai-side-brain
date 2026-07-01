@@ -9,9 +9,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from shared.literature_radar import create_radar_paper, recommend_papers
+from shared.literature_radar import (
+    add_recommendation_context,
+    build_recommendation_report,
+    create_radar_paper,
+    recommend_papers,
+)
 from team import research_cli
-from team.literature_radar import import_radar_recommendation, run_team_literature_radar
+from team.literature_radar import import_radar_recommendation, run_team_literature_radar, team_radar_context_items
 from team.literature_radar_ai import TEAM_RADAR_SUMMARY_SCHEMA, summarize_radar_recommendations_with_openrouter
 from team.research_db import TeamResearchDatabase
 
@@ -87,6 +92,52 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
             self.assertEqual(papers[0]["item"]["pdf_access"]["source_url"], "https://doi.org/10.1145/example")
 
+    def test_team_radar_context_uses_library_comments_as_discussion_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            library_paper = create_radar_paper(
+                source_id="manual",
+                source_paper_id="context-note",
+                title="Legacy Reading Notes",
+                abstract="Prior local reading note.",
+                links={"landing": "https://example.org/context-note"},
+            )
+            import_result = import_radar_recommendation(database, recommend_papers([library_paper])[0])
+            database.add_item_comment(
+                import_result["item_id"],
+                author="Alice",
+                content="CHERI capability bounds matter for kernel compartments.",
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            context_items = team_radar_context_items(database)
+
+            context_item = next(item for item in context_items if item["id"] == import_result["item_id"])
+            self.assertIn("Team comments: Alice: CHERI capability bounds", context_item["abstract"])
+            self.assertIn("cheri", context_item["discussion_terms"])
+            new_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00999",
+                title="Kernel Compartmentalization",
+                abstract="This paper evaluates CHERI hardware capabilities for compartmentalized memory safety.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00999"},
+            )
+            contextualized = add_recommendation_context(
+                [recommend_papers([new_paper])[0]],
+                context_items=context_items,
+                interest_terms=[],
+                now=datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc),
+            )
+
+            related_item = contextualized[0]["context"]["related_items"][0]
+            self.assertEqual(related_item["id"], import_result["item_id"])
+            self.assertIn("cheri", related_item["matched_discussion_terms"])
+            self.assertIn("discussion terms: cheri", related_item["relationship"])
+            report = build_recommendation_report(
+                contextualized,
+                generated_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            self.assertIn("Related details: Legacy Reading Notes: discussion terms: cheri", report)
+
     def test_run_team_literature_radar_collects_recommends_and_imports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -152,6 +203,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 [(stat["source_id"], stat["status"], stat["collected_count"]) for stat in result["source_stats"]],
                 [("arxiv", "succeeded", 1), ("dblp", "failed", 0)],
             )
+            self.assertIn("## Source Coverage", result["report"])
+            self.assertIn("status=partial; sources=2/2", result["report"])
+            self.assertIn("Failed: `dblp`", result["report"])
             self.assertIn("## Source Stats", result["report"])
             self.assertIn("`arxiv`: 1 candidate(s) (succeeded)", result["report"])
             self.assertIn("`dblp`: 0 candidate(s) (failed)", result["report"])
@@ -1178,6 +1232,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
             self.assertIn("freshness", queue_result["latest_run"])
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
+            self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
+            self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -1192,9 +1248,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("source_errors=0", queue_text)
             self.assertIn("freshness=", queue_text)
+            self.assertIn("Source coverage:", queue_text)
+            self.assertIn("status=succeeded", queue_text)
             self.assertIn("PDF access:", queue_text)
             self.assertIn("downloadable=1", queue_text)
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
+            self.assertIn("action=read_and_summarize_open_access_pdf", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
@@ -1266,6 +1325,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["queue"]["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertEqual(brief["latest_run"]["id"], result["run_id"])
             self.assertEqual(brief["latest_run"]["freshness"]["max_age_hours"], 24)
+            self.assertEqual(brief["source_coverage"]["run_count"], 1)
+            self.assertEqual(brief["source_coverage"]["status_counts"], {"succeeded": 1})
+            self.assertEqual(brief["source_coverage"]["sources"][0]["source_id"], "arxiv")
+            self.assertEqual(brief["source_coverage"]["sources"][0]["collected_count"], 1)
             self.assertEqual(brief["links"]["json"], "/radar/brief.json?days=7&limit=20&run_limit=50")
             self.assertIn("Team Literature Radar Brief", brief["brief"])
             self.assertIn("Memory Safety for Agentic Security", brief_path.read_text(encoding="utf-8"))

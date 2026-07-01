@@ -254,6 +254,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 [(stat["source_id"], stat["status"], stat["collected_count"]) for stat in result["source_stats"]],
                 [("arxiv", "succeeded", 1), ("dblp", "failed", 0)],
             )
+            self.assertIn("## Source Coverage", result["report"])
+            self.assertIn("status=partial; sources=2/2", result["report"])
+            self.assertIn("Failed: `dblp`", result["report"])
             self.assertIn("## Source Stats", result["report"])
             self.assertIn("`arxiv`: 1 candidate(s) (succeeded)", result["report"])
             self.assertIn("`dblp`: 0 candidate(s) (failed)", result["report"])
@@ -585,6 +588,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
             self.assertIn("freshness", queue_result["latest_run"])
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
+            self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
+            self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             direct_queue = build_personal_literature_radar_queue_payload(
                 root,
@@ -606,9 +611,12 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("source_errors=0", queue_text)
             self.assertIn("freshness=", queue_text)
+            self.assertIn("Source coverage:", queue_text)
+            self.assertIn("status=succeeded", queue_text)
             self.assertIn("PDF access:", queue_text)
             self.assertIn("downloadable=1", queue_text)
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
+            self.assertIn("action=queue_for_human_triage", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
@@ -690,6 +698,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["latest_run"]["freshness"]["max_age_hours"], 24)
             self.assertEqual(brief["latest_run"]["status"], "succeeded")
             self.assertEqual(brief["latest_run"]["recommendation_count"], 1)
+            self.assertEqual(brief["source_coverage"]["run_count"], 1)
+            self.assertEqual(brief["source_coverage"]["status_counts"], {"succeeded": 1})
+            self.assertEqual(brief["source_coverage"]["sources"][0]["source_id"], "arxiv")
+            self.assertEqual(brief["source_coverage"]["sources"][0]["collected_count"], 1)
             self.assertIn("literature-radar-runs.json", brief["paths"]["run_index"])
             self.assertIn("literature-radar-papers.json", brief["paths"]["paper_history"])
             self.assertIn("Personal Literature Radar Brief", brief["brief"])

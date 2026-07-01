@@ -62,6 +62,11 @@ The page is review-first:
    Radar insight block with the stored summary, relevance reason, matched
    interests, and relationship to existing team context.
 
+Recent comments on imported library papers are folded back into the Radar
+context matcher as local discussion terms. This lets later Radar runs explain
+that a new paper is related to what the team actually discussed, not only to
+static tags or abstracts.
+
 This keeps automatic collection broad without filling the team library with
 every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
 pages.
@@ -78,12 +83,12 @@ lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
 answer to "why should the team read this?" consistent across ad hoc runs, daily
 queue review, and weekly briefs.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
-panel whenever stored Radar papers exist. It also previews the highest-priority
-stored candidates, with stored why/context/matched-interest signal lines, paper
-links, PDF policy/access-kind status, plus watch, dismiss, and add-to-library
-actions that return to the daily page. That keeps scheduled discovery visible
-in the team’s normal daily scan without auto-importing candidates into the main
-library.
+with the current priority candidates. Each candidate shows the same signal
+lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
+answer to "why should the team read this?" consistent across ad hoc runs, daily
+queue review, and weekly briefs. The queue also shows paper links, PDF
+policy/access-kind status, the stored recommended action, plus watch, dismiss,
+and add-to-library actions that return to the daily page.
 If the latest scheduled run produced no stored papers but did fail or complete,
 the same panel still shows latest-run health, counts, and source-error status so
 an empty queue is not confused with a healthy run that simply found nothing.
@@ -308,27 +313,35 @@ to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 the terminal; the same state can be changed from `/radar/papers` in the web UI.
 For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
 `python team/research_cli.py radar-queue --json` return the same active queue
-shape with review counts, latest-run health/freshness/source stats, persisted
-signal lines, active-queue PDF access summary, paper records, and links back to
-the HTML review surfaces.
+shape with review counts, latest-run health/freshness/source stats, compact
+source coverage status, persisted signal lines, active-queue PDF access summary,
+paper records, and links back to the HTML review surfaces.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
-latest-run health/source stats, review counts, active queue preview, the
-Markdown brief, and links back to the HTML brief, Radar page, JSON endpoint,
-and queue JSON.
+latest-run health/source stats, structured `source_coverage` for every run in
+the brief window, review counts, active queue preview, the Markdown brief, and
+links back to the HTML brief, Radar page, JSON endpoint, and queue JSON.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
-stats show which sources contributed candidates, and source errors are shown in
-the Radar page and report. Venue-profile runs also show `Venue Coverage` in the
-report and Radar page, including candidate and recommendation counts per
-conference profile/year.
+stats show which sources contributed candidates, source coverage summarizes
+succeeded, failed, partial, missing, and empty sources for daily review, and
+the Radar page shows that coverage on the selected run detail before raw source
+stats. Source errors are shown in the Radar page and report. Generated Markdown
+reports and stored briefs include `Source Coverage` before detailed `Source
+Stats`, so a daily or weekly review can tell whether the radar was quiet or
+under-collected. Venue-profile runs also show `Venue Coverage` in the report
+and Radar page, including candidate and recommendation counts per conference
+profile/year.
 
 Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
 without collecting again. It aggregates run status, per-source counts, venue
 coverage, failures, and the top stored recommendations with review state,
-stored signal lines, context, and PDF policy. New runs snapshot the Team Interest weights used for
-scoring, so a weekly brief can still explain recommendations after the
+stored signal lines, context from watched papers and library comments, and PDF
+policy. Context lines include the matched related-item details, such as shared
+tags, shared interests, or discussion terms from team comments. New runs
+snapshot the Team Interest weights used for scoring, so a weekly brief can
+still explain recommendations after the
 `/interests` sliders change. They also include a pipeline trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and report
 generation. Brief ranking is review-aware: `watch` papers are listed before
@@ -337,9 +350,11 @@ Stored run history keeps collection settings such as limits, conference year,
 venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
 were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
-Brief`, and the matching JSON payload is available through `Brief JSON`, so team
-members can review it without using the CLI while local automation can consume
-the same stored-roll-up contract.
+Brief`. The browser brief shows a compact health summary before the Markdown:
+latest-run freshness, source coverage, review queue counts, and PDF access for
+the active queue. The matching JSON payload is available through `Brief JSON`,
+so team members can review it without using the CLI while local automation can
+consume the same stored-roll-up contract.
 
 ## Scheduling
 

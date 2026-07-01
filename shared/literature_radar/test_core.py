@@ -12,6 +12,7 @@ from shared.literature_radar import (
     add_recommendation_context,
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
+    append_radar_source_coverage_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -28,15 +29,18 @@ from shared.literature_radar import (
     dblp_venue_profiles,
     enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
+    format_radar_source_coverage,
     format_radar_source_stats,
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_history_source_coverage_summary,
     radar_pdf_access_summary,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
     radar_run_freshness,
+    radar_source_coverage_summary,
     radar_source_error,
     recommend_papers,
     score_paper_against_profile,
@@ -295,6 +299,75 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(unknown["status"], "unknown")
         self.assertIsNone(unknown["age_hours"])
 
+    def test_summarizes_source_coverage_from_stats_and_expected_sources(self) -> None:
+        summary = radar_source_coverage_summary(
+            [
+                {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
+                {
+                    "source_id": "dblp",
+                    "status": "failed",
+                    "collected_count": 0,
+                    "attempted_count": 1,
+                    "failed_count": 1,
+                },
+                {"source_id": "semantic_scholar", "status": "succeeded", "collected_count": 0},
+            ],
+            [{"source_id": "dblp", "error_type": "RuntimeError", "error": "unavailable"}],
+            ["arxiv", "dblp", "semantic_scholar", "openreview"],
+        )
+
+        self.assertEqual(summary["status"], "partial")
+        self.assertEqual(summary["source_count"], 4)
+        self.assertEqual(summary["reported_count"], 3)
+        self.assertEqual(summary["succeeded_count"], 2)
+        self.assertEqual(summary["failed_count"], 1)
+        self.assertEqual(summary["not_run_count"], 1)
+        self.assertEqual(summary["collected_count"], 2)
+        self.assertEqual(summary["error_count"], 1)
+        self.assertEqual(summary["failed_source_ids"], ["dblp"])
+        self.assertEqual(summary["not_run_source_ids"], ["openreview"])
+        self.assertEqual(summary["empty_source_ids"], ["semantic_scholar"])
+        formatted = format_radar_source_coverage(summary)
+        self.assertIn("Source coverage:", formatted)
+        self.assertIn("status=partial", formatted)
+        self.assertIn("sources=3/4", formatted)
+        self.assertIn("failed_sources=dblp", formatted)
+
+    def test_summarizes_history_source_coverage_in_brief_window(self) -> None:
+        summary = radar_history_source_coverage_summary(
+            [
+                {
+                    "id": "recent",
+                    "sources": ["arxiv", "dblp"],
+                    "started_at": "2026-07-01T09:00:00+00:00",
+                    "source_stats": [
+                        {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
+                        {"source_id": "dblp", "status": "failed", "collected_count": 0},
+                    ],
+                    "source_errors": [{"source_id": "dblp", "error": "unavailable"}],
+                },
+                {
+                    "id": "old",
+                    "sources": ["arxiv"],
+                    "started_at": "2026-06-01T09:00:00+00:00",
+                    "source_stats": [{"source_id": "arxiv", "status": "succeeded", "collected_count": 9}],
+                },
+            ],
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+        )
+
+        self.assertEqual(summary["run_count"], 1)
+        self.assertEqual(summary["status_counts"], {"partial": 1})
+        self.assertEqual(summary["source_count"], 2)
+        self.assertEqual(summary["runs"][0]["run_id"], "recent")
+        self.assertEqual(summary["runs"][0]["status"], "partial")
+        self.assertEqual(summary["runs"][0]["failed_source_ids"], ["dblp"])
+        sources = {source["source_id"]: source for source in summary["sources"]}
+        self.assertEqual(sources["arxiv"]["succeeded_count"], 1)
+        self.assertEqual(sources["arxiv"]["collected_count"], 2)
+        self.assertEqual(sources["dblp"]["failed_count"], 1)
+
     def test_deduplicates_by_doi_and_merges_source_records(self) -> None:
         first = create_radar_paper(
             source_id="crossref",
@@ -529,29 +602,41 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             )
 
     def test_appends_source_health_sections_to_report(self) -> None:
-        report = append_radar_source_stats_to_report(
+        source_stats = [
+            {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
+            {
+                "source_id": "dblp",
+                "status": "failed",
+                "collected_count": 0,
+                "error_type": "RuntimeError",
+            },
+        ]
+        source_errors = [
+            {
+                "source_id": "dblp",
+                "error_type": "RuntimeError",
+                "error": "DBLP unavailable",
+            }
+        ]
+        report = append_radar_source_coverage_to_report(
             "# Radar\n",
-            [
-                {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
-                {
-                    "source_id": "dblp",
-                    "status": "failed",
-                    "collected_count": 0,
-                    "error_type": "RuntimeError",
-                },
-            ],
+            source_stats,
+            source_errors,
+            ["arxiv", "dblp", "openreview"],
+        )
+        report = append_radar_source_stats_to_report(
+            report,
+            source_stats,
         )
         report = append_radar_source_errors_to_report(
             report,
-            [
-                {
-                    "source_id": "dblp",
-                    "error_type": "RuntimeError",
-                    "error": "DBLP unavailable",
-                }
-            ],
+            source_errors,
         )
 
+        self.assertIn("## Source Coverage", report)
+        self.assertIn("status=partial; sources=2/3", report)
+        self.assertIn("Failed: `dblp`", report)
+        self.assertIn("Missing: `openreview`", report)
         self.assertIn("## Source Stats", report)
         self.assertIn("`arxiv`: 2 candidate(s) (succeeded)", report)
         self.assertIn("`dblp`: 0 candidate(s) (failed) - RuntimeError", report)
@@ -884,6 +969,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                     },
                     "context": {
                         "relationship_summary": "Related to existing context: Agentic baseline.",
+                        "related_items": [
+                            {
+                                "title": "Agentic baseline",
+                                "relationship": "shared interests: agentic security",
+                            }
+                        ],
                     },
                     "why_relevant": "Strong match for memory safety.",
                     "matched_positive_keywords": ["memory safety", "agentic security", "memory safety"],
@@ -896,7 +987,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [
                 "Signal: This paper studies memory safety for agents.",
                 "Why: Strong match for memory safety.",
-                "Context: Related to existing context: Agentic baseline.",
+                "Context: Related to existing context: Agentic baseline. Related details: Agentic baseline: shared interests: agentic security.",
                 "Matched: memory safety, agentic security",
             ],
         )
@@ -976,6 +1067,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 {
                     "id": "run_recent",
                     "status": "partial",
+                    "sources": ["arxiv", "dblp", "openreview"],
                     "started_at": "2026-07-01T09:00:00+00:00",
                     "collected_count": 2,
                     "recommendation_count": 2,
@@ -1054,6 +1146,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`metadata_collection`: partial=1", brief)
         self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
+        self.assertIn("Source Coverage", brief)
+        self.assertIn("status=partial; sources=2/3", brief)
+        self.assertIn("failed=dblp", brief)
+        self.assertIn("missing=openreview", brief)
         self.assertIn("`arxiv`: 2 candidate(s)", brief)
         self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)
         self.assertIn("Venue Coverage", brief)

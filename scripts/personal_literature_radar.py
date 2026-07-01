@@ -24,6 +24,7 @@ from personal.literature_radar import (
     run_personal_literature_radar,
 )
 from shared.literature_radar import (
+    format_radar_source_coverage,
     format_radar_source_stats,
     radar_history_review_status,
     radar_latest_signal_lines,
@@ -204,10 +205,11 @@ def print_paper_history(
             if latest
             else ""
         )
+        action = (latest.get("recommended_action") or "human_review") if latest else "human_review"
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={record.get('review_status') or 'unreviewed'} | "
-            f"latest={record.get('latest_seen_at')}{latest_signal} | {record.get('title')}"
+            f"latest={record.get('latest_seen_at')}{latest_signal} | action={action} | {record.get('title')}"
         )
         for line in radar_latest_signal_lines(latest):
             print(f"  {line}")
@@ -231,6 +233,13 @@ def print_personal_queue(
     )
     if latest_run:
         print(format_personal_queue_latest_run(latest_run))
+        source_coverage = (
+            latest_run.get("source_coverage")
+            if isinstance(latest_run.get("source_coverage"), dict)
+            else {}
+        )
+        if source_coverage:
+            print(format_radar_source_coverage(source_coverage))
     if access_summary:
         print(format_personal_queue_access_summary(access_summary))
     if not review:

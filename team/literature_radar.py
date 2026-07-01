@@ -12,6 +12,7 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     append_radar_source_errors_to_report,
+    append_radar_source_coverage_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -41,9 +42,11 @@ from shared.literature_radar import (
     default_radar_topic_profile,
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
+    radar_history_source_coverage_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_run_freshness,
+    radar_source_coverage_summary,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -271,6 +274,7 @@ def run_team_literature_radar(
             recommendations=recommendations,
         )
         report = append_radar_venue_coverage_to_report(report, venue_coverage)
+        report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
         report = append_radar_source_stats_to_report(report, source_stats)
         report = append_radar_source_errors_to_report(report, source_errors)
     except Exception as error:
@@ -424,6 +428,11 @@ def build_team_literature_radar_brief_payload(
         "run_limit": selected_run_limit,
         "run_count": len(run_bundles),
         "review_counts": review_counts,
+        "source_coverage": radar_history_source_coverage_summary(
+            runs,
+            generated_at=now,
+            days=selected_days,
+        ),
         "queue": {
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
@@ -466,6 +475,11 @@ def team_literature_radar_run_summary(
         "source_error_count": len(source_errors),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "source_coverage": radar_source_coverage_summary(
+            source_stats,
+            source_errors,
+            run.get("sources") if isinstance(run.get("sources"), list) else [],
+        ),
         "venue_coverage": venue_coverage,
         "freshness": radar_run_freshness(run, now=now, max_age_hours=freshness_max_age_hours),
     }
@@ -516,23 +530,7 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
 
     library_limit = max(1, limit // 2) if limit > 1 else limit
     for paper in database.list_latest_relevant_papers(limit=library_limit):
-        item = paper.get("item") or {}
-        screening = paper.get("screening") or {}
-        radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
-        add_context_item(
-            {
-                "id": item.get("id"),
-                "dedupe_key": radar.get("dedupe_key") or "",
-                "title": item.get("title"),
-                "abstract": item.get("abstract") or "",
-                "year": item.get("year"),
-                "venue": item.get("venue") or "",
-                "tags": paper.get("tags") or [],
-                "interest_terms": screening.get("matched_terms") or screening.get("matched_positive_keywords") or [],
-                "link": paper.get("link") or item.get("url") or "",
-                "source": "team-library",
-            }
-        )
+        add_context_item(team_radar_library_context_item(paper))
     for record in database.list_literature_radar_papers(limit=limit, review_status="watch"):
         paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
         latest = (
@@ -557,24 +555,80 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
         )
     if len(context_items) < limit and library_limit < limit:
         for paper in database.list_latest_relevant_papers(limit=limit):
-            item = paper.get("item") or {}
-            screening = paper.get("screening") or {}
-            radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
-            add_context_item(
-                {
-                    "id": item.get("id"),
-                    "dedupe_key": radar.get("dedupe_key") or "",
-                    "title": item.get("title"),
-                    "abstract": item.get("abstract") or "",
-                    "year": item.get("year"),
-                    "venue": item.get("venue") or "",
-                    "tags": paper.get("tags") or [],
-                    "interest_terms": screening.get("matched_terms") or screening.get("matched_positive_keywords") or [],
-                    "link": paper.get("link") or item.get("url") or "",
-                    "source": "team-library",
-                }
-            )
+            add_context_item(team_radar_library_context_item(paper))
     return context_items
+
+
+def team_radar_library_context_item(paper: dict[str, Any]) -> dict[str, Any]:
+    item = paper.get("item") or {}
+    screening = paper.get("screening") or {}
+    radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    comment_context = team_radar_comment_context_text(paper.get("comments") or [])
+    abstract_parts = [str(item.get("abstract") or "").strip()]
+    if comment_context:
+        abstract_parts.append(comment_context)
+    return {
+        "id": item.get("id"),
+        "dedupe_key": radar.get("dedupe_key") or "",
+        "title": item.get("title"),
+        "abstract": " ".join(part for part in abstract_parts if part),
+        "year": item.get("year"),
+        "venue": item.get("venue") or "",
+        "tags": paper.get("tags") or [],
+        "interest_terms": screening.get("matched_terms") or screening.get("matched_positive_keywords") or [],
+        "discussion_terms": team_radar_comment_discussion_terms(paper.get("comments") or []),
+        "comment_context": comment_context,
+        "link": paper.get("link") or item.get("url") or "",
+        "source": "team-library",
+    }
+
+
+def team_radar_comment_context_text(comments: list[dict[str, Any]], *, limit: int = 3, max_chars: int = 360) -> str:
+    snippets = []
+    for comment in list(comments)[-max(0, limit):]:
+        if not isinstance(comment, dict):
+            continue
+        author = " ".join(str(comment.get("author") or "team").split())
+        content = " ".join(str(comment.get("content") or "").split())
+        if not content:
+            continue
+        snippets.append(f"{author}: {content[:140]}")
+    if not snippets:
+        return ""
+    return f"Team comments: {' | '.join(snippets)}"[:max_chars]
+
+
+def team_radar_comment_discussion_terms(comments: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
+    stop_words = {
+        "about",
+        "after",
+        "also",
+        "because",
+        "from",
+        "have",
+        "paper",
+        "should",
+        "team",
+        "that",
+        "their",
+        "there",
+        "this",
+        "with",
+    }
+    terms = []
+    seen = set()
+    for comment in list(comments)[-5:]:
+        if not isinstance(comment, dict):
+            continue
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{3,}", str(comment.get("content") or "")):
+            normalized = token.strip(".,;:!?()[]{}").lower()
+            if normalized in stop_words or normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+    return terms
 
 
 def team_radar_query_terms(database: TeamResearchDatabase, *, limit: int = 8) -> list[str]:

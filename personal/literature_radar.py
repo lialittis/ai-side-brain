@@ -19,6 +19,7 @@ from shared.literature_radar import (
     add_recommendation_context,
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
+    append_radar_source_coverage_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -50,10 +51,12 @@ from shared.literature_radar import (
     dedupe_key as radar_dedupe_key,
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
+    radar_history_source_coverage_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_review_counts,
     radar_run_freshness,
+    radar_source_coverage_summary,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -229,6 +232,7 @@ def run_personal_literature_radar(
         recommendations=recommendations,
     )
     report = append_radar_venue_coverage_to_report(report, venue_coverage)
+    report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
     report = append_radar_source_stats_to_report(report, source_stats)
     report = append_radar_source_errors_to_report(report, source_errors)
     report_path = None
@@ -398,6 +402,11 @@ def build_personal_literature_radar_brief_payload(
         "run_limit": selected_run_limit,
         "run_count": len(runs),
         "review_counts": review_counts,
+        "source_coverage": radar_history_source_coverage_summary(
+            runs,
+            generated_at=now,
+            days=selected_days,
+        ),
         "queue": {
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
@@ -437,6 +446,11 @@ def personal_literature_radar_run_summary(
         "source_error_count": len(source_errors),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "source_coverage": radar_source_coverage_summary(
+            source_stats,
+            source_errors,
+            run.get("sources") if isinstance(run.get("sources"), list) else [],
+        ),
         "venue_coverage": venue_coverage,
         "report_path": run.get("report_path") or "",
         "freshness": radar_run_freshness(run, now=now, max_age_hours=freshness_max_age_hours),

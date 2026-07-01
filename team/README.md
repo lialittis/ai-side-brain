@@ -144,12 +144,12 @@ and imported library-item metadata, so future API or notification surfaces can
 reuse the same explanation without reprocessing the paper.
 `python team/research_cli.py radar-queue --json` and, when the web UI is
 running, `/radar/queue.json?limit=20` expose the same stored active queue,
-latest-run health, source stats, and persisted signal lines for local dashboards
-or self-hosted notification scripts.
+latest-run health, source stats, source coverage, and persisted signal lines
+for local dashboards or self-hosted notification scripts.
 `python team/research_cli.py radar-brief --json` and
 `/radar/brief.json?days=7&limit=20` expose the same stored Markdown brief with
-latest-run health, review counts, an active queue preview, and links back to the
-Radar review pages.
+latest-run health, structured source coverage for the brief window, review
+counts, an active queue preview, and links back to the Radar review pages.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

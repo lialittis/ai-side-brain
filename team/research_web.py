@@ -29,6 +29,7 @@ from shared.literature_radar import (
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_run_freshness,
+    radar_source_coverage_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
@@ -526,6 +527,11 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       margin-bottom: 14px;
     }}
     .radar-brief-form label {{ min-width: 130px; }}
+    .radar-brief-summary {{
+      margin: 0 0 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }}
     .radar-brief-output {{
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -843,6 +849,7 @@ def render_literature_radar_brief_page(
     <section class="panel">
       {render_radar_brief_form(days=days, limit=limit)}
       <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
+      {render_radar_brief_summary(payload)}
       <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
     </section>
     """
@@ -948,6 +955,89 @@ def render_radar_brief_form(*, days: int, limit: int) -> str:
       <button class="button primary" type="submit">Build Brief</button>
     </form>
     """
+
+
+def render_radar_brief_summary(payload: dict[str, Any]) -> str:
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    source_coverage = payload.get("source_coverage") if isinstance(payload.get("source_coverage"), dict) else {}
+    review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
+    access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
+    latest_status = str(latest_run.get("status") or "unknown") if latest_run else "none"
+    freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
+    coverage_status = radar_brief_source_coverage_status(source_coverage)
+    coverage_css = "warn" if coverage_status in {"partial", "failed"} else "good" if coverage_status == "succeeded" else ""
+    problem_sources = radar_brief_problem_sources(source_coverage)
+    problem_chip = (
+        f'<span class="tag warn">problem sources: {html_escape(", ".join(problem_sources))}</span>'
+        if problem_sources
+        else ""
+    )
+    freshness_chip = (
+        f'<span class="pill">freshness: {html_escape(str(freshness.get("status") or "unknown"))}</span>'
+        if freshness
+        else ""
+    )
+    return f"""
+    <div class="radar-brief-summary">
+      <div class="tags">
+        <span class="muted">Brief health:</span>
+        <span class="pill">runs: {int(payload.get("run_count") or 0)}</span>
+        <span class="pill">window: {int(payload.get("days") or 0)} days</span>
+        <span class="pill">latest: {html_escape(latest_status)}</span>
+        {freshness_chip}
+      </div>
+      <div class="tags">
+        <span class="muted">Source coverage:</span>
+        <span class="tag {coverage_css}">status: {html_escape(coverage_status)}</span>
+        <span class="tag">runs: {int(source_coverage.get("run_count") or 0)}</span>
+        <span class="tag">sources: {int(source_coverage.get("source_count") or 0)}</span>
+        {problem_chip}
+      </div>
+      <div class="tags">
+        <span class="muted">Review queue:</span>
+        <span class="tag">all: {int(review_counts.get("all") or 0)}</span>
+        <span class="tag">unreviewed: {int(review_counts.get("unreviewed") or 0)}</span>
+        <span class="tag">watch: {int(review_counts.get("watch") or 0)}</span>
+        <span class="tag">dismissed: {int(review_counts.get("dismissed") or 0)}</span>
+      </div>
+      <div class="tags">
+        <span class="muted">PDF access:</span>
+        <span class="tag">downloadable: {int(access_summary.get("downloadable") or 0)}</span>
+        <span class="tag">metadata/link only: {int(access_summary.get("metadata_or_link_only") or 0)}</span>
+        <span class="tag">cached: {int(access_summary.get("downloaded") or 0)}</span>
+      </div>
+    </div>
+    """
+
+
+def radar_brief_source_coverage_status(source_coverage: dict[str, Any]) -> str:
+    if not source_coverage:
+        return "unknown"
+    run_count = int(source_coverage.get("run_count") or 0)
+    if run_count <= 0:
+        return "no_runs"
+    status_counts = source_coverage.get("status_counts") if isinstance(source_coverage.get("status_counts"), dict) else {}
+    if int(status_counts.get("failed") or 0) == run_count:
+        return "failed"
+    if int(status_counts.get("failed") or 0) or int(status_counts.get("partial") or 0):
+        return "partial"
+    if int(status_counts.get("succeeded") or 0) == run_count:
+        return "succeeded"
+    return "mixed"
+
+
+def radar_brief_problem_sources(source_coverage: dict[str, Any]) -> list[str]:
+    sources = source_coverage.get("sources") if isinstance(source_coverage.get("sources"), list) else []
+    problem_sources = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if int(source.get("failed_count") or 0) or int(source.get("partial_count") or 0) or int(source.get("missing_count") or 0):
+            source_id = str(source.get("source_id") or "").strip()
+            if source_id:
+                problem_sources.append(source_id)
+    return problem_sources[:3]
 
 
 def render_radar_run_form(database: TeamResearchDatabase) -> str:
@@ -1339,6 +1429,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     </div>
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
+    {render_radar_source_coverage(run)}
     {render_radar_source_stats(run)}
     {render_radar_venue_coverage(run)}
     {render_radar_run_provenance(run)}
@@ -1372,6 +1463,40 @@ def render_radar_source_errors(run: dict[str, Any]) -> str:
         for error in source_errors
     )
     return f'<div class="notice"><strong>Source errors</strong><ul>{items}</ul></div>'
+
+
+def render_radar_source_coverage(run: dict[str, Any]) -> str:
+    source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    expected_sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+    if not source_stats and not source_errors and not expected_sources:
+        return ""
+    coverage = radar_source_coverage_summary(source_stats, source_errors, expected_sources)
+    status = str(coverage.get("status") or "unknown")
+    status_class = "tag warn" if status in {"partial", "failed"} else "tag good" if status == "succeeded" else "tag"
+    chips = [
+        f'<span class="{status_class}">status: {html_escape(status)}</span>',
+        (
+            '<span class="tag">'
+            f'sources: {int(coverage.get("reported_count") or 0)}/{int(coverage.get("source_count") or 0)}'
+            "</span>"
+        ),
+        f'<span class="tag">succeeded: {int(coverage.get("succeeded_count") or 0)}</span>',
+        f'<span class="tag">failed: {int(coverage.get("failed_count") or 0)}</span>',
+    ]
+    missing_count = int(coverage.get("not_run_count") or 0)
+    if missing_count:
+        chips.append(f'<span class="tag warn">missing: {missing_count}</span>')
+    error_count = int(coverage.get("error_count") or 0)
+    if error_count:
+        chips.append(f'<span class="tag warn">errors: {error_count}</span>')
+    failed_sources = coverage.get("failed_source_ids") if isinstance(coverage.get("failed_source_ids"), list) else []
+    missing_sources = coverage.get("not_run_source_ids") if isinstance(coverage.get("not_run_source_ids"), list) else []
+    if failed_sources:
+        chips.append(f'<span class="tag warn">failed sources: {html_escape(", ".join(map(str, failed_sources[:3])))}</span>')
+    if missing_sources:
+        chips.append(f'<span class="tag warn">missing sources: {html_escape(", ".join(map(str, missing_sources[:3])))}</span>')
+    return f'<div class="tags"><span class="muted">Source coverage:</span> {"".join(chips)}</div>'
 
 
 def render_radar_source_stats(run: dict[str, Any]) -> str:
@@ -1952,6 +2077,20 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         ]
         suffix = f" ({', '.join(source_ids)})" if source_ids else ""
         source_error_label = f'<span class="pill warn">Source errors: {len(source_errors)}{html_escape(suffix)}</span>'
+    source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+    source_coverage = radar_source_coverage_summary(
+        source_stats,
+        source_errors,
+        run.get("sources") if isinstance(run.get("sources"), list) else [],
+    )
+    coverage_status = str(source_coverage.get("status") or "unknown")
+    coverage_css = "good" if coverage_status == "succeeded" else "warn" if coverage_status in {"partial", "failed"} else ""
+    coverage_label = (
+        f'<span class="pill {coverage_css}">'
+        f'Coverage: {html_escape(coverage_status)} '
+        f'({int(source_coverage.get("reported_count") or 0)}/{int(source_coverage.get("source_count") or 0)})'
+        f'</span>'
+    )
     freshness = radar_run_freshness(run)
     freshness_css = "warn" if freshness.get("status") == "stale" else "good" if freshness.get("status") == "fresh" else ""
     freshness_label = f'<span class="pill {freshness_css}">Freshness: {html_escape(freshness.get("status") or "unknown")}</span>'
@@ -1961,6 +2100,7 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
       {run_link}
       {status_pill(str(run.get("status") or "unknown"))}
       {freshness_label}
+      {coverage_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
       <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
       {source_error_label}
@@ -2017,6 +2157,7 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
     review = radar_review_from_record(record)
     label = str(latest.get("label") or "needs_review")
     score = int(float(latest.get("score") or 0))
+    action = str(latest.get("recommended_action") or "human_review")
     source_ids = record.get("source_ids") or []
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids[:4])
     if len(source_ids) > 4:
@@ -2032,6 +2173,7 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
         {render_radar_review_pill(review)}
         {relevance_pill(label)}
         <span class="pill">Score: {score}</span>
+        <span class="pill">Action: {html_escape(action)}</span>
         {pdf_access_html}
         {source_tags}
       </div>
