@@ -58,11 +58,11 @@ scripts/stop_research_web.sh
 Current web UI features:
 
 - latest relevant papers page with customized tag filtering and paper/PDF links;
-- submit page with only two choices: paste one paper link, or upload one PDF.
+- submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
-The current submit path normalizes paper links, skips exact duplicate URLs and duplicate PDF hashes, rejects malformed PDF uploads before saving, and derives a placeholder title from the link or PDF filename when AI metadata is not available.
+The current submit path accepts only direct `.pdf` links that download without redirects in the PDF-link lane. Direct PDF links and uploaded PDFs are stored locally, deduplicated by SHA-256, and rejected before saving if the bytes are not a valid PDF. Manual links are for DOI, journal, arXiv abstract, inaccessible, or otherwise indirect pages; they require title plus brief info and do not trigger PDF download.
 
-With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, direct PDF URLs, and arXiv links. The same AI call classifies whether the PDF is a research paper; non-papers are archived as `rejected_non_paper`. Unsupported links are still saved and can be revisited later. Retry pending or failed analysis with:
+With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, downloaded direct PDF links, and manual link briefs. The same AI call classifies whether the source is research work; non-papers are archived as `rejected_non_paper`. Retry pending or failed analysis with:
 
 ```bash
 python team/research_cli.py analyze-pending --retry-failed

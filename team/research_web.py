@@ -16,6 +16,8 @@ import re
 import sys
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -32,6 +34,13 @@ DEFAULT_PORT = 8790
 DEFAULT_PROJECT = "team-library"
 UPLOAD_DIR = ROOT / "team" / "uploads" / "research"
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+MAX_PDF_DOWNLOAD_BYTES = 50 * 1024 * 1024
+PDF_DOWNLOAD_TIMEOUT_SECONDS = 30
+
+
+class NoRedirectHandler(urllib_request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def html_escape(value: Any) -> str:
@@ -69,6 +78,11 @@ def title_from_filename(filename: str) -> str:
     return readable_title(Path(safe_filename(filename)).stem)
 
 
+def filename_from_url(url: str) -> str:
+    filename = Path(unquote(urlparse(url).path or "")).name
+    return safe_filename(filename or "paper.pdf")
+
+
 def pdf_digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
@@ -96,6 +110,44 @@ def save_uploaded_pdf(filename: str, content: bytes, upload_dir: Path | None = N
         return str(path.relative_to(ROOT))
     except ValueError:
         return str(path)
+
+
+def canonical_pdf_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("PDF link must be an absolute HTTP or HTTPS URL.")
+    if parsed.username or parsed.password:
+        raise ValueError("PDF link must not contain embedded credentials.")
+    path = re.sub(r"/+", "/", parsed.path or "/")
+    if not path.lower().endswith(".pdf"):
+        raise ValueError("PDF link must point directly to a .pdf file. Use Manual Link for pages, DOI links, or jump links.")
+    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", parsed.query, ""))
+
+
+def download_direct_pdf(url: str) -> tuple[str, bytes]:
+    request = urllib_request.Request(
+        url,
+        headers={
+            "Accept": "application/pdf",
+            "User-Agent": "AI-Side-Brain/0.1",
+        },
+        method="GET",
+    )
+    opener = urllib_request.build_opener(NoRedirectHandler)
+    try:
+        with opener.open(request, timeout=PDF_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            content = response.read(MAX_PDF_DOWNLOAD_BYTES + 1)
+    except urllib_error.HTTPError as error:
+        if 300 <= error.code < 400:
+            raise ValueError("PDF link must download directly without redirects. Use Manual Link for jump links.") from error
+        raise ValueError(f"Could not download PDF link: HTTP {error.code}") from error
+    except urllib_error.URLError as error:
+        raise ValueError(f"Could not download PDF link: {error.reason}") from error
+    if len(content) > MAX_PDF_DOWNLOAD_BYTES:
+        raise ValueError("PDF is too large for the local Team Research MVP.")
+    filename = filename_from_url(url)
+    validate_pdf_upload(filename, content)
+    return filename, content
 
 
 def canonical_paper_url(url: str) -> str:
@@ -197,7 +249,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .submit-options {{
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 16px;
       align-items: start;
     }}
@@ -384,17 +436,18 @@ def render_paper_link(link: str | None) -> str:
 
 def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
     body = f"""
-    {render_topline("Submit To Library", "Add one paper link or one PDF.", "/", "Latest Papers")}
+    {render_topline("Submit To Library", "Add a direct PDF, upload a PDF, or save a promising manual link.", "/", "Latest Papers")}
     {render_notice(notice)}
     <div class="panel">
       <div class="submit-options">
         <form class="submit-option" method="post" action="/submit">
-          <input type="hidden" name="source_type" value="url">
+          <input type="hidden" name="source_type" value="pdf_url">
           <div class="field">
-            <label for="url">Paper link</label>
-            <input id="url" name="url" type="url" required placeholder="https://arxiv.org/abs/...">
+            <label for="pdf-url">Direct PDF link</label>
+            <input id="pdf-url" name="url" type="url" required placeholder="https://example.org/paper.pdf">
+            <div class="muted">Must download a PDF directly, without redirects.</div>
           </div>
-          <button class="primary" type="submit">Add Link</button>
+          <button class="primary" type="submit">Add PDF Link</button>
         </form>
         <form class="submit-option" method="post" action="/submit" enctype="multipart/form-data">
           <input type="hidden" name="source_type" value="pdf_upload">
@@ -403,6 +456,22 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
             <input id="pdf" name="pdf" type="file" accept="application/pdf,.pdf" required>
           </div>
           <button class="primary" type="submit">Add PDF</button>
+        </form>
+        <form class="submit-option" method="post" action="/submit">
+          <input type="hidden" name="source_type" value="manual_link">
+          <div class="field">
+            <label for="manual-url">Manual link</label>
+            <input id="manual-url" name="url" type="url" required placeholder="https://doi.org/...">
+          </div>
+          <div class="field">
+            <label for="manual-title">Title</label>
+            <input id="manual-title" name="title" type="text" required placeholder="Promising paper or project title">
+          </div>
+          <div class="field">
+            <label for="manual-brief">Brief info</label>
+            <textarea id="manual-brief" name="brief" required placeholder="Why this looks promising; paste abstract or notes if available."></textarea>
+          </div>
+          <button class="primary" type="submit">Add Manual Link</button>
         </form>
       </div>
     </div>
@@ -418,7 +487,7 @@ def submit_research_item(
     analyze: bool = True,
 ) -> str:
     source_type = fields.get("source_type") or "url"
-    abstract = (fields.get("abstract") or "").strip()
+    abstract = (fields.get("abstract") or fields.get("brief") or "").strip()
     topic_id = fields.get("topic") or "dynamic-radiative-cooling"
     topic_profile = topic_profile_by_id(topic_id)
     project_id = fields.get("project") or DEFAULT_PROJECT
@@ -437,18 +506,42 @@ def submit_research_item(
         source_value = f"sha256:{digest}"
         title = (fields.get("title") or "").strip() or title_from_filename(upload[0])
         link_metadata = {"object_key": object_key, "identifiers": {"pdf_sha256": digest}}
-    else:
+    elif source_type in {"pdf_url", "url"}:
         raw_url = (fields.get("url") or "").strip()
         if not raw_url:
-            raise ValueError("URL source requires a paper link.")
+            raise ValueError("PDF link source requires a direct PDF URL.")
+        url = canonical_pdf_url(raw_url)
+        existing_item = database.find_item_by_url(url)
+        if existing_item:
+            return existing_item["id"]
+        filename, content = download_direct_pdf(url)
+        digest = pdf_digest(content)
+        existing_item = database.find_item_by_identifier("pdf_sha256", digest)
+        if existing_item:
+            return existing_item["id"]
+        object_key = save_uploaded_pdf(filename, content)
+        source_type = "url"
+        source_value = url
+        title = (fields.get("title") or "").strip() or title_from_url(url)
+        link_metadata = {"url": url, "object_key": object_key, "identifiers": {"pdf_sha256": digest}}
+    elif source_type == "manual_link":
+        raw_url = (fields.get("url") or "").strip()
+        if not raw_url:
+            raise ValueError("Manual link source requires a URL.")
+        if not abstract:
+            raise ValueError("Manual link source requires brief info.")
         url = canonical_paper_url(raw_url)
         existing_item = database.find_item_by_url(url)
         if existing_item:
             return existing_item["id"]
         source_type = "url"
         source_value = url
-        title = (fields.get("title") or "").strip() or title_from_url(url)
-        link_metadata = {"url": url}
+        title = (fields.get("title") or "").strip()
+        if not title:
+            raise ValueError("Manual link source requires a title.")
+        link_metadata = {"url": url, "identifiers": {"manual_link_url": url}}
+    else:
+        raise ValueError("Unsupported submit source type.")
 
     metadata: dict[str, Any] = {
         "title": title,

@@ -189,7 +189,7 @@ class TeamResearchAnalyzer:
                 messages=analysis_messages(bundle, analysis_input),
                 response_schema=TEAM_RESEARCH_ANALYSIS_SCHEMA,
                 schema_name="team_research_analysis",
-                plugins=pdf_plugins(self.pdf_engine),
+                plugins=pdf_plugins(self.pdf_engine) if analysis_input.file_data else None,
                 model=self.model,
             )
             item_record, card, screening, tags = build_records_from_ai_response(
@@ -258,6 +258,16 @@ def build_analysis_input(item: dict[str, Any]) -> AnalysisInput:
         )
 
     url = str(item.get("url") or "")
+    identifiers = item.get("identifiers") if isinstance(item.get("identifiers"), dict) else {}
+    if identifiers.get("manual_link_url") and clean_string(item.get("abstract")):
+        return AnalysisInput(
+            True,
+            "",
+            filename="",
+            file_data="",
+            source_kind="manual_link",
+        )
+
     pdf_url = pdf_url_from_supported_link(url)
     if pdf_url:
         return AnalysisInput(
@@ -276,8 +286,8 @@ def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> 
     screening = bundle.get("screening") or {}
     system = (
         "You analyze Team Side-Brain research submissions. Use only the provided source, "
-        "metadata, PDF content, and topic profile hints. Return only JSON matching the schema. "
-        "First classify whether the document is a research paper. If it is not a research paper, "
+        "metadata, available PDF content or manual brief, and topic profile hints. Return only JSON matching the schema. "
+        "First classify whether the source appears to describe research work. If it is not research work, "
         "set document_type to non_paper, is_research_paper to false, give a concise rejection_reason, "
         "set relevance label to low_relevance, and use conservative 'unknown' values for required fields. "
         "Do not invent unknown bibliographic facts; use null, empty arrays, or 'unknown' when needed."
@@ -295,24 +305,26 @@ def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> 
         "topic_profile": prompt_topic_profile(screening.get("topic_profile_id") or DEFAULT_TOPIC_ID),
     }
     user_text = (
-        "Analyze this paper for a research team. Extract metadata, create a research card, "
+        "Analyze this research item for a research team. Extract metadata, create a research card, "
         "screen relevance, and suggest concise lowercase tags.\n\n"
         + json.dumps(prompt_payload, ensure_ascii=False, indent=2)
     )
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    if analysis_input.file_data:
+        content.append(
+            {
+                "type": "file",
+                "file": {
+                    "filename": analysis_input.filename,
+                    "file_data": analysis_input.file_data,
+                },
+            }
+        )
     return [
         {"role": "system", "content": system},
         {
             "role": "user",
-            "content": [
-                {"type": "text", "text": user_text},
-                {
-                    "type": "file",
-                    "file": {
-                        "filename": analysis_input.filename,
-                        "file_data": analysis_input.file_data,
-                    },
-                },
-            ],
+            "content": content,
         },
     ]
 

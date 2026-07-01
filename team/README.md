@@ -67,7 +67,7 @@ http://127.0.0.1:8790
 
 The local MVP runs shared source intake, OpenRouter AI analysis when configured, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation.
 
-The CLI remains the admin/local-control surface. Team members should use the web UI for the two simplest daily workflows: scanning the latest relevant papers by tag, and submitting either one paper link or one PDF.
+The CLI remains the admin/local-control surface. Team members should use the web UI for the simplest daily workflows: scanning the latest relevant papers by tag, submitting a direct PDF link, uploading one PDF, or saving a promising manual link with brief notes.
 
 Useful commands:
 
@@ -84,9 +84,9 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering and paper/PDF links;
-- Submit page with only two choices: paste one paper link, or upload one PDF.
+- Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
-PDF uploads are stored locally under ignored Team state. The submit path skips exact duplicate URLs and duplicate PDF hashes before analysis, and rejects malformed PDF uploads before saving. With `OPENROUTER_API_KEY` set, uploaded PDFs, direct PDF links, and arXiv links are analyzed through OpenRouter. Plain DOI, journal, and HTML links are saved and marked `pending_unsupported_link` until a resolver is added. PDFs classified as non-papers are archived as `rejected_non_paper`.
+PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 
 OpenRouter configuration can live in ignored `.env`:
 

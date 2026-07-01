@@ -8,6 +8,8 @@ import unittest
 from unittest import mock
 
 from shared.ai.openrouter import OpenRouterClient, OpenRouterConfig
+from shared.research import topic_profile_by_id
+from team.research_adapter import build_team_research_run
 from team.research_ai import TEAM_RESEARCH_ANALYSIS_SCHEMA, TeamResearchAnalyzer, build_analysis_input, pdf_url_from_supported_link
 from team.research_db import TeamResearchDatabase
 from team.research_web import submit_research_item
@@ -190,15 +192,47 @@ class TeamResearchAITest(unittest.TestCase):
             self.assertEqual(bundle["screening"]["label"], "low_relevance")
             self.assertEqual(database.list_latest_relevant_papers(), [])
 
-    def test_unsupported_non_pdf_link_records_pending_unsupported_link(self) -> None:
+    def test_manual_link_analysis_uses_text_only_without_pdf_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
             item_id = submit_research_item(
                 database,
-                {"source_type": "url", "url": "https://example.org/paper-page"},
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/promising-work",
+                    "title": "Promising Work",
+                    "brief": "A promising work mentioned in a seminar, but no direct PDF is available.",
+                },
                 analyze=False,
             )
 
+            client = FakeOpenRouterClient(ai_response())
+            run = TeamResearchAnalyzer(database, client=client).analyze_item(item_id)
+
+            self.assertEqual(run["status"], "succeeded")
+            self.assertIsNone(client.calls[0]["plugins"])
+            self.assertNotIn('"type": "file"', json.dumps(client.calls[0]["messages"]))
+
+    def test_legacy_unsupported_non_pdf_link_records_pending_unsupported_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            result = build_team_research_run(
+                source_type="url",
+                source_value="https://example.org/paper-page",
+                metadata={
+                    "title": "Legacy page",
+                    "abstract": "",
+                    "authors": [],
+                    "item_type": "paper",
+                    "url": "https://example.org/paper-page",
+                },
+                topic_profile=topic_profile_by_id("dynamic-radiative-cooling"),
+                project_id="team-library",
+                submitted_by="test",
+            )
+            database.write_run(result, include_library_entry=False)
+
+            item_id = result.item["id"]
             run = TeamResearchAnalyzer(database, client=FakeOpenRouterClient(ai_response())).analyze_item(item_id)
 
             self.assertEqual(run["status"], "pending_unsupported_link")

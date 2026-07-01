@@ -51,7 +51,7 @@ Monday 09:10
 Alice finds an arXiv paper about tunable emissivity.
 
 Monday 09:11
-Alice opens the Submit page, pastes the arXiv URL, and submits it.
+Alice opens the Submit page. If she has the arXiv PDF URL, she submits it as a Direct PDF link. If she only has the abstract page, she uses Manual Link and adds a short note about why it matters.
 
 Monday 09:12
 Side-Brain fetches metadata, extracts text, creates a research card, screens it against the "dynamic radiative cooling" topic, and adds tags such as `radiative-cooling` and `tunable-emissivity`.
@@ -191,8 +191,8 @@ The later web dashboard should be built around work surfaces, not generic tables
 Current MVP surfaces:
 
 - Latest Relevant Papers: one scan-friendly page with newest relevant items, customized tags, relevance label, and open link/PDF actions.
-- Submit: two source-only choices, paste one paper URL or upload one PDF. The backend should fill metadata, tags, topic routing, and summaries.
-- AI analysis: duplicate URLs/PDF hashes and malformed PDFs are handled before OpenRouter. When `OPENROUTER_API_KEY` is configured, uploaded PDFs, direct PDF URLs, and arXiv links are analyzed on submit. Without a key, the item is still saved and marked `AI: pending`; unsupported links are kept as `AI: pending_unsupported_link`; non-paper PDFs are archived as `AI: rejected_non_paper`.
+- Submit: three choices: direct PDF link, PDF upload, or manual promising link with title and brief info.
+- AI analysis: direct PDF links are downloaded only when they point to `.pdf` files without redirects; uploaded/downloaded PDFs are deduplicated by hash and malformed PDFs are rejected before OpenRouter. Manual links do not trigger PDF download; AI analyzes only the provided title, URL, and brief. Without a key, the item is still saved and marked `AI: pending`; non-paper sources are archived as `AI: rejected_non_paper`.
 
 ### Intake
 

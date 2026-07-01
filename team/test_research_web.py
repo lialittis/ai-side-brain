@@ -8,7 +8,7 @@ from unittest import mock
 
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
-    canonical_paper_url,
+    canonical_pdf_url,
     render_latest_papers_page,
     render_submit_page,
     parse_post_form,
@@ -26,24 +26,26 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Latest Relevant Papers", latest)
         self.assertIn("No relevant papers yet", latest)
         self.assertIn("Submit To Library", submit)
-        self.assertIn("Paper link", submit)
+        self.assertIn("Direct PDF link", submit)
         self.assertIn("PDF file", submit)
-        self.assertIn("Add Link", submit)
+        self.assertIn("Manual link", submit)
+        self.assertIn("Add PDF Link", submit)
         self.assertIn("Add PDF", submit)
+        self.assertIn("Add Manual Link", submit)
         self.assertNotIn("Customized tags", submit)
         self.assertNotIn("Screening topic", submit)
         self.assertNotIn("Submitted by", submit)
 
-    def test_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
+    def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
             item_id = submit_research_item(
                 database,
                 {
-                    "source_type": "url",
+                    "source_type": "manual_link",
                     "url": "https://example.org/paper",
                     "title": "Switchable radiative cooling envelope control",
-                    "abstract": (
+                    "brief": (
                         "This study evaluates switchable radiative cooling with tunable emissivity. "
                         "It reports measured or simulated cooling performance and connects material "
                         "behavior to building or energy outcomes."
@@ -70,23 +72,89 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("radiative-cooling", html)
             self.assertIn("Open Link", html)
 
-    def test_arxiv_url_submission_is_canonicalized_and_deduplicated(self) -> None:
+    def test_indirect_link_is_rejected_from_pdf_link_lane(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
-            with mock.patch("team.research_web.analyze_submitted_item") as analyze:
-                first_id = submit_research_item(
+            with self.assertRaisesRegex(ValueError, "directly to a .pdf"):
+                submit_research_item(
                     database,
-                    {"source_type": "url", "url": "https://arxiv.org/abs/2511.18868v2"},
+                    {"source_type": "pdf_url", "url": "https://arxiv.org/abs/2511.18868v2"},
                 )
-                duplicate_id = submit_research_item(
-                    database,
-                    {"source_type": "url", "url": "https://arxiv.org/pdf/2511.18868v1.pdf"},
-                )
+
+    def test_direct_pdf_link_is_downloaded_saved_and_deduplicated_by_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            pdf_content = b"%PDF-1.4 downloaded paper content"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                with mock.patch("team.research_web.download_direct_pdf", return_value=("paper.pdf", pdf_content)):
+                    with mock.patch("team.research_web.analyze_submitted_item") as analyze:
+                        first_id = submit_research_item(
+                            database,
+                            {"source_type": "pdf_url", "url": "https://example.org/papers/paper.pdf"},
+                        )
+                        duplicate_id = submit_research_item(
+                            database,
+                            {"source_type": "pdf_url", "url": "https://mirror.example.org/paper.pdf"},
+                        )
 
             self.assertEqual(first_id, duplicate_id)
             self.assertEqual(analyze.call_count, 1)
-            self.assertEqual(canonical_paper_url("https://arxiv.org/pdf/2511.18868v1.pdf"), "https://arxiv.org/abs/2511.18868")
+            self.assertEqual(canonical_pdf_url("HTTPS://Example.org/papers/paper.pdf"), "https://example.org/papers/paper.pdf")
             self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+            self.assertEqual(len(list(upload_dir.glob("*.pdf"))), 1)
+
+    def test_manual_arxiv_link_is_canonicalized_and_deduplicated_without_pdf_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch("team.research_web.download_direct_pdf") as download:
+                with mock.patch("team.research_web.analyze_submitted_item") as analyze:
+                    first_id = submit_research_item(
+                        database,
+                        {
+                            "source_type": "manual_link",
+                            "url": "https://arxiv.org/abs/2511.18868v2",
+                            "title": "KernelBand",
+                            "brief": "Promising work on LLM-based kernel optimization.",
+                        },
+                    )
+                    duplicate_id = submit_research_item(
+                        database,
+                        {
+                            "source_type": "manual_link",
+                            "url": "https://arxiv.org/pdf/2511.18868v1.pdf",
+                            "title": "KernelBand mirror",
+                            "brief": "Same paper from another arXiv URL form.",
+                        },
+                    )
+
+            self.assertEqual(first_id, duplicate_id)
+            self.assertEqual(analyze.call_count, 1)
+            download.assert_not_called()
+            self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+
+    def test_legacy_url_source_is_treated_as_direct_pdf_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                with mock.patch("team.research_web.download_direct_pdf", return_value=("paper.pdf", b"%PDF-1.4 url")):
+                    item_id = submit_research_item(
+                        database,
+                        {"source_type": "url", "url": "https://example.org/paper.pdf"},
+                        analyze=False,
+                    )
+
+            self.assertEqual(database.list_latest_relevant_papers()[0]["item"]["id"], item_id)
+
+    def test_manual_link_requires_title_and_brief(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with self.assertRaisesRegex(ValueError, "brief info"):
+                submit_research_item(
+                    database,
+                    {"source_type": "manual_link", "url": "https://example.org/promising"},
+                )
 
     def test_pdf_submission_saves_file_and_lists_pdf_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -150,14 +218,17 @@ class TeamResearchWebTest(unittest.TestCase):
     def test_link_only_submission_shows_even_when_screening_needs_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
-            item_id = submit_research_item(
-                database,
-                {
-                    "source_type": "url",
-                    "url": "https://example.org/papers/weak-metadata.pdf",
-                },
-                analyze=False,
-            )
+            upload_dir = Path(temp_dir) / "uploads"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                with mock.patch("team.research_web.download_direct_pdf", return_value=("weak-metadata.pdf", b"%PDF-1.4 weak")):
+                    item_id = submit_research_item(
+                        database,
+                        {
+                            "source_type": "pdf_url",
+                            "url": "https://example.org/papers/weak-metadata.pdf",
+                        },
+                        analyze=False,
+                    )
 
             papers = database.list_latest_relevant_papers()
             self.assertEqual(papers[0]["item"]["id"], item_id)
