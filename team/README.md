@@ -65,7 +65,7 @@ Open:
 http://127.0.0.1:8790
 ```
 
-The local MVP runs shared source intake, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation without external API calls.
+The local MVP runs shared source intake, OpenRouter AI analysis when configured, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation.
 
 The CLI remains the admin/local-control surface. Team members should use the web UI for the two simplest daily workflows: scanning the latest relevant papers by tag, and submitting either one paper link or one PDF.
 
@@ -74,6 +74,7 @@ Useful commands:
 ```bash
 python team/research_cli.py add-manual --title "..." --abstract "..."
 python team/research_cli.py inbox
+python team/research_cli.py analyze-pending --retry-failed
 python team/research_cli.py show ITEM_ID
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
@@ -85,7 +86,15 @@ Web UI surfaces:
 - Latest Relevant Papers page with tag filtering and paper/PDF links;
 - Submit page with only two choices: paste one paper link, or upload one PDF.
 
-PDF uploads are stored locally under ignored Team state. The current MVP derives a placeholder title from the link or PDF filename; AI metadata extraction, tagging, and full PDF text extraction are Research Core TODOs.
+PDF uploads are stored locally under ignored Team state. With `OPENROUTER_API_KEY` set, uploaded PDFs, direct PDF links, and arXiv links are analyzed through OpenRouter. Plain DOI, journal, and HTML links are saved and marked `pending_unsupported_link` until a resolver is added.
+
+OpenRouter configuration can live in ignored `.env`:
+
+```text
+OPENROUTER_API_KEY=your-openrouter-api-key
+SIDE_BRAIN_OPENROUTER_MODEL=~openai/gpt-latest
+SIDE_BRAIN_OPENROUTER_PDF_ENGINE=cloudflare-ai
+```
 
 Default local state:
 

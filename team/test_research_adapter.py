@@ -7,6 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
+from unittest import mock
 
 from shared.research import topic_profile_by_id
 from team import research_cli
@@ -167,6 +168,37 @@ class TeamResearchAdapterTest(unittest.TestCase):
                 )
             self.assertEqual(code, 0)
             self.assertIn("Team Research Brief - dynamic-radiative-cooling", stdout.getvalue())
+
+    def test_cli_analyze_pending_dispatches_team_analyzer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            fake_runs = [
+                {
+                    "item_id": "item_test",
+                    "status": "succeeded",
+                    "provider": "openrouter",
+                    "model": "test/model",
+                }
+            ]
+            stdout = io.StringIO()
+            with mock.patch("team.research_cli.TeamResearchAnalyzer") as analyzer_class:
+                analyzer_class.return_value.analyze_pending.return_value = fake_runs
+                with contextlib.redirect_stdout(stdout):
+                    code = research_cli.main(
+                        [
+                            "analyze-pending",
+                            "--db-path",
+                            str(db_path),
+                            "--limit",
+                            "3",
+                            "--retry-failed",
+                            "--json",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            analyzer_class.return_value.analyze_pending.assert_called_once_with(limit=3, retry_failed=True)
+            self.assertEqual(json.loads(stdout.getvalue()), fake_runs)
 
 
 if __name__ == "__main__":

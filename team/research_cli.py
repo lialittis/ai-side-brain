@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import topic_profile_by_id
+from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
 
@@ -73,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_db_args(brief)
     brief.add_argument("--project")
     brief.add_argument("--output", type=Path)
+
+    analyze = subparsers.add_parser("analyze-pending", help="run OpenRouter AI analysis for pending items")
+    add_db_args(analyze)
+    analyze.add_argument("--limit", type=int, default=20)
+    analyze.add_argument("--retry-failed", action="store_true")
+    analyze.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     return parser
 
@@ -218,6 +225,15 @@ def print_accept(result: dict[str, Any]) -> None:
     print(f"Library status: {library_entry['status']}")
 
 
+def print_analysis_runs(runs: list[dict[str, Any]]) -> None:
+    if not runs:
+        print("No pending AI analysis runs.")
+        return
+    for run in runs:
+        suffix = f" | {run.get('error')}" if run.get("error") else ""
+        print(f"{run['item_id']} | {run['status']} | {run['provider']}:{run['model']}{suffix}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -271,6 +287,14 @@ def main(argv: list[str] | None = None) -> int:
             print(str(args.output))
         else:
             print(markdown)
+        return 0
+
+    if args.command == "analyze-pending":
+        runs = TeamResearchAnalyzer(database).analyze_pending(limit=args.limit, retry_failed=args.retry_failed)
+        if args.json:
+            print_json(runs)
+        else:
+            print_analysis_runs(runs)
         return 0
 
     parser.error(f"unsupported command: {args.command}")

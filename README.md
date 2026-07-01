@@ -163,6 +163,10 @@ GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4/chat/completions
 DEEPSEEK_API_KEY=your-deepseek-api-key
 SIDE_BRAIN_DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+OPENROUTER_API_KEY=your-openrouter-api-key
+SIDE_BRAIN_OPENROUTER_MODEL=~openai/gpt-latest
+SIDE_BRAIN_OPENROUTER_PDF_ENGINE=cloudflare-ai
 ```
 
 Using `--ai` sends the selected unprocessed inbox entries to the configured model provider. Supported providers are `openai`, `glm`, and `deepseek`. AI processing has separate incremental state from local processing and per provider/model, so local processing does not block later AI processing of the same entries.
@@ -413,6 +417,7 @@ The first runnable Team adapter MVP is:
 python team/research_cli.py demo
 scripts/start_research_web.sh
 python team/research_cli.py inbox
+python team/research_cli.py analyze-pending --retry-failed
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
 python team/research_cli.py brief --project dynamic-radiative-cooling

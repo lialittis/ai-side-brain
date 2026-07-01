@@ -62,6 +62,12 @@ Current web UI features:
 
 The current submit path derives a placeholder title from the link or PDF filename. AI metadata extraction, tagging, and full PDF text extraction are later Research Core features.
 
+With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, direct PDF URLs, and arXiv links. Unsupported links are still saved and can be revisited later. Retry pending or failed analysis with:
+
+```bash
+python team/research_cli.py analyze-pending --retry-failed
+```
+
 ## Phase 2: Research Cards
 
 - Extract text from PDFs.
@@ -79,7 +85,7 @@ The current submit path derives a placeholder title from the link or PDF filenam
 Current test coverage:
 
 ```bash
-python -m unittest shared.research.test_core team.test_research_adapter team.test_research_web
+python -m unittest shared.ai.test_openrouter shared.research.test_core team.test_research_adapter team.test_research_ai team.test_research_web
 ```
 
 Low-confidence items should stay in review.

@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import topic_profile_by_id
+from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
 
@@ -263,6 +264,12 @@ def relevance_pill(label: str | None) -> str:
     return f'<span class="pill {css}">{html_escape(value)}</span>'
 
 
+def ai_status_pill(status: str | None) -> str:
+    value = status or "local"
+    css = "good" if value == "succeeded" else "warn" if value in {"pending", "running", "failed", "pending_unsupported_link"} else ""
+    return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
+
+
 def render_latest_papers_page(database: TeamResearchDatabase, *, tag: str | None = None, notice: str = "") -> str:
     papers = database.list_latest_relevant_papers(tag=tag)
     tags = database.list_tags()
@@ -317,6 +324,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
               </div>
               <div class="actions">
+                {ai_status_pill(paper.get("ai_status"))}
                 {relevance_pill(screening.get("label"))}
                 {link_html}
               </div>
@@ -367,6 +375,7 @@ def submit_research_item(
     fields: dict[str, str],
     *,
     upload: tuple[str, bytes] | None = None,
+    analyze: bool = True,
 ) -> str:
     source_type = fields.get("source_type") or "url"
     abstract = (fields.get("abstract") or "").strip()
@@ -419,6 +428,8 @@ def submit_research_item(
         actor=submitted_by,
         reason=f"Submitted to {project_id} via web form.",
     )
+    if analyze:
+        analyze_submitted_item(database, result.item["id"])
     return result.item["id"]
 
 

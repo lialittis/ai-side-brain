@@ -102,6 +102,24 @@ added_by:
 added_at:
 ```
 
+## Team AI Analysis Run
+
+Team AI runs track automated OpenRouter analysis separately from shared research records.
+
+```yaml
+id:
+source_id:
+item_id:
+provider: openrouter
+model:
+prompt_version:
+status: pending | running | succeeded | failed | pending_unsupported_link
+error:
+started_at:
+completed_at:
+response:
+```
+
 ## Reading Assignment
 
 ```yaml

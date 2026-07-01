@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from shared.research.core import iso_timestamp
+from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import (
     TeamResearchRunResult,
     create_audit_event,
@@ -144,6 +144,21 @@ class TeamResearchDatabase:
                     PRIMARY KEY (item_id, tag)
                 );
 
+                CREATE TABLE IF NOT EXISTS ai_analysis_runs (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT,
+                    item_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    response_json TEXT,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
@@ -152,6 +167,10 @@ class TeamResearchDatabase:
                     ON relevance_screenings(item_id, screened_at);
                 CREATE INDEX IF NOT EXISTS idx_item_tags_tag
                     ON item_tags(tag, item_id);
+                CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_item
+                    ON ai_analysis_runs(item_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_status
+                    ON ai_analysis_runs(status, started_at);
                 """
             )
 
@@ -370,6 +389,128 @@ class TeamResearchDatabase:
             ).fetchall()
         return [{"tag": row["tag"], "item_count": row["item_count"]} for row in rows]
 
+    def create_ai_analysis_run(
+        self,
+        *,
+        item_id: str,
+        source_id: str | None,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        status: str = "running",
+        error: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        run = {
+            "id": f"airun_{stable_run_id(item_id, provider, model, prompt_version, timestamp)}",
+            "source_id": source_id,
+            "item_id": item_id,
+            "provider": provider,
+            "model": model,
+            "prompt_version": prompt_version,
+            "status": status,
+            "error": error,
+            "started_at": timestamp,
+            "completed_at": timestamp if status not in {"running", "pending"} else None,
+            "response": None,
+        }
+        with self.connect() as connection:
+            self._upsert_ai_analysis_run(connection, run)
+        return run
+
+    def complete_ai_analysis_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        error: str = "",
+        response: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM ai_analysis_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown AI analysis run: {run_id}")
+            run = loads(row["record_json"])
+            run.update(
+                {
+                    "status": status,
+                    "error": error,
+                    "completed_at": None if status in {"running", "pending"} else timestamp,
+                    "response": response,
+                }
+            )
+            self._upsert_ai_analysis_run(connection, run)
+        return run
+
+    def latest_ai_analysis_run(self, item_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT record_json
+                FROM ai_analysis_runs
+                WHERE item_id = ?
+                ORDER BY started_at DESC, completed_at DESC
+                LIMIT 1
+                """,
+                (item_id,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def list_ai_analysis_runs(
+        self,
+        *,
+        statuses: Iterable[str] = ("pending",),
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        selected_statuses = tuple(statuses)
+        if not selected_statuses:
+            return []
+        placeholders = ",".join("?" for _ in selected_statuses)
+        params: tuple[Any, ...] = (*selected_statuses, limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT record_json
+                FROM ai_analysis_runs
+                WHERE status IN ({placeholders})
+                ORDER BY started_at ASC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def apply_ai_analysis_records(
+        self,
+        *,
+        item: dict[str, Any],
+        card: dict[str, Any],
+        screening: dict[str, Any],
+        tags: list[str],
+    ) -> None:
+        self.initialize()
+        with self.connect() as connection:
+            self._upsert_item(connection, item)
+            self._upsert_card(connection, card)
+            self._upsert_screening(connection, screening)
+            connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item["id"],))
+            timestamp = item["updated_at"]
+            connection.executemany(
+                "INSERT OR IGNORE INTO item_tags (item_id, tag, created_at) VALUES (?, ?, ?)",
+                [(item["id"], tag, timestamp) for tag in sorted({tag for tag in tags if tag})],
+            )
+            self._update_library_entries_for_analysis(connection, item["id"], card["id"], screening)
+
     def list_latest_relevant_papers(
         self,
         *,
@@ -390,11 +531,19 @@ class TeamResearchDatabase:
                 i.record_json AS item_json,
                 rs.record_json AS screening_json,
                 tr.record_json AS team_record_json,
-                ple.record_json AS library_json
+                ple.record_json AS library_json,
+                air.record_json AS ai_run_json
             FROM research_items i
             JOIN relevance_screenings rs ON rs.item_id = i.id
             LEFT JOIN team_research_records tr ON tr.item_id = i.id
             LEFT JOIN project_library_entries ple ON ple.item_id = i.id
+            LEFT JOIN ai_analysis_runs air ON air.id = (
+                SELECT latest_air.id
+                FROM ai_analysis_runs latest_air
+                WHERE latest_air.item_id = i.id
+                ORDER BY latest_air.started_at DESC, latest_air.completed_at DESC
+                LIMIT 1
+            )
             {tag_join}
             WHERE (
                 rs.label IN ('highly_relevant', 'possibly_relevant')
@@ -416,12 +565,15 @@ class TeamResearchDatabase:
             screening = loads(row["screening_json"])
             team_record = loads(row["team_record_json"]) if row["team_record_json"] else None
             library_entry = loads(row["library_json"]) if row["library_json"] else None
+            ai_run = loads(row["ai_run_json"]) if row["ai_run_json"] else None
             papers.append(
                 {
                     "item": item,
                     "screening": screening,
                     "team_record": team_record,
                     "library_entry": library_entry,
+                    "ai_run": ai_run,
+                    "ai_status": ai_run["status"] if ai_run else "local",
                     "tags": self.get_item_tags(item["id"]),
                     "link": item.get("url") or item.get("object_key"),
                 }
@@ -648,6 +800,53 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _upsert_ai_analysis_run(self, connection: sqlite3.Connection, run: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO ai_analysis_runs
+            (id, source_id, item_id, provider, model, prompt_version, status, error,
+             started_at, completed_at, response_json, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run["id"],
+                run.get("source_id"),
+                run["item_id"],
+                run["provider"],
+                run["model"],
+                run["prompt_version"],
+                run["status"],
+                run.get("error"),
+                run["started_at"],
+                run.get("completed_at"),
+                dumps(run.get("response")),
+                dumps(run),
+            ),
+        )
+
+    def _update_library_entries_for_analysis(
+        self,
+        connection: sqlite3.Connection,
+        item_id: str,
+        card_id: str,
+        screening: dict[str, Any],
+    ) -> None:
+        rows = connection.execute(
+            "SELECT record_json FROM project_library_entries WHERE item_id = ?",
+            (item_id,),
+        ).fetchall()
+        reason = " ".join(screening.get("reasons", []))
+        for row in rows:
+            entry = loads(row["record_json"])
+            entry.update(
+                {
+                    "research_card_id": card_id,
+                    "relevance_screening_ids": [screening["id"]],
+                    "reason": reason,
+                }
+            )
+            self._upsert_library_entry(connection, entry)
+
     def _insert_audit_event(self, connection: sqlite3.Connection, event: dict[str, Any]) -> None:
         connection.execute(
             """
@@ -667,3 +866,16 @@ class TeamResearchDatabase:
                 dumps(event),
             ),
         )
+
+
+def stable_run_id(item_id: str, provider: str, model: str, prompt_version: str, timestamp: str) -> str:
+    return stable_id(
+        "run",
+        {
+            "item_id": item_id,
+            "provider": provider,
+            "model": model,
+            "prompt_version": prompt_version,
+            "started_at": timestamp,
+        },
+    ).removeprefix("run_")

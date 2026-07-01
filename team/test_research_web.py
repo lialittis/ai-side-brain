@@ -53,6 +53,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     "submitted_by": "alice",
                     "year": "2026",
                 },
+                analyze=False,
             )
 
             papers = database.list_latest_relevant_papers()
@@ -76,6 +77,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     database,
                     {"source_type": "pdf_upload"},
                     upload=("paper.pdf", b"%PDF-1.4 test content"),
+                    analyze=False,
                 )
 
             papers = database.list_latest_relevant_papers()
@@ -96,6 +98,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     "source_type": "url",
                     "url": "https://example.org/papers/weak-metadata.pdf",
                 },
+                analyze=False,
             )
 
             papers = database.list_latest_relevant_papers()
