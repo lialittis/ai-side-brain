@@ -57,7 +57,7 @@ scripts/stop_research_web.sh
 
 Current web UI features:
 
-- latest relevant papers page with customized tag filtering and paper/PDF links;
+- latest relevant papers page with customized tag filtering, topic/sort controls, paper/PDF links, editable tags, relevance, and importance;
 - submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 The current submit path accepts only direct `.pdf` links that download without redirects in the PDF-link lane. Direct PDF links and uploaded PDFs are stored locally, deduplicated by SHA-256, and rejected before saving if the bytes are not a valid PDF. Manual links are for DOI, journal, arXiv abstract, inaccessible, or otherwise indirect pages; they require title plus brief info and do not trigger PDF download.
@@ -67,6 +67,8 @@ With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on sub
 ```bash
 python team/research_cli.py analyze-pending --retry-failed
 ```
+
+Paper removal is soft: recoverable removed papers stay at the end of the latest list in a muted, struck-through state for 24 hours.
 
 ## Phase 2: Research Cards
 

@@ -83,10 +83,12 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 
 Web UI surfaces:
 
-- Latest Relevant Papers page with tag filtering and paper/PDF links;
+- Latest Relevant Papers page with tag filtering, topic/sort controls, paper/PDF links, editable tags, relevance, and importance;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
+
+Library items can be soft-removed from the web UI. Recoverable removed papers remain at the end of the list in a muted, struck-through state for 24 hours.
 
 OpenRouter configuration can live in ignored `.env`:
 

@@ -193,6 +193,7 @@ Current MVP surfaces:
 - Latest Relevant Papers: one scan-friendly page with newest relevant items, customized tags, relevance label, and open link/PDF actions.
 - Submit: three choices: direct PDF link, PDF upload, or manual promising link with title and brief info.
 - AI analysis: direct PDF links are downloaded only when they point to `.pdf` files without redirects; uploaded/downloaded PDFs are deduplicated by hash and malformed PDFs are rejected before OpenRouter. Manual links do not trigger PDF download; AI analyzes only the provided title, URL, and brief. Without a key, the item is still saved and marked `AI: pending`; non-paper sources are archived as `AI: rejected_non_paper`.
+- Library management: team members can edit displayed tags, relevance, and importance in place, sort by date/name/relevance/importance, and soft-remove items that remain recoverable at the end of the list for 24 hours.
 
 ### Intake
 

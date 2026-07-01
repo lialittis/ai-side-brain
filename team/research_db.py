@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -15,6 +15,10 @@ from team.research_adapter import (
     create_project_library_entry,
     default_data_dir,
 )
+
+
+REMOVAL_RECOVERY_HOURS = 24
+DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 
 
 def default_db_path() -> Path:
@@ -443,6 +447,200 @@ class TeamResearchDatabase:
             ).fetchall()
         return [{"tag": row["tag"], "item_count": row["item_count"]} for row in rows]
 
+    def update_item_relevance(
+        self,
+        item_id: str,
+        *,
+        label: str,
+        score: float,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        bundle = self.get_bundle(item_id)
+        screening = bundle.get("screening")
+        if not screening:
+            raise ValueError(f"Research item {item_id} has no relevance screening")
+        updated = dict(screening)
+        updated.update(
+            {
+                "label": label,
+                "score": min(100.0, max(0.0, float(score))),
+                "confidence": "high",
+                "screened_at": timestamp,
+            }
+        )
+        source_trace = dict(updated.get("source_trace") or {})
+        source_trace.update(
+            {
+                "manual_override": True,
+                "manual_override_at": timestamp,
+            }
+        )
+        updated["source_trace"] = source_trace
+        with self.connect() as connection:
+            self._upsert_screening(connection, updated)
+        return updated
+
+    def update_library_importance(
+        self,
+        item_id: str,
+        *,
+        importance: int,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_importance = min(5, max(0, int(importance)))
+        bundle = self.get_bundle(item_id)
+        entries = bundle.get("library_entries") or []
+        updated_entries = []
+        with self.connect() as connection:
+            for entry in entries:
+                updated = dict(entry)
+                updated.update(
+                    {
+                        "importance": selected_importance,
+                        "importance_updated_at": timestamp,
+                    }
+                )
+                self._upsert_library_entry(connection, updated)
+                updated_entries.append(updated)
+        return updated_entries
+
+    def remove_item(
+        self,
+        item_id: str,
+        *,
+        actor: str = "team-member",
+        project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        restore_until = iso_timestamp(selected_now + timedelta(hours=REMOVAL_RECOVERY_HOURS))
+        bundle = self.get_bundle(item_id)
+        item = bundle["item"]
+        card = bundle.get("card")
+        screening = bundle.get("screening")
+        team_record = bundle.get("team_record")
+        library_entries = list(bundle.get("library_entries") or [])
+        if not team_record and not library_entries:
+            raise ValueError(f"Research item {item_id} is not in the team library")
+        if not library_entries and card and screening:
+            library_entries.append(
+                create_project_library_entry(
+                    item,
+                    card,
+                    screening,
+                    project_id=project_id,
+                    added_by=actor,
+                    now=selected_now,
+                )
+            )
+
+        with self.connect() as connection:
+            if team_record:
+                updated_record = dict(team_record)
+                updated_record.update(
+                    {
+                        "review_status": "removed",
+                        "removed_by": actor,
+                        "removed_at": timestamp,
+                        "restore_until": restore_until,
+                        "updated_at": timestamp,
+                    }
+                )
+                self._upsert_team_record(connection, updated_record)
+            for entry in library_entries:
+                updated_entry = dict(entry)
+                updated_entry.update(
+                    {
+                        "status": "removed",
+                        "removed_by": actor,
+                        "removed_at": timestamp,
+                        "restore_until": restore_until,
+                    }
+                )
+                self._upsert_library_entry(connection, updated_entry)
+        return {"item_id": item_id, "removed_at": timestamp, "restore_until": restore_until}
+
+    def restore_item(
+        self,
+        item_id: str,
+        *,
+        actor: str = "team-member",
+        project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        bundle = self.get_bundle(item_id)
+        item = bundle["item"]
+        card = bundle.get("card")
+        screening = bundle.get("screening")
+        team_record = bundle.get("team_record")
+        library_entries = bundle.get("library_entries") or []
+        removed_entries = [entry for entry in library_entries if entry.get("status") == "removed"]
+        team_record_removed = bool(team_record and team_record.get("review_status") == "removed")
+        if not removed_entries and not team_record_removed:
+            raise ValueError(f"Research item {item_id} is not removed")
+        restore_until = team_record_restore_until(team_record) if team_record_removed else None
+        expired_entries = [
+            entry
+            for entry in removed_entries
+            if not restore_deadline_is_open(entry.get("restore_until"), now=selected_now)
+        ]
+        if expired_entries or (
+            team_record_removed
+            and not removed_entries
+            and not restore_deadline_is_open(restore_until, now=selected_now)
+        ):
+            raise ValueError("The 24-hour recovery window has expired.")
+
+        with self.connect() as connection:
+            if team_record:
+                updated_record = dict(team_record)
+                updated_record.update(
+                    {
+                        "review_status": "accepted",
+                        "restored_by": actor,
+                        "restored_at": timestamp,
+                        "updated_at": timestamp,
+                    }
+                )
+                self._upsert_team_record(connection, updated_record)
+            if not removed_entries and card and screening:
+                restored_entry = create_project_library_entry(
+                    item,
+                    card,
+                    screening,
+                    project_id=project_id,
+                    added_by=actor,
+                    now=selected_now,
+                )
+                restored_entry.update(
+                    {
+                        "status": "candidate",
+                        "restored_by": actor,
+                        "restored_at": timestamp,
+                    }
+                )
+                self._upsert_library_entry(connection, restored_entry)
+            for entry in removed_entries:
+                updated_entry = dict(entry)
+                updated_entry.update(
+                    {
+                        "status": "candidate",
+                        "restored_by": actor,
+                        "restored_at": timestamp,
+                    }
+                )
+                self._upsert_library_entry(connection, updated_entry)
+        return {"item_id": item_id, "restored_at": timestamp}
+
     def create_ai_analysis_run(
         self,
         *,
@@ -569,17 +767,17 @@ class TeamResearchDatabase:
         self,
         *,
         tag: str | None = None,
+        topic_id: str | None = None,
+        sort_by: str = "latest",
+        show_removed: bool = False,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         self.initialize()
         params: list[Any] = []
         tag_join = ""
-        tag_where = ""
         if tag:
-            tag_join = "JOIN item_tags selected_tag ON selected_tag.item_id = i.id"
-            tag_where = "AND selected_tag.tag = ?"
+            tag_join = "JOIN item_tags selected_tag ON selected_tag.item_id = i.id AND selected_tag.tag = ?"
             params.append(tag.strip().lower())
-        params.append(limit)
         query = f"""
             SELECT
                 i.record_json AS item_json,
@@ -599,13 +797,7 @@ class TeamResearchDatabase:
                 LIMIT 1
             )
             {tag_join}
-            WHERE (
-                rs.label IN ('highly_relevant', 'possibly_relevant')
-                OR (ple.status IS NOT NULL AND ple.status != 'archived')
-            )
-            {tag_where}
             ORDER BY rs.screened_at DESC, i.created_at DESC
-            LIMIT ?
         """
         with self.connect() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
@@ -617,8 +809,28 @@ class TeamResearchDatabase:
                 continue
             seen.add(item["id"])
             screening = loads(row["screening_json"])
+            if topic_id and screening.get("topic_profile_id") != topic_id:
+                continue
             team_record = loads(row["team_record_json"]) if row["team_record_json"] else None
             library_entry = loads(row["library_json"]) if row["library_json"] else None
+            if team_record_is_removed(team_record):
+                library_entry = removed_library_entry_for_team_record(
+                    item,
+                    team_record,
+                    fallback=library_entry,
+                )
+            library_status = (library_entry or {}).get("status")
+            recoverable = restore_deadline_is_open((library_entry or {}).get("restore_until"))
+            if library_status == "archived":
+                continue
+            if library_status == "removed":
+                if not recoverable and not show_removed:
+                    continue
+            elif not (
+                screening.get("label") in {"highly_relevant", "possibly_relevant"}
+                or (library_status is not None and library_status != "archived")
+            ):
+                continue
             ai_run = loads(row["ai_run_json"]) if row["ai_run_json"] else None
             papers.append(
                 {
@@ -628,11 +840,18 @@ class TeamResearchDatabase:
                     "library_entry": library_entry,
                     "ai_run": ai_run,
                     "ai_status": ai_run["status"] if ai_run else "local",
+                    "importance": library_importance(library_entry),
+                    "recoverable": recoverable,
                     "tags": self.get_item_tags(item["id"]),
                     "link": item.get("url") or item.get("object_key"),
                 }
             )
-        return papers
+        active_papers = [paper for paper in papers if (paper.get("library_entry") or {}).get("status") != "removed"]
+        removed_papers = [paper for paper in papers if (paper.get("library_entry") or {}).get("status") == "removed"]
+        return [
+            *sorted_latest_papers(active_papers, sort_by=sort_by),
+            *sorted_latest_papers(removed_papers, sort_by="latest"),
+        ][:limit]
 
     def dashboard_summary(self) -> dict[str, Any]:
         self.initialize()
@@ -933,3 +1152,109 @@ def stable_run_id(item_id: str, provider: str, model: str, prompt_version: str, 
             "started_at": timestamp,
         },
     ).removeprefix("run_")
+
+
+def library_importance(library_entry: dict[str, Any] | None) -> int:
+    if not library_entry:
+        return 0
+    try:
+        return min(5, max(0, int(library_entry.get("importance", 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def team_record_is_removed(team_record: dict[str, Any] | None) -> bool:
+    return bool(team_record and team_record.get("review_status") == "removed")
+
+
+def team_record_restore_until(team_record: dict[str, Any] | None) -> str | None:
+    if not team_record:
+        return None
+    if team_record.get("restore_until"):
+        return team_record["restore_until"]
+    removed_at = team_record.get("removed_at") or team_record.get("updated_at")
+    if not removed_at:
+        return None
+    try:
+        removed_at_time = datetime.fromisoformat(removed_at)
+    except ValueError:
+        return None
+    if removed_at_time.tzinfo is None:
+        removed_at_time = removed_at_time.replace(tzinfo=timezone.utc)
+    return iso_timestamp(removed_at_time + timedelta(hours=REMOVAL_RECOVERY_HOURS))
+
+
+def removed_library_entry_for_team_record(
+    item: dict[str, Any],
+    team_record: dict[str, Any],
+    *,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    entry = dict(fallback or {})
+    entry.update(
+        {
+            "project_id": entry.get("project_id") or DEFAULT_LIBRARY_PROJECT_ID,
+            "item_id": item["id"],
+            "status": "removed",
+            "removed_by": entry.get("removed_by") or team_record.get("removed_by") or "team-member",
+            "removed_at": entry.get("removed_at") or team_record.get("removed_at") or team_record.get("updated_at"),
+            "restore_until": entry.get("restore_until") or team_record_restore_until(team_record),
+        }
+    )
+    return entry
+
+
+def restore_deadline_is_open(value: str | None, *, now: datetime | None = None) -> bool:
+    if not value:
+        return False
+    try:
+        deadline = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    selected_now = now or datetime.now(timezone.utc)
+    if selected_now.tzinfo is None:
+        selected_now = selected_now.replace(tzinfo=timezone.utc)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return selected_now <= deadline
+
+
+def sorted_latest_papers(papers: list[dict[str, Any]], *, sort_by: str) -> list[dict[str, Any]]:
+    if sort_by == "name":
+        return sorted(papers, key=lambda paper: (paper["item"].get("title") or "").casefold())
+    if sort_by == "publish_date":
+        return sorted(
+            papers,
+            key=lambda paper: (
+                paper["item"].get("year") or -1,
+                paper["item"].get("created_at") or "",
+            ),
+            reverse=True,
+        )
+    if sort_by == "relevance":
+        return sorted(
+            papers,
+            key=lambda paper: (
+                float((paper.get("screening") or {}).get("score") or 0),
+                paper["item"].get("created_at") or "",
+            ),
+            reverse=True,
+        )
+    if sort_by == "importance":
+        return sorted(
+            papers,
+            key=lambda paper: (
+                int(paper.get("importance") or 0),
+                float((paper.get("screening") or {}).get("score") or 0),
+                paper["item"].get("created_at") or "",
+            ),
+            reverse=True,
+        )
+    return sorted(
+        papers,
+        key=lambda paper: (
+            (paper.get("screening") or {}).get("screened_at") or "",
+            paper["item"].get("created_at") or "",
+        ),
+        reverse=True,
+    )

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.research import topic_profile_by_id
+from shared.research import example_topic_profiles, topic_profile_by_id
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -36,6 +36,14 @@ UPLOAD_DIR = ROOT / "team" / "uploads" / "research"
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 MAX_PDF_DOWNLOAD_BYTES = 50 * 1024 * 1024
 PDF_DOWNLOAD_TIMEOUT_SECONDS = 30
+RELEVANCE_LABELS = ["highly_relevant", "possibly_relevant", "needs_review", "low_relevance"]
+SORT_OPTIONS = [
+    ("latest", "Latest"),
+    ("publish_date", "Publish Date"),
+    ("name", "Name"),
+    ("relevance", "Relevance"),
+    ("importance", "Importance"),
+]
 
 
 class NoRedirectHandler(urllib_request.HTTPRedirectHandler):
@@ -50,7 +58,11 @@ def html_escape(value: Any) -> str:
 
 
 def parse_tags(value: str) -> list[str]:
-    return sorted({tag.strip().lower() for tag in re.split(r"[,#]", value or "") if tag.strip()})
+    return sorted({tag for tag in (normalize_tag(raw_tag) for raw_tag in re.split(r"[,#]", value or "")) if tag})
+
+
+def normalize_tag(value: str) -> str:
+    return re.sub(r"\s+", "-", value.strip().lower().lstrip("#"))
 
 
 def safe_filename(filename: str) -> str:
@@ -247,6 +259,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       flex-wrap: wrap;
       margin-bottom: 14px;
     }}
+    .toolbar .field {{ margin-bottom: 0; min-width: 150px; }}
     .submit-options {{
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -260,16 +273,27 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .paper {{
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 14px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
       padding: 14px 0;
       border-top: 1px solid var(--line);
     }}
     .paper:first-child {{ border-top: 0; padding-top: 0; }}
+    .paper.removed {{ opacity: 0.56; }}
     .paper-title {{ font-size: 16px; font-weight: 750; color: var(--text); }}
+    .paper.removed .paper-title {{ color: var(--muted); text-decoration: line-through; }}
     .meta {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
     .abstract {{ margin: 8px 0 0; color: #344054; }}
     .tags {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }}
+    .paper-footer {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 2px;
+    }}
+    .paper-controls, .paper-actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
     .tag, .pill {{
       display: inline-block;
       border: 1px solid var(--line);
@@ -284,6 +308,79 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .pill.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
     .pill.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
+    .inline-form {{ display: inline-flex; gap: 6px; align-items: center; }}
+    .tag-editor {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
+    .tag-chip-form, .tag-add-form {{
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      border: 1px solid var(--line);
+      background: #f4f6f8;
+      color: #344054;
+      border-radius: 999px;
+      padding: 1px 3px 1px 8px;
+    }}
+    .tag-chip-input, .tag-add-input {{
+      width: 9.5ch;
+      min-width: 5.5ch;
+      max-width: 18ch;
+      border: 0;
+      border-radius: 999px;
+      padding: 2px 0;
+      font-size: 12px;
+      font-weight: 650;
+      background: transparent;
+      color: #344054;
+    }}
+    .tag-chip-input:focus, .tag-add-input:focus {{ outline: 2px solid #bcd4ff; outline-offset: 2px; }}
+    .tag-add-form {{ border-style: dashed; background: #fff; padding-left: 7px; }}
+    .tag-add-input {{ width: 7ch; }}
+    .tag-action {{
+      border: 0;
+      background: transparent;
+      border-radius: 999px;
+      padding: 0 5px;
+      min-width: 22px;
+      height: 22px;
+      font-size: 14px;
+      line-height: 1;
+      color: #667085;
+    }}
+    .tag-action:hover {{ background: #e5e9ef; color: #1d2733; text-decoration: none; }}
+    .sr-only {{
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }}
+    .tag-input {{
+      width: min(320px, 100%);
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 650;
+    }}
+    .pill-select {{
+      width: auto;
+      border-radius: 999px;
+      padding: 2px 26px 2px 8px;
+      font-size: 12px;
+      font-weight: 650;
+      color: #344054;
+      background: #f4f6f8;
+    }}
+    .mini-button {{
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    input[type="checkbox"] {{ width: auto; }}
     .button, button {{
       border: 1px solid #b7c3d2;
       background: #fff;
@@ -296,6 +393,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       text-decoration: none;
     }}
     .button.primary, button.primary {{ background: var(--accent); border-color: var(--accent); color: #fff; }}
+    .button.danger, button.danger {{ border-color: #d0a0a0; color: #8a1f1f; }}
     .form-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
     .field {{ margin-bottom: 12px; }}
     label {{ display: block; font-weight: 700; margin-bottom: 4px; font-size: 12px; color: #344054; }}
@@ -314,6 +412,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .shell {{ grid-template-columns: 1fr; }}
       .content {{ padding: 18px; }}
       .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
+      .paper-footer {{ align-items: flex-start; }}
       .actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
     }}
@@ -362,19 +461,45 @@ def ai_status_pill(status: str | None) -> str:
     return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
 
 
-def render_latest_papers_page(database: TeamResearchDatabase, *, tag: str | None = None, notice: str = "") -> str:
-    papers = database.list_latest_relevant_papers(tag=tag)
+def render_latest_papers_page(
+    database: TeamResearchDatabase,
+    *,
+    tag: str | None = None,
+    topic_id: str | None = None,
+    sort_by: str = "latest",
+    show_removed: bool = False,
+    notice: str = "",
+) -> str:
+    papers = database.list_latest_relevant_papers(
+        tag=tag,
+        topic_id=topic_id,
+        sort_by=sort_by,
+        show_removed=show_removed,
+    )
     tags = database.list_tags()
     body = f"""
     {render_topline("Latest Relevant Papers", "Recent papers and resources screened as relevant, with team tags and links.", "/submit", "Submit Paper")}
     {render_notice(notice)}
     <div class="panel">
       <form class="toolbar" method="get" action="/">
-        <div>
+        <div class="field">
           <label for="tag">Filter by tag</label>
           <select id="tag" name="tag">
             <option value="">All tags</option>
             {render_tag_options(tags, tag)}
+          </select>
+        </div>
+        <div class="field">
+          <label for="topic">Topic</label>
+          <select id="topic" name="topic">
+            <option value="">All topics</option>
+            {render_topic_options(topic_id)}
+          </select>
+        </div>
+        <div class="field">
+          <label for="sort">Sort by</label>
+          <select id="sort" name="sort">
+            {render_sort_options(sort_by)}
           </select>
         </div>
         <button type="submit">Apply</button>
@@ -392,6 +517,20 @@ def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
     )
 
 
+def render_topic_options(selected: str | None) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(profile["id"])}" {"selected" if profile["id"] == selected else ""}>{html_escape(profile["name"])}</option>'
+        for profile in example_topic_profiles()
+    )
+
+
+def render_sort_options(selected: str) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(value)}" {"selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in SORT_OPTIONS
+    )
+
+
 def render_paper_list(papers: list[dict[str, Any]]) -> str:
     if not papers:
         return '<div class="empty">No relevant papers yet. Submit a link or PDF to start the library.</div>'
@@ -403,11 +542,16 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
         link = paper.get("link")
         abstract = item.get("abstract") or ""
         link_html = render_paper_link(link)
-        tag_html = "".join(f'<a class="tag" href="/?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags)
+        removed = (paper.get("library_entry") or {}).get("status") == "removed"
+        tag_html = render_plain_tags(tags) if removed else render_tag_editor(paper)
+        relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
+        importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
+        row_class = "paper removed" if removed else "paper"
+        paper_actions = render_removed_controls(paper) if removed else render_active_actions(paper)
         rows.append(
             f"""
-            <article class="paper">
-              <div>
+            <article class="{row_class}">
+              <div class="paper-body">
                 <div class="paper-title">{html_escape(item["title"])}</div>
                 <div class="meta">
                   {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
@@ -415,15 +559,146 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
               </div>
-              <div class="actions">
-                {ai_status_pill(paper.get("ai_status"))}
-                {relevance_pill(screening.get("label"))}
-                {link_html}
+              <div class="paper-footer">
+                <div class="paper-controls">
+                  {ai_status_pill(paper.get("ai_status"))}
+                  {importance_html}
+                  {relevance_html}
+                  {link_html}
+                </div>
+                <div class="paper-actions">
+                  {paper_actions}
+                </div>
               </div>
             </article>
             """
         )
     return "\n".join(rows)
+
+
+def render_plain_tags(tags: list[str]) -> str:
+    return "".join(f'<a class="tag" href="/?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags) or '<span class="muted">No tags</span>'
+
+
+def render_tag_editor(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    tags = paper.get("tags") or []
+    tag_controls = "".join(render_tag_chip_editor(item["id"], tag) for tag in tags)
+    return f"""
+    <div class="tag-editor">
+      {tag_controls}
+      {render_add_tag_form(item["id"])}
+    </div>
+    """
+
+
+def render_tag_chip_editor(item_id: str, tag: str) -> str:
+    escaped_item_id = html_escape(item_id)
+    escaped_tag = html_escape(tag)
+    input_width = min(max(len(tag) + 1, 6), 18)
+    return f"""
+    <form class="tag-chip-form" method="post" action="/paper/tag/update">
+      <input type="hidden" name="item_id" value="{escaped_item_id}">
+      <input type="hidden" name="old_tag" value="{escaped_tag}">
+      <input
+        class="tag-chip-input"
+        name="tag"
+        value="{escaped_tag}"
+        aria-label="Edit tag {escaped_tag}"
+        style="width: {input_width}ch"
+        onchange="this.form.submit()"
+      >
+      <button class="sr-only" type="submit">Save tag</button>
+      <button
+        class="tag-action"
+        type="submit"
+        formaction="/paper/tag/remove"
+        aria-label="Remove tag {escaped_tag}"
+        title="Remove tag"
+      >&times;</button>
+    </form>
+    """
+
+
+def render_add_tag_form(item_id: str) -> str:
+    return f"""
+    <form class="tag-add-form" method="post" action="/paper/tag/add">
+      <input type="hidden" name="item_id" value="{html_escape(item_id)}">
+      <input class="tag-add-input" name="tag" placeholder="+ tag" aria-label="Add tag">
+      <button class="tag-action" type="submit" aria-label="Add tag" title="Add tag">+</button>
+    </form>
+    """
+
+
+def render_removed_controls(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    library_entry = paper.get("library_entry") or {}
+    restore_until = library_entry.get("restore_until") or ""
+    if not paper.get("recoverable"):
+        return f'<div class="muted">Recovery expired: {html_escape(restore_until)}</div>'
+    return f"""
+      <form class="inline-form" method="post" action="/paper/recover">
+        <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
+        <span class="muted">Recover before {html_escape(restore_until)}</span>
+        <button class="mini-button" type="submit">Recover</button>
+      </form>
+    """
+
+
+def render_active_actions(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    return f"""
+    <form class="inline-form" method="post" action="/paper/remove">
+      <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
+      <button class="mini-button danger" type="submit">Remove</button>
+    </form>
+    """
+
+
+def render_relevance_control(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    screening = paper["screening"]
+    score = int(round(float(screening.get("score") or 0)))
+    return f"""
+    <form class="inline-form" method="post" action="/paper/relevance">
+      <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
+      <input type="hidden" name="relevance_score" value="{score}">
+      <select class="pill-select" name="relevance_label" aria-label="Relevance" onchange="this.form.submit()">
+        {render_relevance_options(screening.get("label"))}
+      </select>
+      <button class="sr-only" type="submit">Save relevance</button>
+    </form>
+    """
+
+
+def render_importance_pill(paper: dict[str, Any]) -> str:
+    return f'<span class="pill">Importance: {html_escape(paper.get("importance", 0))}</span>'
+
+
+def render_importance_control(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    return f"""
+    <form class="inline-form" method="post" action="/paper/importance">
+      <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
+      <select class="pill-select" name="importance" aria-label="Importance" onchange="this.form.submit()">
+        {render_importance_options(int(paper.get("importance") or 0))}
+      </select>
+      <button class="sr-only" type="submit">Save importance</button>
+    </form>
+    """
+
+
+def render_relevance_options(selected: str | None) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(label)}" {"selected" if label == selected else ""}>{html_escape(label)}</option>'
+        for label in RELEVANCE_LABELS
+    )
+
+
+def render_importance_options(selected: int) -> str:
+    return "\n".join(
+        f'<option value="{level}" {"selected" if level == selected else ""}>{level}</option>' for level in range(0, 6)
+    )
 
 
 def render_paper_link(link: str | None) -> str:
@@ -576,6 +851,118 @@ def submit_research_item(
     return result.item["id"]
 
 
+def update_paper_interactions(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.set_item_tags(item_id, parse_tags(fields.get("tags", "")))
+    database.update_item_relevance(
+        item_id,
+        label=clean_relevance_label(fields.get("relevance_label", "")),
+        score=clean_relevance_score(fields.get("relevance_score", "0")),
+    )
+    database.update_library_importance(
+        item_id,
+        importance=clean_importance(fields.get("importance", "0")),
+    )
+    return item_id
+
+
+def update_paper_tags(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.set_item_tags(item_id, parse_tags(fields.get("tags", "")))
+    return item_id
+
+
+def add_paper_tag(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    new_tags = parse_tags(required_field(fields, "tag"))
+    if not new_tags:
+        raise ValueError("Tag cannot be empty.")
+    tags = set(database.get_item_tags(item_id))
+    tags.update(new_tags)
+    database.set_item_tags(item_id, sorted(tags))
+    return item_id
+
+
+def update_paper_tag(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    old_tag = normalize_tag(required_field(fields, "old_tag"))
+    new_tag = normalize_tag(required_field(fields, "tag"))
+    if not old_tag or not new_tag:
+        raise ValueError("Tag cannot be empty.")
+    tags = [new_tag if tag == old_tag else tag for tag in database.get_item_tags(item_id)]
+    database.set_item_tags(item_id, tags)
+    return item_id
+
+
+def remove_paper_tag(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    removed_tag = normalize_tag(required_field(fields, "old_tag"))
+    if not removed_tag:
+        raise ValueError("Tag cannot be empty.")
+    tags = [tag for tag in database.get_item_tags(item_id) if tag != removed_tag]
+    database.set_item_tags(item_id, tags)
+    return item_id
+
+
+def update_paper_relevance(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.update_item_relevance(
+        item_id,
+        label=clean_relevance_label(fields.get("relevance_label", "")),
+        score=clean_relevance_score(fields.get("relevance_score", "0")),
+    )
+    return item_id
+
+
+def update_paper_importance(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.update_library_importance(
+        item_id,
+        importance=clean_importance(fields.get("importance", "0")),
+    )
+    return item_id
+
+
+def remove_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.remove_item(item_id, actor=fields.get("actor") or "team-member")
+    return item_id
+
+
+def recover_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.restore_item(item_id, actor=fields.get("actor") or "team-member")
+    return item_id
+
+
+def required_field(fields: dict[str, str], name: str) -> str:
+    value = (fields.get(name) or "").strip()
+    if not value:
+        raise ValueError(f"Missing required field: {name}")
+    return value
+
+
+def clean_relevance_label(value: str) -> str:
+    selected = value.strip()
+    if selected not in RELEVANCE_LABELS:
+        raise ValueError("Unsupported relevance label.")
+    return selected
+
+
+def clean_relevance_score(value: str) -> float:
+    try:
+        return min(100.0, max(0.0, float(value)))
+    except ValueError as error:
+        raise ValueError("Relevance score must be a number.") from error
+
+
+def clean_importance(value: str) -> int:
+    try:
+        return min(5, max(0, int(value)))
+    except ValueError as error:
+        raise ValueError("Importance must be a number from 0 to 5.") from error
+
+
 def parse_urlencoded(body: bytes) -> dict[str, str]:
     parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
     return {key: values[-1].strip() for key, values in parsed.items()}
@@ -633,7 +1020,19 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             notice = query.get("notice", [""])[0]
             if parsed.path == "/":
                 tag = query.get("tag", [None])[0] or None
-                self.respond_html(render_latest_papers_page(self.database, tag=tag, notice=notice))
+                topic_id = query.get("topic", [None])[0] or None
+                sort_by = query.get("sort", ["latest"])[0] or "latest"
+                show_removed = query.get("removed", [""])[0] == "1"
+                self.respond_html(
+                    render_latest_papers_page(
+                        self.database,
+                        tag=tag,
+                        topic_id=topic_id,
+                        sort_by=sort_by,
+                        show_removed=show_removed,
+                        notice=notice,
+                    )
+                )
             elif parsed.path == "/submit":
                 self.respond_html(render_submit_page(self.database, notice=notice))
             elif parsed.path.startswith("/files/"):
@@ -654,6 +1053,33 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             if parsed.path == "/submit":
                 item_id = submit_research_item(self.database, fields, upload=upload)
                 self.redirect(f"/?notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/paper/update":
+                item_id = update_paper_interactions(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Updated {item_id}.')}")
+            elif parsed.path == "/paper/tags":
+                item_id = update_paper_tags(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Updated tags for {item_id}.')}")
+            elif parsed.path == "/paper/tag/add":
+                item_id = add_paper_tag(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Added tag for {item_id}.')}")
+            elif parsed.path == "/paper/tag/update":
+                item_id = update_paper_tag(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Updated tag for {item_id}.')}")
+            elif parsed.path == "/paper/tag/remove":
+                item_id = remove_paper_tag(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Removed tag from {item_id}.')}")
+            elif parsed.path == "/paper/relevance":
+                item_id = update_paper_relevance(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Updated relevance for {item_id}.')}")
+            elif parsed.path == "/paper/importance":
+                item_id = update_paper_importance(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Updated importance for {item_id}.')}")
+            elif parsed.path == "/paper/remove":
+                item_id = remove_paper(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Removed {item_id}. You can recover it for 24 hours.')}")
+            elif parsed.path == "/paper/recover":
+                item_id = recover_paper(self.database, fields)
+                self.redirect(f"/?removed=1&notice={quote(f'Recovered {item_id}.')}")
             else:
                 self.respond_html(page("Not Found", "<h1>Not Found</h1>", active=""), status=HTTPStatus.NOT_FOUND)
         except Exception as error:

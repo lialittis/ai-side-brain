@@ -100,6 +100,13 @@ status: candidate | reading | useful | archived
 reason:
 added_by:
 added_at:
+importance:
+importance_updated_at:
+removed_by:
+removed_at:
+restore_until:
+restored_by:
+restored_at:
 ```
 
 ## Team AI Analysis Run

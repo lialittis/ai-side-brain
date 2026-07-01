@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -8,11 +10,20 @@ from unittest import mock
 
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
+    add_paper_tag,
     canonical_pdf_url,
     render_latest_papers_page,
     render_submit_page,
     parse_post_form,
+    recover_paper,
+    remove_paper,
+    remove_paper_tag,
     submit_research_item,
+    update_paper_tag,
+    update_paper_importance,
+    update_paper_interactions,
+    update_paper_relevance,
+    update_paper_tags,
 )
 
 
@@ -254,6 +265,261 @@ class TeamResearchWebTest(unittest.TestCase):
 
         self.assertEqual(fields["title"], "Multipart paper")
         self.assertEqual(upload, ("paper.pdf", b"%PDF-1.4 parser test"))
+
+    def test_paper_interactions_update_tags_relevance_and_importance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/interaction",
+                    "title": "Interaction Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+
+            update_paper_interactions(
+                database,
+                {
+                    "item_id": item_id,
+                    "tags": "priority, #cooling",
+                    "relevance_label": "highly_relevant",
+                    "relevance_score": "94",
+                    "importance": "5",
+                },
+            )
+
+            paper = database.list_latest_relevant_papers(sort_by="importance")[0]
+            self.assertEqual(paper["tags"], ["cooling", "priority"])
+            self.assertEqual(paper["screening"]["label"], "highly_relevant")
+            self.assertEqual(paper["screening"]["score"], 94.0)
+            self.assertEqual(paper["importance"], 5)
+
+            html = render_latest_papers_page(database)
+            self.assertIn("class=\"tag-chip-form\"", html)
+            self.assertIn("class=\"tag-chip-input\"", html)
+            self.assertIn("class=\"tag-add-form\"", html)
+            self.assertIn("class=\"paper-footer\"", html)
+            self.assertIn("class=\"paper-controls\"", html)
+            self.assertIn("class=\"paper-actions\"", html)
+            self.assertIn("name=\"importance\"", html)
+            self.assertIn("name=\"relevance_label\"", html)
+            self.assertIn("class=\"pill-select\"", html)
+            self.assertIn("onchange=\"this.form.submit()\"", html)
+            self.assertIn("Remove", html)
+            self.assertNotIn("class=\"tag-input\"", html)
+            self.assertNotIn("paper-editor", html)
+
+    def test_direct_component_updates_can_save_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/direct-components",
+                    "title": "Direct Components",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+
+            update_paper_tags(database, {"item_id": item_id, "tags": "first, second"})
+            update_paper_tag(database, {"item_id": item_id, "old_tag": "first", "tag": "renamed"})
+            remove_paper_tag(database, {"item_id": item_id, "old_tag": "second"})
+            add_paper_tag(database, {"item_id": item_id, "tag": "third"})
+            update_paper_relevance(
+                database,
+                {
+                    "item_id": item_id,
+                    "relevance_label": "highly_relevant",
+                    "relevance_score": "82",
+                },
+            )
+            update_paper_importance(database, {"item_id": item_id, "importance": "4"})
+
+            paper = database.list_latest_relevant_papers()[0]
+            self.assertEqual(paper["tags"], ["renamed", "third"])
+            self.assertEqual(paper["screening"]["label"], "highly_relevant")
+            self.assertEqual(paper["screening"]["score"], 82.0)
+            self.assertEqual(paper["importance"], 4)
+
+    def test_papers_can_be_sorted_by_name_publish_date_relevance_and_importance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            alpha_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/alpha",
+                    "title": "Alpha Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                    "year": "2024",
+                },
+                analyze=False,
+            )
+            zeta_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/zeta",
+                    "title": "Zeta Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                    "year": "2026",
+                },
+                analyze=False,
+            )
+            database.update_item_relevance(alpha_id, label="possibly_relevant", score=40)
+            database.update_item_relevance(zeta_id, label="highly_relevant", score=90)
+            database.update_library_importance(alpha_id, importance=5)
+            database.update_library_importance(zeta_id, importance=1)
+
+            self.assertEqual(
+                [paper["item"]["id"] for paper in database.list_latest_relevant_papers(sort_by="name")],
+                [alpha_id, zeta_id],
+            )
+            self.assertEqual(database.list_latest_relevant_papers(sort_by="publish_date")[0]["item"]["id"], zeta_id)
+            self.assertEqual(database.list_latest_relevant_papers(sort_by="relevance")[0]["item"]["id"], zeta_id)
+            self.assertEqual(database.list_latest_relevant_papers(sort_by="importance")[0]["item"]["id"], alpha_id)
+
+    def test_remove_moves_paper_to_end_with_gray_recoverable_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/remove-me",
+                    "title": "Recoverable Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+            active_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/still-active",
+                    "title": "Still Active Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+
+            remove_paper(database, {"item_id": item_id})
+
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual([paper["item"]["id"] for paper in papers], [active_id, item_id])
+            self.assertEqual(papers[-1]["library_entry"]["status"], "removed")
+            self.assertTrue(papers[-1]["recoverable"])
+            html = render_latest_papers_page(database)
+            self.assertIn('class="paper removed"', html)
+            self.assertIn("text-decoration: line-through", html)
+            self.assertIn("Recover before", html)
+            self.assertLess(html.index("Still Active Paper"), html.index("Recoverable Paper"))
+
+            recover_paper(database, {"item_id": item_id})
+
+            self.assertEqual({paper["item"]["id"] for paper in database.list_latest_relevant_papers()}, {item_id, active_id})
+
+    def test_remove_works_for_team_record_without_library_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/orphan-remove",
+                    "title": "Orphan Library Entry Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+            with database.connect() as connection:
+                connection.execute("DELETE FROM project_library_entries WHERE item_id = ?", (item_id,))
+
+            remove_paper(database, {"item_id": item_id})
+
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(papers[-1]["item"]["id"], item_id)
+            self.assertEqual(papers[-1]["library_entry"]["status"], "removed")
+            self.assertTrue(papers[-1]["recoverable"])
+            with database.connect() as connection:
+                row = connection.execute(
+                    "SELECT status, record_json FROM project_library_entries WHERE item_id = ?",
+                    (item_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["status"], "removed")
+            self.assertIn("restore_until", row["record_json"])
+
+    def test_legacy_removed_team_record_without_library_entry_is_recoverable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/legacy-removed",
+                    "title": "Legacy Removed Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+            now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            database.update_item_relevance(item_id, label="low_relevance", score=1, now=now)
+            bundle = database.get_bundle(item_id)
+            record = dict(bundle["team_record"])
+            record.update({"review_status": "removed", "updated_at": now.isoformat()})
+            with database.connect() as connection:
+                connection.execute("DELETE FROM project_library_entries WHERE item_id = ?", (item_id,))
+                connection.execute(
+                    """
+                    UPDATE team_research_records
+                    SET review_status = ?, updated_at = ?, record_json = ?
+                    WHERE item_id = ?
+                    """,
+                    (
+                        record["review_status"],
+                        record["updated_at"],
+                        json.dumps(record, ensure_ascii=True, sort_keys=True),
+                        item_id,
+                    ),
+                )
+
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(papers[-1]["item"]["id"], item_id)
+            self.assertEqual(papers[-1]["library_entry"]["status"], "removed")
+            self.assertTrue(papers[-1]["recoverable"])
+            html = render_latest_papers_page(database)
+            self.assertIn("Legacy Removed Paper", html)
+            self.assertIn('class="paper removed"', html)
+
+            recover_paper(database, {"item_id": item_id})
+            recovered = database.get_bundle(item_id)
+            self.assertEqual(recovered["team_record"]["review_status"], "accepted")
+            self.assertEqual(recovered["library_entries"][0]["status"], "candidate")
+
+    def test_recovery_expires_after_24_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/expired-recovery",
+                    "title": "Expired Recovery Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+            now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            database.remove_item(item_id, now=now)
+
+            with self.assertRaisesRegex(ValueError, "expired"):
+                database.restore_item(item_id, now=now + timedelta(hours=25))
 
 
 if __name__ == "__main__":
