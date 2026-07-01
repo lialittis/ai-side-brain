@@ -85,8 +85,8 @@ without collecting again. Scheduled scripts also refresh stable
 `personal-literature-radar-brief-latest.*` files unless
 `PERSONAL_RADAR_WRITE_LATEST=0`. The JSON brief uses the same stored-read contract as
 the CLI `brief --json`: `kind=personal_literature_radar_brief`, selected
-limits, run count, latest-run health, review counts, active queue preview,
-index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
+limits, run count, latest-run health/freshness, review counts, active queue
+preview with PDF access summary, index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
@@ -95,7 +95,9 @@ index paths, and the generated Markdown brief. Useful environment variables incl
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
-many active queue papers the run script writes. Use `PERSONAL_RADAR_WRITE_LATEST=0`
+many active queue papers the run script writes, and
+`PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
+threshold for queue and brief snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
 to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief
@@ -131,12 +133,14 @@ state without requiring another collection run.
 Use `queue` for the daily review surface: it prefers unreviewed papers, falls
 back to watched papers when there are no unreviewed items, sorts the active
 queue by latest recommendation score, and excludes dismissed or already-moved
-papers from the priority list. The text queue includes stored signal lines for
-why each paper is relevant, how it relates to existing context, and which
-interests matched; the JSON queue includes the same lines under `signal_lines`.
-Both text and JSON queue output include latest-run health and source-error
-counts, so scheduled queue snapshots distinguish an empty healthy queue from a
-collector problem.
+papers from the priority list. The text queue includes the PDF access summary
+and stored signal lines for why each paper is relevant, how it relates to
+existing context, and which interests matched; the JSON queue includes the same
+lines under `signal_lines`. The JSON queue also includes `access_summary`, which counts downloadable,
+cached, metadata/link-only, and access-kind buckets for the active queue. Both
+text and JSON queue output include latest-run health/freshness and source-error counts, so
+scheduled queue snapshots distinguish an empty healthy queue from a collector
+problem.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated
@@ -153,9 +157,9 @@ Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
 lines, context, venue coverage, and PDF policy for the top stored
 recommendations. `brief --json` returns the same Markdown plus latest-run
-health, review counts, active queue preview, and paths to the local run index
-and paper-history files, so local automation can consume stored briefs without
-parsing terminal text. Stored runs also
+health/freshness, review counts, active queue preview with PDF access summary,
+and paths to the local run index and paper-history files, so local automation
+can consume stored briefs without parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief

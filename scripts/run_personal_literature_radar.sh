@@ -146,6 +146,8 @@ if [[ "${PERSONAL_RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
     QUEUE_ARGS+=("--limit" "$PERSONAL_RADAR_QUEUE_LIMIT")
     QUEUE_TEXT_ARGS+=("--limit" "$PERSONAL_RADAR_QUEUE_LIMIT")
   fi
+  QUEUE_ARGS+=("--freshness-max-age-hours" "${PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS:-36}")
+  QUEUE_TEXT_ARGS+=("--freshness-max-age-hours" "${PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS:-36}")
   "$PYTHON_BIN" "${QUEUE_ARGS[@]}" > "$QUEUE_JSON_PATH"
   "$PYTHON_BIN" "${QUEUE_TEXT_ARGS[@]}" > "$QUEUE_PATH"
   if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then

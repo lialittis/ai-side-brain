@@ -80,24 +80,25 @@ queue review, and weekly briefs.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
 panel whenever stored Radar papers exist. It also previews the highest-priority
 stored candidates, with stored why/context/matched-interest signal lines, paper
-links plus watch, dismiss, and add-to-library actions that return to the daily
-page. That keeps scheduled discovery visible in the team’s normal daily scan
-without auto-importing candidates into the main library.
+links, PDF policy/access-kind status, plus watch, dismiss, and add-to-library
+actions that return to the daily page. That keeps scheduled discovery visible
+in the team’s normal daily scan without auto-importing candidates into the main
+library.
 If the latest scheduled run produced no stored papers but did fail or complete,
 the same panel still shows latest-run health, counts, and source-error status so
 an empty queue is not confused with a healthy run that simply found nothing.
 The same active queue is available as local JSON at `/radar/queue.json?limit=20`
 for self-hosted scripts, dashboards, or future notifications. That endpoint only
 reads stored Radar state; it does not collect sources, download PDFs, or call AI.
-The payload includes `review_counts`, `latest_run` health and source stats, the
-active paper records, persisted signal lines, and links back to the HTML review
-surfaces.
+The payload includes `review_counts`, active-queue `access_summary`,
+`latest_run` health, freshness, and source stats, the active paper records,
+persisted signal lines, and links back to the HTML review surfaces.
 Stored daily or weekly briefs are also available as local JSON at
 `/radar/brief.json?days=7&limit=20`. That endpoint reads the same stored runs as
 the HTML brief and CLI `radar-brief --json`; it does not collect sources,
 download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
-health, limits, run count, review counts, the active queue preview, and links
-back to the Team Radar pages.
+health and freshness, limits, run count, review counts, the active queue preview
+with PDF access summary, and links back to the Team Radar pages.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -248,6 +249,7 @@ Stored runs can be inspected later:
 ```bash
 python team/research_cli.py radar-history
 python team/research_cli.py radar-queue                # active review queue by score
+python team/research_cli.py radar-queue --freshness-max-age-hours 24
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
 python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
@@ -306,8 +308,9 @@ to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 the terminal; the same state can be changed from `/radar/papers` in the web UI.
 For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
 `python team/research_cli.py radar-queue --json` return the same active queue
-shape with review counts, latest-run health/source stats, persisted signal
-lines, paper records, and links back to the HTML review surfaces.
+shape with review counts, latest-run health/freshness/source stats, persisted
+signal lines, active-queue PDF access summary, paper records, and links back to
+the HTML review surfaces.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
@@ -362,10 +365,10 @@ The run script writes a Markdown report and matching JSON result into
 local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. It also writes
 text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
-includes latest-run health, source-error counts, stored summary,
+includes latest-run health/freshness, source-error counts, PDF access summary, stored summary,
 relevance/context signal, and matched interests for daily review. The JSON
 snapshot uses the same queue payload as `radar-queue --json`, including
-`latest_run` health plus per-paper `signal_lines`. Stable
+`latest_run` health, `access_summary`, plus per-paper `signal_lines`. Stable
 `literature-radar-queue-latest.*` files are refreshed when latest-copy output is
 enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
 brief script writes a stored-run roll-up without collecting again and refreshes
@@ -432,6 +435,8 @@ It reads `.env` first and supports these optional variables:
   default `20`.
 - `RADAR_BRIEF_RUN_LIMIT`: maximum stored runs to inspect; default `50`.
 - `RADAR_BRIEF_OUTPUT_DIR`: brief output directory; default `team/logs`.
+- `RADAR_FRESHNESS_MAX_AGE_HOURS`: latest-run freshness threshold for queue and
+  brief snapshots; default `36`.
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`,
   `RADAR_SOURCE_CONTACT_EMAIL`, `OPENALEX_MAILTO`, `CROSSREF_MAILTO`,
   `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.

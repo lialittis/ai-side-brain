@@ -50,8 +50,10 @@ from shared.literature_radar import (
     dedupe_key as radar_dedupe_key,
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
+    radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_review_counts,
+    radar_run_freshness,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -335,6 +337,8 @@ def build_personal_literature_radar_queue_payload(
     root: Path,
     *,
     limit: int = 3,
+    now: datetime | None = None,
+    freshness_max_age_hours: int = 36,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     records = read_personal_radar_paper_history(root)
@@ -342,14 +346,20 @@ def build_personal_literature_radar_queue_payload(
     runs = read_personal_radar_index(root)
     latest_run = runs[0] if runs else None
     queue = build_radar_review_queue(records, limit=selected_limit, review_counts=counts)
+    queue_papers = queue.get("papers") or []
     return {
         "success": True,
         "kind": "personal_literature_radar_queue",
         "review": queue.get("review") or "",
         "review_counts": queue.get("review_counts") or counts,
+        "access_summary": radar_pdf_access_summary(queue_papers),
         "limit": selected_limit,
-        "latest_run": personal_literature_radar_run_summary(latest_run),
-        "papers": queue.get("papers") or [],
+        "latest_run": personal_literature_radar_run_summary(
+            latest_run,
+            now=now,
+            freshness_max_age_hours=freshness_max_age_hours,
+        ),
+        "papers": queue_papers,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),
             "paper_history": str(personal_radar_paper_history_path(root)),
@@ -363,6 +373,8 @@ def build_personal_literature_radar_brief_payload(
     days: int = 7,
     limit: int = 20,
     run_limit: int = 50,
+    now: datetime | None = None,
+    freshness_max_age_hours: int = 36,
 ) -> dict[str, Any]:
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
@@ -370,6 +382,7 @@ def build_personal_literature_radar_brief_payload(
     records = read_personal_radar_paper_history(root)
     review_counts = radar_review_counts(records)
     queue = build_radar_review_queue(records, limit=selected_limit, review_counts=review_counts)
+    queue_papers = queue.get("papers") or []
     runs = read_personal_radar_index(root)[:selected_run_limit]
     brief = build_radar_history_brief(
         runs,
@@ -387,9 +400,14 @@ def build_personal_literature_radar_brief_payload(
         "review_counts": review_counts,
         "queue": {
             "review": queue.get("review") or "",
-            "papers": queue.get("papers") or [],
+            "access_summary": radar_pdf_access_summary(queue_papers),
+            "papers": queue_papers,
         },
-        "latest_run": personal_literature_radar_run_summary(runs[0] if runs else None),
+        "latest_run": personal_literature_radar_run_summary(
+            runs[0] if runs else None,
+            now=now,
+            freshness_max_age_hours=freshness_max_age_hours,
+        ),
         "brief": brief,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),
@@ -398,7 +416,12 @@ def build_personal_literature_radar_brief_payload(
     }
 
 
-def personal_literature_radar_run_summary(run: dict[str, Any] | None) -> dict[str, Any] | None:
+def personal_literature_radar_run_summary(
+    run: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    freshness_max_age_hours: int = 36,
+) -> dict[str, Any] | None:
     if not isinstance(run, dict) or not run:
         return None
     source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
@@ -416,6 +439,7 @@ def personal_literature_radar_run_summary(run: dict[str, Any] | None) -> dict[st
         "source_stats": source_stats,
         "venue_coverage": venue_coverage,
         "report_path": run.get("report_path") or "",
+        "freshness": radar_run_freshness(run, now=now, max_age_hours=freshness_max_age_hours),
     }
 
 

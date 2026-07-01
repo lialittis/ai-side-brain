@@ -52,6 +52,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["screening"]["label"], "highly_relevant")
             self.assertIn("arxiv", papers[0]["tags"])
             self.assertTrue(papers[0]["item"]["pdf_access"]["can_download"])
+            self.assertEqual(papers[0]["item"]["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(papers[0]["item"]["pdf_access"]["reason"], "arxiv_or_open_repository")
             self.assertEqual(papers[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
             self.assertEqual(
@@ -532,6 +533,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(recommendations[0]["rank"], 1)
             self.assertTrue(recommendations[0]["novelty"]["is_new"])
             self.assertTrue(recommendations[0]["pdf_access"]["can_download"])
+            self.assertEqual(recommendations[0]["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(recommendations[0]["pdf_access"]["reason"], "arxiv_or_open_repository")
             self.assertEqual(recommendations[0]["imported_item_id"], first["imported"][0]["item_id"])
             self.assertIn("Novelty: new this run", first["report"])
@@ -550,6 +552,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(paper_history["source_ids"], ["arxiv"])
             self.assertEqual(paper_history["imported_item_id"], first["imported"][0]["item_id"])
             self.assertTrue(paper_history["pdf_access"]["can_download"])
+            self.assertEqual(paper_history["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(paper_history["pdf_access"]["source_url"], "https://arxiv.org/abs/2601.00004")
             self.assertEqual(paper_history["pdf_access"]["local_pdf_path"], "")
             self.assertFalse(paper_history["pdf_access"]["downloaded"])
@@ -1129,6 +1132,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                         str(db_path),
                         "--days",
                         "7",
+                        "--freshness-max-age-hours",
+                        "24",
                         "--output",
                         str(brief_path),
                         "--json",
@@ -1151,15 +1156,28 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "highly_relevant")
             queue_stdout = io.StringIO()
             with contextlib.redirect_stdout(queue_stdout):
-                queue_code = research_cli.main(["radar-queue", "--db-path", str(db_path), "--json"])
+                queue_code = research_cli.main(
+                    [
+                        "radar-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--freshness-max-age-hours",
+                        "12",
+                        "--json",
+                    ]
+                )
             self.assertEqual(queue_code, 0)
             queue_result = json.loads(queue_stdout.getvalue())
             self.assertTrue(queue_result["success"])
             self.assertEqual(queue_result["kind"], "team_literature_radar_queue")
             self.assertEqual(queue_result["review"], "unreviewed")
             self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            self.assertEqual(queue_result["access_summary"]["downloadable"], 1)
+            self.assertEqual(queue_result["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_result["latest_run"]["id"], result["run_id"])
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
+            self.assertIn("freshness", queue_result["latest_run"])
+            self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -1173,6 +1191,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn(f"Latest run: {result['run_id']}", queue_text)
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("source_errors=0", queue_text)
+            self.assertIn("freshness=", queue_text)
+            self.assertIn("PDF access:", queue_text)
+            self.assertIn("downloadable=1", queue_text)
+            self.assertIn("kinds=arxiv_pdf=1", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
@@ -1243,6 +1265,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["queue"]["review"], "unreviewed")
             self.assertEqual(brief["queue"]["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertEqual(brief["latest_run"]["id"], result["run_id"])
+            self.assertEqual(brief["latest_run"]["freshness"]["max_age_hours"], 24)
             self.assertEqual(brief["links"]["json"], "/radar/brief.json?days=7&limit=20&run_limit=50")
             self.assertIn("Team Literature Radar Brief", brief["brief"])
             self.assertIn("Memory Safety for Agentic Security", brief_path.read_text(encoding="utf-8"))
@@ -1356,6 +1379,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("status=failed", output)
             self.assertIn("source_errors=1", output)
             self.assertIn("error_sources=dblp", output)
+            self.assertIn("freshness=", output)
+            self.assertIn("PDF access: | total=0 | downloadable=0", output)
             self.assertIn("No active unreviewed or watched Radar papers.", output)
 
     def test_cli_radar_run_dispatches_runner(self) -> None:

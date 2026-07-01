@@ -1807,6 +1807,40 @@ def parse_radar_brief_timestamp(value: str) -> datetime | None:
     return timestamp
 
 
+def radar_run_freshness(
+    run: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    max_age_hours: int = 36,
+) -> dict[str, Any]:
+    selected_now = now or datetime.now(timezone.utc)
+    if selected_now.tzinfo is None:
+        selected_now = selected_now.replace(tzinfo=timezone.utc)
+    selected_max_age = max(0, int(max_age_hours))
+    latest_at = None
+    if isinstance(run, dict):
+        for key in ("completed_at", "started_at"):
+            latest_at = parse_radar_brief_timestamp(str(run.get(key) or ""))
+            if latest_at:
+                break
+    if latest_at is None:
+        return {
+            "status": "unknown",
+            "age_hours": None,
+            "max_age_hours": selected_max_age,
+            "latest_at": "",
+            "checked_at": iso_timestamp(selected_now),
+        }
+    age_hours = round(max(0.0, (selected_now - latest_at).total_seconds()) / 3600, 2)
+    return {
+        "status": "stale" if age_hours > selected_max_age else "fresh",
+        "age_hours": age_hours,
+        "max_age_hours": selected_max_age,
+        "latest_at": iso_timestamp(latest_at),
+        "checked_at": iso_timestamp(selected_now),
+    }
+
+
 def radar_brief_status_counts(runs: list[dict[str, Any]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for run in runs:
@@ -2165,6 +2199,44 @@ def radar_review_counts(records: list[dict[str, Any]] | dict[str, dict[str, Any]
         counts["all"] += 1
         counts[status] = counts.get(status, 0) + 1
     return counts
+
+
+def radar_pdf_access_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    summary: dict[str, Any] = {
+        "total": 0,
+        "downloadable": 0,
+        "downloaded": 0,
+        "metadata_or_link_only": 0,
+        "kinds": {},
+    }
+    for record in values:
+        pdf_access = radar_history_pdf_access(record)
+        if not pdf_access:
+            continue
+        summary["total"] += 1
+        kind = str(pdf_access.get("access_kind") or "unknown").strip() or "unknown"
+        summary["kinds"][kind] = int(summary["kinds"].get(kind, 0)) + 1
+        if pdf_access.get("can_download"):
+            summary["downloadable"] += 1
+        else:
+            summary["metadata_or_link_only"] += 1
+        if pdf_access.get("downloaded"):
+            summary["downloaded"] += 1
+    summary["kinds"] = dict(sorted(summary["kinds"].items()))
+    return summary
+
+
+def radar_history_pdf_access(record: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        record.get("pdf_access"),
+        (record.get("paper") if isinstance(record.get("paper"), dict) else {}).get("pdf_access"),
+        (record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}).get("pdf_access"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
 
 
 def build_radar_review_queue(

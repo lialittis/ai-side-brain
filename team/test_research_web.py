@@ -139,16 +139,22 @@ class TeamResearchWebTest(unittest.TestCase):
             )
 
             html = render_latest_papers_page(database)
-            payload = build_team_literature_radar_queue_payload(database, limit=20)
+            payload = build_team_literature_radar_queue_payload(
+                database,
+                limit=20,
+                now=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
+            )
 
             self.assertIn("Radar Queue", html)
             self.assertIn("0 unreviewed, 0 watch, 0 dismissed from 0 stored Radar papers.", html)
             self.assertIn("Latest run health:", html)
             self.assertIn("Latest run: 2026-07-01 07:30", html)
             self.assertIn("Status: failed", html)
+            self.assertIn("Freshness:", html)
             self.assertIn("Source errors: 1", html)
             self.assertNotIn("Priority Candidates", html)
             self.assertEqual(payload["latest_run"]["status"], "failed")
+            self.assertEqual(payload["latest_run"]["freshness"]["status"], "fresh")
             self.assertEqual(payload["latest_run"]["source_error_count"], 1)
             self.assertEqual(payload["latest_run"]["source_errors"][0]["source_id"], "dblp")
 
@@ -198,12 +204,15 @@ class TeamResearchWebTest(unittest.TestCase):
             thread.start()
             try:
                 port = server.server_address[1]
-                with urlopen(f"http://127.0.0.1:{port}/radar/queue.json?limit=1", timeout=5) as response:
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/queue.json?limit=1&freshness_max_age_hours=12",
+                    timeout=5,
+                ) as response:
                     queue_payload = json.loads(response.read().decode("utf-8"))
                     queue_content_type = response.headers.get("Content-Type")
                     queue_status = response.status
                 with urlopen(
-                    f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5",
+                    f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5&freshness_max_age_hours=12",
                     timeout=5,
                 ) as response:
                     brief_payload = json.loads(response.read().decode("utf-8"))
@@ -220,8 +229,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["kind"], "team_literature_radar_queue")
             self.assertEqual(queue_payload["limit"], 1)
             self.assertEqual(queue_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
+            self.assertEqual(queue_payload["access_summary"]["downloadable"], 1)
+            self.assertEqual(queue_payload["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_payload["latest_run"]["id"], run["id"])
             self.assertEqual(queue_payload["latest_run"]["status"], "succeeded")
+            self.assertEqual(queue_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertIn(
@@ -239,8 +251,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["run_count"], 1)
             self.assertEqual(brief_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
             self.assertEqual(brief_payload["queue"]["review"], "unreviewed")
+            self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
+            self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(brief_payload["latest_run"]["id"], run["id"])
+            self.assertEqual(brief_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertIn("Team Literature Radar Brief", brief_payload["brief"])
             self.assertIn("Route Verified Radar Queue Paper", brief_payload["brief"])
             self.assertEqual(brief_payload["links"]["radar"], "/radar")
@@ -414,6 +429,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Source errors", html)
             self.assertIn("DBLP unavailable", html)
             self.assertIn(">New<", html)
+            self.assertIn("kind: arxiv_pdf", html)
             self.assertIn("license: unknown", html)
             self.assertIn("accessed:", html)
             self.assertIn("arxiv", html)
@@ -863,6 +879,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Priority Candidates", latest_html)
             self.assertIn("Unreviewed Radar History Paper", latest_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
+            self.assertIn("PDF: arxiv_or_open_repository", latest_html)
+            self.assertIn("kind: arxiv_pdf", latest_html)
+            self.assertIn("PDF access:", latest_html)
+            self.assertIn("1 downloadable, 0 cached, 0 metadata/link-only", latest_html)
+            self.assertIn("arxiv_pdf: 1", latest_html)
             self.assertIn("<strong>Why:</strong>", latest_html)
             self.assertIn("<strong>Matched:</strong>", latest_html)
             self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)
@@ -881,6 +902,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["kind"], "team_literature_radar_queue")
             self.assertEqual(queue_payload["review"], "unreviewed")
             self.assertEqual(queue_payload["review_counts"], {"all": 2, "unreviewed": 1, "watch": 1, "dismissed": 0})
+            self.assertEqual(queue_payload["access_summary"]["downloadable"], 1)
+            self.assertEqual(queue_payload["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_payload["latest_run"]["id"], other_run["id"])
             self.assertEqual(queue_payload["latest_run"]["status"], "succeeded")
             self.assertEqual(queue_payload["latest_run"]["collected_count"], 1)

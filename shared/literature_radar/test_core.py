@@ -32,9 +32,11 @@ from shared.literature_radar import (
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_pdf_access_summary,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
+    radar_run_freshness,
     radar_source_error,
     recommend_papers,
     score_paper_against_profile,
@@ -245,6 +247,53 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(watch_queue["review"], "watch")
         self.assertEqual([record["title"] for record in watch_queue["papers"]], ["Watched High Score"])
         self.assertEqual(radar_review_counts(records)["dismissed"], 1)
+
+    def test_summarizes_pdf_access_for_radar_history_records(self) -> None:
+        records = [
+            {"pdf_access": {"access_kind": "arxiv_pdf", "can_download": True, "downloaded": False}},
+            {"pdf_access": {"access_kind": "open_access_pdf", "can_download": True, "downloaded": True}},
+            {"pdf_access": {"access_kind": "doi_link", "can_download": False, "downloaded": False}},
+            {"paper": {"pdf_access": {"access_kind": "metadata_only", "can_download": False}}},
+            {"title": "No PDF access recorded"},
+        ]
+
+        summary = radar_pdf_access_summary(records)
+
+        self.assertEqual(summary["total"], 4)
+        self.assertEqual(summary["downloadable"], 2)
+        self.assertEqual(summary["downloaded"], 1)
+        self.assertEqual(summary["metadata_or_link_only"], 2)
+        self.assertEqual(
+            summary["kinds"],
+            {
+                "arxiv_pdf": 1,
+                "doi_link": 1,
+                "metadata_only": 1,
+                "open_access_pdf": 1,
+            },
+        )
+
+    def test_reports_radar_run_freshness(self) -> None:
+        now = datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc)
+
+        fresh = radar_run_freshness(
+            {"started_at": "2026-07-02T08:00:00+00:00"},
+            now=now,
+            max_age_hours=36,
+        )
+        stale = radar_run_freshness(
+            {"completed_at": "2026-06-30T08:00:00+00:00", "started_at": "2026-06-30T07:00:00+00:00"},
+            now=now,
+            max_age_hours=36,
+        )
+        unknown = radar_run_freshness({}, now=now, max_age_hours=36)
+
+        self.assertEqual(fresh["status"], "fresh")
+        self.assertEqual(fresh["age_hours"], 4.0)
+        self.assertEqual(stale["status"], "stale")
+        self.assertEqual(stale["age_hours"], 52.0)
+        self.assertEqual(unknown["status"], "unknown")
+        self.assertIsNone(unknown["age_hours"])
 
     def test_deduplicates_by_doi_and_merges_source_records(self) -> None:
         first = create_radar_paper(

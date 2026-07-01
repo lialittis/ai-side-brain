@@ -221,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue = subparsers.add_parser("radar-queue", help="show active Literature Radar papers worth reviewing first")
     add_db_args(radar_queue)
     radar_queue.add_argument("--limit", type=int, default=3)
+    radar_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_review = subparsers.add_parser(
@@ -245,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_brief.add_argument("--days", type=int, default=7, help="history window in days")
     radar_brief.add_argument("--limit", type=int, default=20, help="maximum recommendations in the brief")
     radar_brief.add_argument("--run-limit", type=int, default=50, help="maximum stored runs to inspect")
+    radar_brief.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_brief.add_argument("--output", type=Path, help="write Markdown brief")
     radar_brief.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -491,6 +493,9 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     latest_run = result.get("latest_run") if isinstance(result.get("latest_run"), dict) else {}
     if latest_run:
         print(format_radar_queue_latest_run(latest_run))
+    access_summary = result.get("access_summary") if isinstance(result.get("access_summary"), dict) else {}
+    if access_summary:
+        print(format_radar_queue_access_summary(access_summary))
     review = str(result.get("review") or "")
     if not review:
         print("No active unreviewed or watched Radar papers.")
@@ -500,6 +505,7 @@ def print_radar_queue(result: dict[str, Any]) -> None:
 
 
 def format_radar_queue_latest_run(run: dict[str, Any]) -> str:
+    freshness = run.get("freshness") if isinstance(run.get("freshness"), dict) else {}
     parts = [
         f"Latest run: {run.get('id') or 'unknown'}",
         f"status={run.get('status') or 'unknown'}",
@@ -508,6 +514,10 @@ def format_radar_queue_latest_run(run: dict[str, Any]) -> str:
         f"recommended={int(run.get('recommendation_count') or 0)}",
         f"source_errors={int(run.get('source_error_count') or 0)}",
     ]
+    if freshness:
+        parts.append(f"freshness={freshness.get('status') or 'unknown'}")
+        if freshness.get("age_hours") is not None:
+            parts.append(f"age_hours={freshness.get('age_hours')}")
     source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
     error_sources = [
         str(error.get("source_id") or "source")
@@ -516,6 +526,25 @@ def format_radar_queue_latest_run(run: dict[str, Any]) -> str:
     ]
     if error_sources:
         parts.append(f"error_sources={', '.join(error_sources)}")
+    return " | ".join(parts)
+
+
+def format_radar_queue_access_summary(summary: dict[str, Any]) -> str:
+    kinds = summary.get("kinds") if isinstance(summary.get("kinds"), dict) else {}
+    parts = [
+        "PDF access:",
+        f"total={int(summary.get('total') or 0)}",
+        f"downloadable={int(summary.get('downloadable') or 0)}",
+        f"cached={int(summary.get('downloaded') or 0)}",
+        f"metadata_or_link_only={int(summary.get('metadata_or_link_only') or 0)}",
+    ]
+    kind_text = ", ".join(
+        f"{kind}={int(count)}"
+        for kind, count in sorted(kinds.items())
+        if int(count or 0) > 0
+    )
+    if kind_text:
+        parts.append(f"kinds={kind_text}")
     return " | ".join(parts)
 
 
@@ -769,7 +798,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-queue":
-        result = build_team_literature_radar_queue_payload(database, limit=args.limit)
+        result = build_team_literature_radar_queue_payload(
+            database,
+            limit=args.limit,
+            freshness_max_age_hours=args.freshness_max_age_hours,
+        )
         if args.json:
             print_json(result)
         else:
@@ -812,6 +845,7 @@ def main(argv: list[str] | None = None) -> int:
             days=args.days,
             limit=args.limit,
             run_limit=args.run_limit,
+            freshness_max_age_hours=args.freshness_max_age_hours,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

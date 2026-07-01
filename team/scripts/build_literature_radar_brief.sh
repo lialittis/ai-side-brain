@@ -30,6 +30,7 @@ ARGS=(
   "--days" "${RADAR_BRIEF_DAYS:-7}"
   "--limit" "${RADAR_BRIEF_RECOMMENDATION_LIMIT:-20}"
   "--run-limit" "${RADAR_BRIEF_RUN_LIMIT:-50}"
+  "--freshness-max-age-hours" "${RADAR_FRESHNESS_MAX_AGE_HOURS:-36}"
   "--output" "$BRIEF_PATH"
   "--json"
 )

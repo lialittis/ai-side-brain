@@ -32,6 +32,7 @@ ARGS=(
   "--days" "${PERSONAL_RADAR_BRIEF_DAYS:-7}"
   "--limit" "${PERSONAL_RADAR_BRIEF_RECOMMENDATION_LIMIT:-20}"
   "--run-limit" "${PERSONAL_RADAR_BRIEF_RUN_LIMIT:-50}"
+  "--freshness-max-age-hours" "${PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS:-36}"
   "--output" "$BRIEF_PATH"
   "--json"
 )

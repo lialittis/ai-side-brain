@@ -26,7 +26,9 @@ if str(ROOT) not in sys.path:
 from shared.literature_radar import (
     assess_pdf_access,
     build_radar_review_queue,
+    radar_pdf_access_summary,
     radar_latest_signal_lines,
+    radar_run_freshness,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
@@ -1760,6 +1762,7 @@ def render_pdf_access_pill(pdf_access: dict[str, Any]) -> str:
     details = " | ".join(
         part
         for part in [
+            f"kind: {pdf_access.get('access_kind') or 'unknown'}",
             f"source: {pdf_access.get('source_url') or 'unknown'}",
             f"oa: {pdf_access.get('oa_status') or 'unknown'}",
             f"license: {pdf_access.get('license') or 'unknown'}",
@@ -1923,6 +1926,7 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
       </div>
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
+      {render_radar_queue_access_summary(priority_records)}
       {render_latest_radar_queue_preview(priority_records, review_filter=selected_review)}
     </section>
     """
@@ -1948,11 +1952,15 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         ]
         suffix = f" ({', '.join(source_ids)})" if source_ids else ""
         source_error_label = f'<span class="pill warn">Source errors: {len(source_errors)}{html_escape(suffix)}</span>'
+    freshness = radar_run_freshness(run)
+    freshness_css = "warn" if freshness.get("status") == "stale" else "good" if freshness.get("status") == "fresh" else ""
+    freshness_label = f'<span class="pill {freshness_css}">Freshness: {html_escape(freshness.get("status") or "unknown")}</span>'
     return f"""
     <div class="tags">
       <span class="muted">Latest run health:</span>
       {run_link}
       {status_pill(str(run.get("status") or "unknown"))}
+      {freshness_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
       <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
       {source_error_label}
@@ -1972,9 +1980,40 @@ def render_latest_radar_queue_preview(records: list[dict[str, Any]], *, review_f
     """
 
 
+def render_radar_queue_access_summary(records: list[dict[str, Any]]) -> str:
+    summary = radar_pdf_access_summary(records)
+    if int(summary.get("total") or 0) == 0:
+        return ""
+    kind_text = radar_access_kind_summary_text(summary.get("kinds") if isinstance(summary.get("kinds"), dict) else {})
+    parts = [
+        f"{int(summary.get('downloadable') or 0)} downloadable",
+        f"{int(summary.get('downloaded') or 0)} cached",
+        f"{int(summary.get('metadata_or_link_only') or 0)} metadata/link-only",
+    ]
+    return f"""
+    <div class="tags">
+      <span class="muted">PDF access:</span>
+      <span class="pill">{html_escape(', '.join(parts))}</span>
+      {f'<span class="tag">{html_escape(kind_text)}</span>' if kind_text else ''}
+    </div>
+    """
+
+
+def radar_access_kind_summary_text(kinds: dict[str, Any]) -> str:
+    if not kinds:
+        return ""
+    return ", ".join(
+        f"{kind}: {int(count)}"
+        for kind, count in sorted(kinds.items())
+        if int(count or 0) > 0
+    )
+
+
 def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str) -> str:
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
     latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    pdf_access = record.get("pdf_access") if isinstance(record.get("pdf_access"), dict) else {}
+    pdf_access_html = render_pdf_access_pill(pdf_access) if pdf_access else ""
     review = radar_review_from_record(record)
     label = str(latest.get("label") or "needs_review")
     score = int(float(latest.get("score") or 0))
@@ -1993,6 +2032,7 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
         {render_radar_review_pill(review)}
         {relevance_pill(label)}
         <span class="pill">Score: {score}</span>
+        {pdf_access_html}
         {source_tags}
       </div>
       {render_radar_signal_lines(latest)}
@@ -2986,6 +3026,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                     build_team_literature_radar_queue_payload(
                         self.database,
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        freshness_max_age_hours=clean_positive_int(
+                            query.get("freshness_max_age_hours", [""])[0],
+                            default=36,
+                            maximum=24 * 30,
+                        ),
                     )
                 )
             elif parsed.path == "/radar/brief":
@@ -3004,6 +3049,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                         run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                        freshness_max_age_hours=clean_positive_int(
+                            query.get("freshness_max_age_hours", [""])[0],
+                            default=36,
+                            maximum=24 * 30,
+                        ),
                     )
                 )
             elif parsed.path == "/radar/papers":
