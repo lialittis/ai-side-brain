@@ -42,6 +42,7 @@ http://127.0.0.1:8790/radar/brief?days=7
 http://127.0.0.1:8790/radar/brief.json?days=7
 http://127.0.0.1:8790/radar/papers
 http://127.0.0.1:8790/radar/queue.json
+http://127.0.0.1:8790/radar/settings.json
 ```
 
 The page is review-first:
@@ -126,6 +127,17 @@ source contact email, source preset, tracked authors, positive and negative seed
 defaults live in the existing `team_settings` table under
 `literature_radar_defaults`, so the team can configure daily-use radar settings
 once and reuse them for later ad hoc or scheduled runs.
+The source checkboxes are generated from the shared Literature Radar source
+registry, and each option displays its source class and access path. This keeps
+Team web usage aligned with the same supported API/accepted-page collectors used
+by Personal Radar and the CLI.
+The Radar Profile block also shows pre-run source readiness for the saved form
+settings. It flags missing required inputs such as seed paper IDs or OpenReview
+invitation IDs before a team member starts a run, and it shows recommended
+configuration such as OpenAlex or Crossref contact mail.
+The same read-only settings and readiness contract is available as local JSON at
+`/radar/settings.json`, so automation can verify source selection and readiness
+without starting collectors, downloading PDFs, or calling AI.
 
 ## CLI Runner
 
@@ -133,7 +145,14 @@ The current runnable Team entry point is:
 
 ```bash
 python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --output team/logs/literature-radar.md
+python team/research_cli.py radar-settings
+python team/research_cli.py radar-settings --json
 ```
+
+`radar-settings` is a read-only preflight command. It prints the saved Team
+Radar defaults, selected sources, source policy, and pre-run readiness without
+starting collectors, downloading PDFs, or calling AI. Use it before enabling a
+cron/systemd job or after changing `/radar` defaults.
 
 Useful options:
 
@@ -317,6 +336,7 @@ priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
 papers and papers already imported into the library, and the text output includes
 stored signal lines for why a paper is relevant, how it relates to existing
 context, and which interests matched. Use
+`radar-settings` to verify saved source readiness before a scheduled run. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 `--status dismissed`, or `--status unreviewed` to change a stored paper from
@@ -395,15 +415,19 @@ should ignore web-saved defaults and use only explicit environment variables.
 
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
-local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. It also writes
+local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. Before
+collection, it writes a read-only `literature-radar-settings-*` preflight JSON
+snapshot unless `RADAR_WRITE_SETTINGS=0`; that snapshot reflects saved defaults
+plus explicit environment overrides passed to the scheduled run. It also writes
 text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
 includes latest-run health/freshness, source-error counts, PDF access summary, stored summary,
 relevance/context signal, and matched interests for daily review. The JSON
 snapshot uses the same queue payload as `radar-queue --json`, including
 `latest_run` health, `access_summary`, plus per-paper `signal_lines`. Stable
-`literature-radar-queue-latest.*` files are refreshed when latest-copy output is
-enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
+`literature-radar-settings-latest.json` and `literature-radar-queue-latest.*`
+files are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT`
+to change how many active queue papers are included. The
 brief script writes a stored-run roll-up without collecting again and refreshes
 `literature-radar-brief-latest.*` when latest-copy output is enabled. The cycle
 script runs both in order; if collection fails, the brief step does not run.
@@ -441,6 +465,8 @@ It reads `.env` first and supports these optional variables:
   `team_security_daily` for the current team workflow, `broad_daily` for the
   broad metadata default, or `top_venues` for a proceedings-focused sweep.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
+- `RADAR_WRITE_SETTINGS=0`: skip writing settings/readiness preflight snapshots
+  from `run_literature_radar.sh`.
 - `RADAR_WRITE_QUEUE=0`: skip writing queue snapshots from
   `run_literature_radar.sh`.
 - `RADAR_WRITE_LATEST=0`: skip refreshing stable `*-latest.*` copies while

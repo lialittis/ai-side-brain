@@ -467,6 +467,25 @@ TREND_SIGNAL_SOURCE_REGISTRY: list[dict[str, Any]] = [
     },
 ]
 TREND_SIGNAL_SOURCES = [source["name"] for source in TREND_SIGNAL_SOURCE_REGISTRY]
+RADAR_SOURCE_LABELS: dict[str, str] = {
+    "arxiv": "arXiv",
+    "dblp": "DBLP",
+    "dblp_authors": "DBLP Authors",
+    "dblp_venues": "DBLP Venues",
+    "semantic_scholar": "Semantic Scholar",
+    "semantic_scholar_authors": "S2 Authors",
+    "semantic_scholar_citations": "S2 Citations",
+    "semantic_scholar_references": "S2 References",
+    "semantic_scholar_recommendations": "Semantic Scholar Seeds",
+    "openalex": "OpenAlex",
+    "openalex_authors": "OpenAlex Authors",
+    "openalex_venues": "OpenAlex Venues",
+    "crossref": "Crossref",
+    "openreview": "OpenReview",
+    "openreview_venues": "OpenReview Venues",
+    "usenix_security": "USENIX Security",
+    "ndss": "NDSS",
+}
 RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
 RADAR_ACTIVE_REVIEW_STATUSES = ("unreviewed", "watch")
 
@@ -661,6 +680,72 @@ def append_radar_source_policy_to_report(
 
 def mvp_source_ids() -> list[str]:
     return [source["id"] for source in SOURCE_REGISTRY if source.get("mvp_collector")]
+
+
+def radar_supported_source_ids() -> list[str]:
+    """Return selectable Literature Radar collector IDs shared by all adapters."""
+    return mvp_source_ids()
+
+
+def radar_source_label(source_id: str) -> str:
+    selected_source_id = clean_radar_source_id(source_id)
+    return RADAR_SOURCE_LABELS.get(selected_source_id, radar_source_policy_record(selected_source_id)["name"])
+
+
+def radar_source_option_metadata(source_id: str) -> str:
+    record = radar_source_policy_record(source_id)
+    source_class = str(record.get("source_class") or "unknown").replace("_", " ")
+    access = str(record.get("access") or "unknown").replace("_", " ")
+    role = str(record.get("primary_role") or "").replace("_", " ")
+    parts = [source_class, access]
+    if role:
+        parts.append(role)
+    return " | ".join(parts)
+
+
+def radar_source_options(selected_sources: list[str] | tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    selected_source_ids = set(unique_source_ids(list(selected_sources or [])))
+    return [
+        {
+            "id": source_id,
+            "label": radar_source_label(source_id),
+            "selected": source_id in selected_source_ids,
+            "metadata": radar_source_option_metadata(source_id),
+            "policy": radar_source_policy_record(source_id),
+        }
+        for source_id in radar_supported_source_ids()
+    ]
+
+
+def build_radar_preflight_payload(
+    *,
+    kind: str,
+    settings: dict[str, Any],
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None,
+    source_preset_label: str | None = None,
+    links: dict[str, Any] | None = None,
+    paths: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_sources = unique_source_ids(list(sources or settings.get("sources") or []))
+    selected_config = dict(collection_config or {})
+    payload: dict[str, Any] = {
+        "success": True,
+        "kind": kind,
+        "settings": dict(settings),
+        "source_preset_label": source_preset_label or str(settings.get("source_preset") or "Custom"),
+        "source_labels": [radar_source_label(source_id) for source_id in selected_sources],
+        "supported_source_ids": radar_supported_source_ids(),
+        "source_options": radar_source_options(selected_sources),
+        "collection_config": selected_config,
+        "source_policy": radar_source_policy_summary(selected_sources),
+        "source_readiness": radar_source_readiness_summary(selected_sources, selected_config),
+    }
+    if links is not None:
+        payload["links"] = dict(links)
+    if paths is not None:
+        payload["paths"] = dict(paths)
+    return payload
 
 
 def radar_source_presets() -> list[dict[str, Any]]:

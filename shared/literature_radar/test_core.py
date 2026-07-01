@@ -20,6 +20,7 @@ from shared.literature_radar import (
     assess_pdf_access,
     build_recommendation_report,
     build_radar_pipeline_trace,
+    build_radar_preflight_payload,
     build_radar_history_brief,
     build_radar_review_queue,
     build_venue_coverage_summary,
@@ -52,6 +53,10 @@ from shared.literature_radar import (
     radar_run_status_from_source_health,
     radar_source_coverage_summary,
     radar_source_error,
+    radar_source_label,
+    radar_source_option_metadata,
+    radar_source_options,
+    radar_supported_source_ids,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
@@ -77,7 +82,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(sources["openreview_venues"]["derived_from"], "openreview")
         self.assertIn("usenix_security", mvp_source_ids())
         self.assertIn("ndss", mvp_source_ids())
-        supported_adapter_sources = {
+        supported_adapter_sources = [
             "arxiv",
             "dblp",
             "dblp_authors",
@@ -90,13 +95,22 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "openalex",
             "openalex_authors",
             "openalex_venues",
+            "crossref",
             "openreview",
             "openreview_venues",
-            "crossref",
             "usenix_security",
             "ndss",
-        }
-        self.assertTrue(supported_adapter_sources.issubset(sources))
+        ]
+        self.assertEqual(radar_supported_source_ids(), supported_adapter_sources)
+        self.assertEqual(mvp_source_ids(), supported_adapter_sources)
+        self.assertTrue(set(supported_adapter_sources).issubset(sources))
+        self.assertEqual(radar_source_label("semantic_scholar_recommendations"), "Semantic Scholar Seeds")
+        self.assertIn("seed paper recommendation expansion", radar_source_option_metadata("semantic_scholar_recommendations"))
+        options = radar_source_options(["openalex"])
+        self.assertEqual([option["id"] for option in options], supported_adapter_sources)
+        self.assertEqual([option["id"] for option in options if option["selected"]], ["openalex"])
+        self.assertEqual(options[0]["label"], "arXiv")
+        self.assertIn("policy", options[0])
         self.assertEqual(
             RADAR_PIPELINE_PHASES,
             [
@@ -133,6 +147,28 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("## Source Policy", report)
         self.assertIn("trend_signals=1", report)
         self.assertIn("secondary context", report)
+
+    def test_preflight_payload_uses_shared_source_policy_and_readiness(self) -> None:
+        payload = build_radar_preflight_payload(
+            kind="test_radar_settings",
+            settings={"source_preset": "custom", "sources": ["semantic_scholar_recommendations", "openalex"]},
+            sources=["semantic_scholar_recommendations", "openalex"],
+            collection_config={"seed_paper_ids": ["seed-1"], "openalex_mailto_configured": True},
+            source_preset_label="Custom",
+            links={"html": "/radar"},
+            paths={"root": "/tmp/radar"},
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kind"], "test_radar_settings")
+        self.assertEqual(payload["source_labels"], ["Semantic Scholar Seeds", "OpenAlex"])
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
+        self.assertEqual(payload["source_readiness"]["status"], "ready_with_warnings")
+        self.assertEqual(payload["source_readiness"]["warning_source_ids"], ["semantic_scholar_recommendations"])
+        selected = [option["id"] for option in payload["source_options"] if option["selected"]]
+        self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
+        self.assertEqual(payload["links"]["html"], "/radar")
+        self.assertEqual(payload["paths"]["root"], "/tmp/radar")
 
     def test_shared_source_presets_cover_daily_and_top_venue_workflows(self) -> None:
         presets = {preset["id"]: preset for preset in radar_source_presets()}

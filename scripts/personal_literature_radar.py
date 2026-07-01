@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +20,13 @@ from personal.literature_radar import (
     build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
+    personal_radar_collection_config,
     read_personal_radar_index,
     read_personal_radar_paper_history,
     run_personal_literature_radar,
 )
 from shared.literature_radar import (
+    build_radar_preflight_payload,
     format_radar_run_health_action,
     format_radar_source_policy,
     format_radar_source_coverage,
@@ -32,11 +35,18 @@ from shared.literature_radar import (
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
+    radar_source_preset,
     radar_source_presets,
+    radar_supported_source_ids,
 )
 
 
 PERSONAL_RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
+PERSONAL_RADAR_SEED_SOURCES = {
+    "semantic_scholar_citations",
+    "semantic_scholar_references",
+    "semantic_scholar_recommendations",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,25 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[preset["id"] for preset in radar_source_presets()],
         help="named shared Literature Radar source bundle",
     )
-    run.add_argument("--source", action="append", choices=[
-        "arxiv",
-        "dblp",
-        "dblp_authors",
-        "dblp_venues",
-        "semantic_scholar",
-        "semantic_scholar_authors",
-        "semantic_scholar_citations",
-        "semantic_scholar_references",
-        "semantic_scholar_recommendations",
-        "openalex",
-        "openalex_authors",
-        "openalex_venues",
-        "openreview",
-        "openreview_venues",
-        "crossref",
-        "usenix_security",
-        "ndss",
-    ])
+    run.add_argument("--source", action="append", choices=radar_supported_source_ids())
     run.add_argument("--query-term", action="append", default=[])
     run.add_argument("--max-results", type=int, default=25)
     run.add_argument("--limit", type=int, default=10)
@@ -129,6 +121,38 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     queue.add_argument("--json", action="store_true")
 
+    settings = subparsers.add_parser("settings", help="show personal radar defaults and pre-run source readiness")
+    settings.add_argument("--source-preset", choices=[preset["id"] for preset in radar_source_presets()])
+    settings.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    settings.add_argument("--max-results", type=int, default=25)
+    settings.add_argument("--limit", type=int, default=10)
+    settings.add_argument("--summarize", action="store_true")
+    settings.add_argument("--summary-provider", choices=["local", "openrouter"], default="local")
+    settings.add_argument("--summary-limit", type=int)
+    settings.add_argument("--semantic-scholar-api-key")
+    settings.add_argument("--dblp-author-pid", action="append", default=[])
+    settings.add_argument("--semantic-scholar-author-id", action="append", default=[])
+    settings.add_argument("--seed-paper-id", action="append", default=[])
+    settings.add_argument("--negative-seed-paper-id", action="append", default=[])
+    settings.add_argument("--source-contact-email")
+    settings.add_argument("--openalex-mailto")
+    settings.add_argument("--openalex-author-id", action="append", default=[])
+    settings.add_argument("--openreview-invitation", action="append", default=[])
+    settings.add_argument("--openreview-venue-profile", action="append", default=[])
+    settings.add_argument("--include-openreview-unaccepted", action="store_true")
+    settings.add_argument("--crossref-mailto")
+    settings.add_argument("--unpaywall-email")
+    settings.add_argument("--cache-pdfs", action="store_true")
+    settings.add_argument("--pdf-cache-dir", type=Path)
+    settings.add_argument("--pdf-cache-max-bytes", type=int, default=50 * 1024 * 1024)
+    settings.add_argument("--conference-year", type=int)
+    settings.add_argument("--venue-profile", action="append", default=[])
+    settings.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    settings.add_argument("--topic-profile", type=Path)
+    settings.add_argument("--root-path", type=Path, default=ROOT)
+    settings.add_argument("--no-report", action="store_true")
+    settings.add_argument("--json", action="store_true")
+
     review = subparsers.add_parser("review", help="mark one personal radar paper as watch, dismissed, or unreviewed")
     review.add_argument("dedupe_key")
     review.add_argument("--root-path", type=Path, default=ROOT)
@@ -151,6 +175,116 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_json(record: Any) -> None:
     print(json.dumps(record, ensure_ascii=True, indent=2, sort_keys=True))
+
+
+def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -> dict[str, Any]:
+    selected_now = datetime.now(timezone.utc)
+    preset = radar_source_preset(args.source_preset)
+    selected_sources = list((preset or {}).get("sources") or args.source or DEFAULT_PERSONAL_RADAR_SOURCES)
+    selected_dblp_venue_profiles = args.venue_profile or None
+    selected_openreview_venue_profiles = args.openreview_venue_profile or None
+    selected_usenix_cycles = args.usenix_cycle or None
+    if preset:
+        if selected_dblp_venue_profiles is None:
+            selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
+        if selected_openreview_venue_profiles is None:
+            selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
+        if selected_usenix_cycles is None:
+            selected_usenix_cycles = list(preset.get("usenix_security_cycles") or [])
+    if args.seed_paper_id and not any(source in selected_sources for source in PERSONAL_RADAR_SEED_SOURCES):
+        selected_sources.append("semantic_scholar_recommendations")
+    collection_config = personal_radar_collection_config(
+        selected_sources=selected_sources,
+        source_preset=(preset or {}).get("id"),
+        max_results=args.max_results,
+        recommendation_limit=args.limit,
+        summarize=args.summarize or args.summary_provider == "openrouter",
+        summary_provider=args.summary_provider,
+        summary_limit=args.summary_limit,
+        semantic_scholar_api_key=args.semantic_scholar_api_key,
+        seed_paper_ids=args.seed_paper_id or None,
+        negative_seed_paper_ids=args.negative_seed_paper_id or None,
+        openalex_mailto=args.openalex_mailto or args.source_contact_email,
+        openreview_invitations=args.openreview_invitation or None,
+        crossref_mailto=args.crossref_mailto or args.source_contact_email,
+        unpaywall_email=args.unpaywall_email or args.source_contact_email,
+        semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
+        dblp_author_pids=args.dblp_author_pid or None,
+        openalex_author_ids=args.openalex_author_id or None,
+        conference_year=args.conference_year,
+        dblp_venue_profiles=selected_dblp_venue_profiles,
+        openreview_venue_profiles=selected_openreview_venue_profiles,
+        openreview_accepted_only=not args.include_openreview_unaccepted,
+        usenix_security_cycles=selected_usenix_cycles,
+        topic_profile_path=args.topic_profile,
+        write_report=not args.no_report,
+        cache_pdfs=args.cache_pdfs,
+        pdf_cache_dir=args.pdf_cache_dir,
+        pdf_cache_max_bytes=args.pdf_cache_max_bytes,
+        now=selected_now,
+    )
+    settings = {
+        "source_preset": (preset or {}).get("id") or "custom",
+        "sources": selected_sources,
+        "max_results": args.max_results,
+        "limit": args.limit,
+        "summarize": args.summarize or args.summary_provider == "openrouter",
+        "summary_provider": args.summary_provider,
+        "cache_pdfs": args.cache_pdfs,
+        "pdf_cache_dir": str(args.pdf_cache_dir) if args.pdf_cache_dir else "",
+        "pdf_cache_max_bytes": args.pdf_cache_max_bytes,
+        "conference_year": args.conference_year or "",
+        "usenix_security_cycles": selected_usenix_cycles or [],
+        "include_openreview_unaccepted": bool(args.include_openreview_unaccepted),
+        "topic_profile_path": str(args.topic_profile) if args.topic_profile else "",
+        "write_report": not args.no_report,
+        "seed_paper_ids": args.seed_paper_id or [],
+        "negative_seed_paper_ids": args.negative_seed_paper_id or [],
+        "semantic_scholar_author_ids": args.semantic_scholar_author_id or [],
+        "dblp_author_pids": args.dblp_author_pid or [],
+        "openalex_author_ids": args.openalex_author_id or [],
+        "openreview_invitations": args.openreview_invitation or [],
+        "openreview_venue_profiles": selected_openreview_venue_profiles or [],
+        "venue_profiles": selected_dblp_venue_profiles or [],
+    }
+    return build_radar_preflight_payload(
+        kind="personal_literature_radar_settings",
+        settings=settings,
+        sources=selected_sources,
+        collection_config=collection_config,
+        source_preset_label=(preset or {}).get("name") or "Custom",
+        paths={
+            "root": str(args.root_path),
+            "topic_profile": str(args.topic_profile) if args.topic_profile else "indexes/literature-radar-topic-profile.json",
+        },
+    )
+
+
+def print_settings(result: dict[str, Any]) -> None:
+    settings = result.get("settings") if isinstance(result.get("settings"), dict) else {}
+    print("Personal Literature Radar Settings")
+    print(f"Preset: {result.get('source_preset_label') or settings.get('source_preset') or 'Custom'}")
+    print(f"Sources: {', '.join(result.get('source_labels') or settings.get('sources') or [])}")
+    print(f"Max/source: {settings.get('max_results') or 'n/a'}")
+    print(f"Recommendations: {settings.get('limit') or 'n/a'}")
+    print(f"Summaries: {'yes' if settings.get('summarize') else 'no'}")
+    print(f"Provider: {settings.get('summary_provider') or 'local'}")
+    source_policy = result.get("source_policy") if isinstance(result.get("source_policy"), dict) else {}
+    if source_policy:
+        print(format_radar_source_policy(source_policy))
+    source_readiness = result.get("source_readiness") if isinstance(result.get("source_readiness"), dict) else {}
+    if source_readiness:
+        print(format_radar_source_readiness(source_readiness))
+        for entry in source_readiness.get("missing_required") or []:
+            print(
+                f"! missing required for {entry.get('source_id')}: "
+                f"{entry.get('label') or entry.get('key')}"
+            )
+        for entry in source_readiness.get("missing_recommended") or []:
+            print(
+                f"! recommended for {entry.get('source_id')}: "
+                f"{entry.get('label') or entry.get('key')}"
+            )
 
 
 def print_run(result: dict[str, Any]) -> None:
@@ -452,6 +586,14 @@ def main(argv: list[str] | None = None) -> int:
                 latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
                 access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
             )
+        return 0
+
+    if args.command == "settings":
+        result = build_personal_literature_radar_settings_payload(args)
+        if args.json:
+            print_json(result)
+        else:
+            print_settings(result)
         return 0
 
     if args.command == "review":

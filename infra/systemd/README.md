@@ -45,10 +45,13 @@ from the defaults saved in `/radar`. Environment variables in `.env` can still
 override the script behavior. Brief timers write Markdown and JSON roll-ups to
 `team/logs/` and `memory/06_Logs/` by default; they do not call external paper
 sources.
-Collection timers also write active queue snapshots by default:
-`literature-radar-queue-*` under `team/logs/` and
-`personal-literature-radar-queue-*` under `memory/06_Logs/`. Set
-`RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable those files;
+Collection timers also write read-only settings/readiness snapshots and active
+queue snapshots by default: `literature-radar-settings-*` and
+`literature-radar-queue-*` under `team/logs/`, plus
+`personal-literature-radar-settings-*` and `personal-literature-radar-queue-*`
+under `memory/06_Logs/`. Set `RADAR_WRITE_SETTINGS=0` or
+`PERSONAL_RADAR_WRITE_SETTINGS=0` to skip settings snapshots; set
+`RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable queue files;
 set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size.
 Scheduled scripts also refresh stable `*-latest.*` copies for dashboards,
 aliases, or notification jobs. Set `RADAR_WRITE_LATEST=0` or

@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     assess_pdf_access,
+    build_radar_preflight_payload,
     build_radar_review_queue,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
@@ -32,6 +33,8 @@ from shared.literature_radar import (
     radar_run_health_action,
     radar_source_coverage_summary,
     radar_source_policy_summary,
+    radar_source_option_metadata,
+    radar_source_options,
     radar_source_readiness_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
@@ -44,6 +47,7 @@ from team.literature_radar import (
     build_team_radar_scorer,
     import_radar_recommendation,
     run_team_literature_radar,
+    team_radar_collection_config,
     team_radar_source_presets,
 )
 from team.research_ai import analyze_submitted_item
@@ -73,23 +77,8 @@ RADAR_REVIEW_FILTER_OPTIONS = [
     ("dismissed", "Dismissed"),
 ]
 RADAR_WEB_SOURCE_OPTIONS = [
-    ("arxiv", "arXiv"),
-    ("dblp", "DBLP"),
-    ("semantic_scholar", "Semantic Scholar"),
-    ("openalex", "OpenAlex"),
-    ("crossref", "Crossref"),
-    ("usenix_security", "USENIX Security"),
-    ("ndss", "NDSS"),
-    ("dblp_authors", "DBLP Authors"),
-    ("dblp_venues", "DBLP Venues"),
-    ("openalex_venues", "OpenAlex Venues"),
-    ("openreview", "OpenReview"),
-    ("openreview_venues", "OpenReview Venues"),
-    ("semantic_scholar_authors", "S2 Authors"),
-    ("openalex_authors", "OpenAlex Authors"),
-    ("semantic_scholar_recommendations", "Semantic Scholar Seeds"),
-    ("semantic_scholar_references", "S2 References"),
-    ("semantic_scholar_citations", "S2 Citations"),
+    (option["id"], option["label"])
+    for option in radar_source_options()
 ]
 RADAR_WEB_DEFAULT_SOURCES = set(DEFAULT_RADAR_SOURCES)
 RADAR_WEB_SEED_SOURCES = {
@@ -507,10 +496,19 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .radar-source-grid label, .radar-option-line {{
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 7px;
       color: #344054;
       font-size: 13px;
+    }}
+    .radar-source-text {{
+      display: grid;
+      gap: 2px;
+    }}
+    .radar-source-meta {{
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
     }}
     .radar-run-form textarea {{
       min-height: 52px;
@@ -890,6 +888,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     settings = radar_form_settings(database)
     latest_run = runs[0] if runs else None
     review_counts = database.literature_radar_paper_review_counts()
+    readiness = render_radar_settings_readiness(settings)
     chips = [
         render_radar_metric_chip("preset", radar_source_preset_label(settings)),
         render_radar_metric_chip("sources", radar_list_preview(radar_source_setting_labels(settings), limit=3)),
@@ -921,6 +920,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     <div class="radar-status">
       <h2>Radar Profile</h2>
       <div class="tags">{''.join(chips)}</div>
+      {readiness}
     </div>
     """
 
@@ -940,6 +940,125 @@ def radar_tracker_count(settings: dict[str, Any]) -> int:
     return sum(len(settings.get(key) or []) for key in RADAR_LIST_SETTING_KEYS)
 
 
+def render_radar_settings_readiness(settings: dict[str, Any]) -> str:
+    readiness = radar_source_readiness_summary(
+        list(settings.get("sources") or []),
+        radar_settings_collection_config(settings),
+    )
+    if readiness.get("status") == "no_sources":
+        return ""
+    status = str(readiness.get("status") or "unknown")
+    status_class = "tag warn" if status == "blocked" else "tag good" if status == "ready" else "tag"
+    chips = [
+        f'<span class="{status_class}">status: {html_escape(status)}</span>',
+        f'<span class="tag">sources: {int(readiness.get("source_count") or 0)}</span>',
+        f'<span class="tag">warnings: {int(readiness.get("warning_count") or 0)}</span>',
+        f'<span class="tag">blocked: {int(readiness.get("blocked_count") or 0)}</span>',
+    ]
+    blocked_sources = readiness.get("blocked_source_ids") if isinstance(readiness.get("blocked_source_ids"), list) else []
+    warning_sources = readiness.get("warning_source_ids") if isinstance(readiness.get("warning_source_ids"), list) else []
+    if blocked_sources:
+        chips.append(
+            f'<span class="tag warn">blocked sources: {html_escape(", ".join(map(str, blocked_sources[:3])))}</span>'
+        )
+    if warning_sources:
+        chips.append(
+            f'<span class="tag">warning sources: {html_escape(", ".join(map(str, warning_sources[:3])))}</span>'
+        )
+    missing = render_radar_readiness_missing(readiness)
+    return f'<div class="tags"><span class="muted">Pre-run readiness:</span> {"".join(chips)}</div>{missing}'
+
+
+def build_literature_radar_settings_payload(
+    database: TeamResearchDatabase,
+    *,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings = radar_form_settings(database) if settings is None else dict(settings)
+    settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
+    if not settings["sources"]:
+        settings["sources"] = list(DEFAULT_RADAR_SOURCES)
+    collection_config = radar_settings_collection_config(settings)
+    source_ids = list(settings.get("sources") or [])
+    payload = build_radar_preflight_payload(
+        kind="team_literature_radar_settings",
+        settings=settings,
+        sources=source_ids,
+        collection_config=collection_config,
+        source_preset_label=radar_source_preset_label(settings),
+        links={
+            "html": "/radar",
+            "queue_json": "/radar/queue.json?limit=20",
+            "brief_json": "/radar/brief.json?days=7&limit=20",
+        },
+    )
+    payload["source_options"] = [
+        {
+            **option,
+            "field_name": radar_source_field_name(str(option["id"])),
+        }
+        for option in payload.get("source_options", [])
+        if isinstance(option, dict)
+    ]
+    return payload
+
+
+def render_radar_readiness_missing(readiness: dict[str, Any]) -> str:
+    required = readiness.get("missing_required") if isinstance(readiness.get("missing_required"), list) else []
+    recommended = readiness.get("missing_recommended") if isinstance(readiness.get("missing_recommended"), list) else []
+    items = []
+    for entry in required[:4]:
+        source_id = html_escape(str(entry.get("source_id") or "source"))
+        label = html_escape(str(entry.get("label") or entry.get("key") or "required config"))
+        items.append(f'<span class="tag warn">missing: {source_id} needs {label}</span>')
+    for entry in recommended[:4]:
+        source_id = html_escape(str(entry.get("source_id") or "source"))
+        label = html_escape(str(entry.get("label") or entry.get("key") or "recommended config"))
+        items.append(f'<span class="tag">recommended: {source_id} uses {label}</span>')
+    if not items:
+        return ""
+    return f'<div class="tags"><span class="muted">Config hints:</span> {"".join(items)}</div>'
+
+
+def radar_settings_collection_config(settings: dict[str, Any]) -> dict[str, Any]:
+    source_preset = str(settings.get("source_preset") or "").strip()
+    source_preset = source_preset if source_preset and source_preset != "custom" else None
+    cache_pdfs = bool(settings.get("cache_pdfs"))
+    pdf_cache_dir = Path(str(settings.get("pdf_cache_dir") or RADAR_DEFAULT_PDF_CACHE_DIR)) if cache_pdfs else None
+    return team_radar_collection_config(
+        selected_sources=list(settings.get("sources") or []),
+        source_preset=source_preset,
+        max_results=int(settings.get("max_results") or 20),
+        recommendation_limit=int(settings.get("limit") or 10),
+        summarize=bool(settings.get("summarize")),
+        summary_provider=str(settings.get("summary_provider") or "local"),
+        summary_limit=None,
+        import_results=False,
+        import_limit=0,
+        min_import_score=0,
+        project_id=DEFAULT_PROJECT,
+        semantic_scholar_api_key="configured" if settings.get("semantic_scholar_api_key_configured") else None,
+        seed_paper_ids=list(settings.get("seed_paper_ids") or []),
+        negative_seed_paper_ids=list(settings.get("negative_seed_paper_ids") or []),
+        openalex_mailto=str(settings.get("openalex_mailto") or settings.get("source_contact_email") or "") or None,
+        openreview_invitations=list(settings.get("openreview_invitations") or []),
+        crossref_mailto=str(settings.get("crossref_mailto") or settings.get("source_contact_email") or "") or None,
+        unpaywall_email=str(settings.get("unpaywall_email") or settings.get("source_contact_email") or "") or None,
+        semantic_scholar_author_ids=list(settings.get("semantic_scholar_author_ids") or []),
+        dblp_author_pids=list(settings.get("dblp_author_pids") or []),
+        openalex_author_ids=list(settings.get("openalex_author_ids") or []),
+        conference_year=settings.get("conference_year") or None,
+        dblp_venue_profiles=list(settings.get("venue_profiles") or []),
+        openreview_venue_profiles=list(settings.get("openreview_venue_profiles") or []),
+        openreview_accepted_only=not bool(settings.get("include_openreview_unaccepted")),
+        usenix_security_cycles=list(settings.get("usenix_security_cycles") or []),
+        cache_pdfs=cache_pdfs,
+        pdf_cache_dir=pdf_cache_dir,
+        pdf_cache_max_bytes=int(settings.get("pdf_cache_max_bytes") or RADAR_DEFAULT_PDF_CACHE_MAX_BYTES),
+        now=None,
+    )
+
+
 def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     review_counts = database.literature_radar_paper_review_counts()
     return f"""
@@ -948,6 +1067,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
       <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
+      <a class="button" href="/radar/settings.json">Settings JSON</a>
     </div>
     {render_radar_review_count_links(review_counts, selected_review="all", limit=50)}
     """
@@ -1303,10 +1423,14 @@ def render_radar_paper_import_control(
 def render_radar_source_checkbox(source_id: str, label: str, *, settings: dict[str, Any]) -> str:
     checked = checked_attr(source_id in set(settings.get("sources") or []))
     field_name = radar_source_field_name(source_id)
+    metadata = radar_source_option_metadata(source_id)
     return f"""
     <label>
       <input type="checkbox" name="{html_escape(field_name)}" value="1"{checked}>
-      <span>{html_escape(label)}</span>
+      <span class="radar-source-text">
+        <span>{html_escape(label)}</span>
+        <span class="radar-source-meta">{html_escape(metadata)}</span>
+      </span>
     </label>
     """
 
@@ -3307,6 +3431,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         ),
                     )
                 )
+            elif parsed.path == "/radar/settings.json":
+                self.respond_json(build_literature_radar_settings_payload(self.database))
             elif parsed.path == "/radar/brief":
                 self.respond_html(
                     render_literature_radar_brief_page(

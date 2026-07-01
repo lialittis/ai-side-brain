@@ -802,6 +802,65 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["source_preset"], "security_memory_agentic_daily")
             self.assertEqual(json.loads(stdout.getvalue())["run_id"], "personalradar_preset")
 
+    def test_personal_literature_radar_cli_settings_reports_readiness_without_running(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            json_stdout = io.StringIO()
+            with contextlib.redirect_stdout(json_stdout):
+                json_code = personal_literature_radar.main(
+                    [
+                        "settings",
+                        "--root-path",
+                        str(root),
+                        "--source",
+                        "semantic_scholar_recommendations",
+                        "--source",
+                        "openreview",
+                        "--source",
+                        "openalex",
+                        "--source-contact-email",
+                        "radar@example.org",
+                        "--json",
+                    ]
+                )
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = personal_literature_radar.main(
+                    [
+                        "settings",
+                        "--root-path",
+                        str(root),
+                        "--source",
+                        "semantic_scholar_recommendations",
+                        "--source",
+                        "openreview",
+                        "--source",
+                        "openalex",
+                        "--source-contact-email",
+                        "radar@example.org",
+                    ]
+                )
+
+        self.assertEqual(json_code, 0)
+        payload = json.loads(json_stdout.getvalue())
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kind"], "personal_literature_radar_settings")
+        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openreview", "openalex"])
+        self.assertEqual(payload["source_readiness"]["status"], "blocked")
+        self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertNotIn("run_id", payload)
+        self.assertEqual(text_code, 0)
+        text = text_stdout.getvalue()
+        self.assertIn("Personal Literature Radar Settings", text)
+        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Source policy:", text)
+        self.assertIn("Source readiness:", text)
+        self.assertIn("status=blocked", text)
+        self.assertIn("missing required for semantic_scholar_recommendations", text)
+        self.assertIn("missing required for openreview", text)
+
     def test_personal_literature_radar_queue_reports_partial_empty_latest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

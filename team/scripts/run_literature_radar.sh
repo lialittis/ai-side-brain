@@ -22,10 +22,12 @@ REPORT_PATH="$OUTPUT_DIR/literature-radar-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/literature-radar-$STAMP.json"
 QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
+SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.json"
 LATEST_REPORT_PATH="$OUTPUT_DIR/literature-radar-latest.md"
 LATEST_JSON_PATH="$OUTPUT_DIR/literature-radar-latest.json"
 LATEST_QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-latest.json"
+LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
 USE_SAVED_DEFAULTS="${RADAR_USE_SAVED_DEFAULTS:-0}"
@@ -148,6 +150,31 @@ if [[ "${RADAR_IMPORT_RESULTS:-0}" == "1" ]]; then
   ARGS+=("--min-score" "${RADAR_MIN_SCORE:-35}")
 fi
 
+if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
+  SETTINGS_ARGS=("team/research_cli.py" "radar-settings")
+  SKIP_NEXT=0
+  for ((i = 2; i < ${#ARGS[@]}; i++)); do
+    if [[ "$SKIP_NEXT" == "1" ]]; then
+      SKIP_NEXT=0
+      continue
+    fi
+    case "${ARGS[$i]}" in
+      --output|--query-term|--import-limit|--min-score|--project)
+        SKIP_NEXT=1
+        ;;
+      --import-results)
+        ;;
+      *)
+        SETTINGS_ARGS+=("${ARGS[$i]}")
+        ;;
+    esac
+  done
+  "$PYTHON_BIN" "${SETTINGS_ARGS[@]}" > "$SETTINGS_JSON_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$SETTINGS_JSON_PATH" "$LATEST_SETTINGS_JSON_PATH"
+  fi
+fi
+
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
 if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
@@ -185,9 +212,15 @@ fi
 
 echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
+if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
+  echo "Literature Radar settings JSON: $SETTINGS_JSON_PATH"
+fi
 if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
   echo "Literature Radar latest report: $LATEST_REPORT_PATH"
   echo "Literature Radar latest JSON: $LATEST_JSON_PATH"
+  if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
+    echo "Literature Radar latest settings JSON: $LATEST_SETTINGS_JSON_PATH"
+  fi
 fi
 if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   echo "Literature Radar queue: $QUEUE_PATH"

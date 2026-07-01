@@ -51,6 +51,8 @@ python scripts/personal_literature_radar.py run --source openalex_authors --open
 python scripts/personal_literature_radar.py run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
 python scripts/personal_literature_radar.py run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python scripts/personal_literature_radar.py run --source arxiv --cache-pdfs --pdf-cache-dir memory/06_Logs/literature-radar-pdfs
+python scripts/personal_literature_radar.py settings
+python scripts/personal_literature_radar.py settings --json
 python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py queue
 python scripts/personal_literature_radar.py papers
@@ -59,6 +61,11 @@ python scripts/personal_literature_radar.py review DEDUPE_KEY --status dismissed
 python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Logs/personal-literature-radar-weekly.md
 python scripts/personal_literature_radar.py brief --days 7 --json
 ```
+
+`settings` is a read-only preflight command. It prints selected sources, source
+policy, and source readiness without collecting metadata, downloading PDFs, or
+calling AI. Use it before enabling a cron/systemd job or after changing source,
+seed, author, venue, or contact-email environment variables.
 
 For periodic personal reports, run the one-shot script from cron or a systemd
 timer:
@@ -77,11 +84,15 @@ snapshots, then builds the stored brief. Set `PERSONAL_RADAR_CYCLE_RUN_COLLECTIO
 or `PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
 The run script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
-set. It also writes a text and JSON `personal-literature-radar-queue-*` snapshot
+set. Before collection, it writes a read-only
+`personal-literature-radar-settings-*` preflight JSON snapshot unless
+`PERSONAL_RADAR_WRITE_SETTINGS=0`. It also writes a text and JSON
+`personal-literature-radar-queue-*` snapshot
 for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
 brief script writes a Markdown and JSON roll-up over stored runs
 without collecting again. Scheduled scripts also refresh stable
 `personal-literature-radar-latest.json`,
+`personal-literature-radar-settings-latest.json`,
 `personal-literature-radar-queue-latest.*`, and
 `personal-literature-radar-brief-latest.*` files unless
 `PERSONAL_RADAR_WRITE_LATEST=0`. The JSON brief uses the same stored-read contract as
@@ -100,7 +111,8 @@ preview with PDF access summary, index paths, and the generated Markdown brief. 
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes, and
 `PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
-threshold for queue and brief snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
+threshold for queue and brief snapshots. Use `PERSONAL_RADAR_WRITE_SETTINGS=0`
+to skip preflight snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
 to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief

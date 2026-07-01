@@ -67,6 +67,7 @@ from shared.literature_radar import (
     radar_source_preset,
     radar_source_readiness_summary,
     radar_source_skip_stat,
+    radar_supported_source_ids,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -687,25 +688,7 @@ def collect_personal_radar_candidates(
     collection_config: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    supported_sources = {
-        "arxiv",
-        "dblp",
-        "dblp_authors",
-        "dblp_venues",
-        "semantic_scholar",
-        "semantic_scholar_authors",
-        "semantic_scholar_citations",
-        "semantic_scholar_references",
-        "semantic_scholar_recommendations",
-        "openalex",
-        "openalex_authors",
-        "openalex_venues",
-        "openreview",
-        "openreview_venues",
-        "crossref",
-        "usenix_security",
-        "ndss",
-    }
+    supported_sources = set(radar_supported_source_ids())
     unsupported = sorted(set(sources) - supported_sources)
     if unsupported:
         raise ValueError(f"Unsupported personal radar source(s): {', '.join(unsupported)}")

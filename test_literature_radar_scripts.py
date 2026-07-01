@@ -78,6 +78,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_run["command"], "radar-run")
             self.assertIn("--source-preset", latest_run["args"])
             self.assertIn("team_security_daily", latest_run["args"])
+            latest_settings = read_json(output_dir / "literature-radar-settings-latest.json")
+            self.assertEqual(latest_settings["command"], "radar-settings")
+            self.assertIn("--source-preset", latest_settings["args"])
+            self.assertIn("team_security_daily", latest_settings["args"])
             self.assertIn("radar-run markdown", (output_dir / "literature-radar-latest.md").read_text())
             self.assertEqual(
                 read_json(output_dir / "literature-radar-queue-latest.json")["command"],
@@ -127,6 +131,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_personal_run["command"], "run")
             self.assertIn("--source-preset", latest_personal_run["args"])
             self.assertIn("security_memory_agentic_daily", latest_personal_run["args"])
+            latest_personal_settings = read_json(output_dir / "personal-literature-radar-settings-latest.json")
+            self.assertEqual(latest_personal_settings["command"], "settings")
+            self.assertIn("--source-preset", latest_personal_settings["args"])
+            self.assertIn("security_memory_agentic_daily", latest_personal_settings["args"])
             self.assertEqual(
                 read_json(output_dir / "personal-literature-radar-queue-latest.json")["command"],
                 "queue",

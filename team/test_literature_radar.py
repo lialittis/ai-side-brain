@@ -1715,6 +1715,84 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
             self.assertEqual(json.loads(stdout.getvalue())["run_id"], "radarrun_saved_defaults")
 
+    def test_cli_radar_settings_reports_saved_defaults_without_running_collectors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            database.set_team_setting(
+                "literature_radar_defaults",
+                {
+                    "sources": ["semantic_scholar_recommendations", "openreview", "openalex"],
+                    "max_results": 7,
+                    "limit": 3,
+                    "source_contact_email": "radar@example.org",
+                },
+            )
+
+            json_stdout = io.StringIO()
+            with contextlib.redirect_stdout(json_stdout):
+                json_code = research_cli.main(
+                    ["radar-settings", "--db-path", str(db_path), "--use-saved-defaults", "--json"]
+                )
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = research_cli.main(["radar-settings", "--db-path", str(db_path), "--use-saved-defaults"])
+
+            preset_stdout = io.StringIO()
+            with contextlib.redirect_stdout(preset_stdout):
+                preset_code = research_cli.main(
+                    [
+                        "radar-settings",
+                        "--db-path",
+                        str(db_path),
+                        "--source-preset",
+                        "team_security_daily",
+                        "--source-contact-email",
+                        "radar@example.org",
+                        "--semantic-scholar-api-key",
+                        "secret-key",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(json_code, 0)
+        payload = json.loads(json_stdout.getvalue())
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openreview", "openalex"])
+        self.assertEqual(payload["source_readiness"]["status"], "blocked")
+        self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertNotIn("run_id", payload)
+        self.assertEqual(text_code, 0)
+        text = text_stdout.getvalue()
+        self.assertIn("Team Literature Radar Settings", text)
+        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Source policy:", text)
+        self.assertIn("Source readiness:", text)
+        self.assertIn("status=blocked", text)
+        self.assertIn("missing required for semantic_scholar_recommendations", text)
+        self.assertIn("missing required for openreview", text)
+        self.assertEqual(preset_code, 0)
+        preset_payload = json.loads(preset_stdout.getvalue())
+        self.assertEqual(preset_payload["settings"]["source_preset"], "team_security_daily")
+        self.assertEqual(
+            preset_payload["settings"]["sources"],
+            [
+                "arxiv",
+                "dblp",
+                "semantic_scholar",
+                "openalex",
+                "crossref",
+                "dblp_venues",
+                "openreview_venues",
+                "usenix_security",
+                "ndss",
+            ],
+        )
+        self.assertEqual(preset_payload["source_readiness"]["status"], "ready")
+        self.assertNotIn("secret-key", json.dumps(preset_payload))
+
     def test_cli_radar_run_explicit_args_override_saved_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "research.sqlite3"

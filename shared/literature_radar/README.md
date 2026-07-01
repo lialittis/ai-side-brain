@@ -25,6 +25,15 @@ bibliographic records.
 Derived collector paths such as DBLP venue profiles, Semantic Scholar
 recommendations, OpenAlex venue profiles, and OpenReview venue profiles are
 explicit registry entries so reports can name the actual source path used.
+The shared registry is also the source of selectable collector IDs for Personal
+and Team adapters, so adding a supported source should not require parallel
+hardcoded allow-lists in product code.
+Shared source labels, option metadata, and selected-source option records are
+derived from the same registry, so Personal CLI, Team CLI, and Team web preflight
+surfaces describe sources consistently.
+The shared preflight payload builder combines selected settings, source policy,
+source readiness, supported source IDs, and source option records into one
+read-only contract that product surfaces can expose before running collectors.
 
 Pipeline phases are explicit:
 

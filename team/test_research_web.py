@@ -11,14 +11,16 @@ import unittest
 from urllib.request import urlopen
 from unittest import mock
 
-from shared.literature_radar import create_radar_paper, recommend_papers
+from shared.literature_radar import create_radar_paper, radar_supported_source_ids, recommend_papers
 from team.literature_radar import build_team_literature_radar_queue_payload
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
+    RADAR_WEB_SOURCE_OPTIONS,
     add_paper_comment,
     add_paper_tag,
     add_team_interest,
+    build_literature_radar_settings_payload,
     canonical_pdf_url,
     render_interests_page,
     render_latest_papers_page,
@@ -226,6 +228,13 @@ class TeamResearchWebTest(unittest.TestCase):
                     brief_payload = json.loads(response.read().decode("utf-8"))
                     brief_content_type = response.headers.get("Content-Type")
                     brief_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/settings.json",
+                    timeout=5,
+                ) as response:
+                    settings_payload = json.loads(response.read().decode("utf-8"))
+                    settings_content_type = response.headers.get("Content-Type")
+                    settings_status = response.status
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -271,6 +280,13 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["source_coverage"]["status_counts"], {"succeeded": 1})
             self.assertEqual(brief_payload["source_coverage"]["sources"][0]["source_id"], "arxiv")
             self.assertEqual(brief_payload["source_policy"]["run_count"], 1)
+            self.assertEqual(settings_status, 200)
+            self.assertEqual(settings_content_type, "application/json")
+            self.assertTrue(settings_payload["success"])
+            self.assertEqual(settings_payload["links"]["html"], "/radar")
+            self.assertEqual(settings_payload["supported_source_ids"], radar_supported_source_ids())
+            self.assertEqual(settings_payload["source_readiness"]["status"], "ready_with_warnings")
+            self.assertEqual(settings_payload["settings"]["sources"], list(settings_payload["source_policy"]["authoritative_source_ids"]))
             self.assertEqual(brief_payload["source_policy"]["authoritative_count"], 1)
             self.assertEqual(brief_payload["source_policy"]["trend_signal_count"], 0)
             self.assertIn("Team Literature Radar Brief", brief_payload["brief"])
@@ -664,6 +680,68 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("tracked lists: 3", html)
             self.assertIn("last run: none", html)
             self.assertIn("Save as defaults", html)
+
+    def test_literature_radar_web_sources_follow_shared_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            html = render_literature_radar_page(database)
+
+        self.assertEqual([source_id for source_id, _label in RADAR_WEB_SOURCE_OPTIONS], radar_supported_source_ids())
+        for source_id in radar_supported_source_ids():
+            self.assertIn(f'name="source_{source_id}" value="1"', html)
+        self.assertIn("official accepted page | official accepted papers page", html)
+        self.assertIn("primary metadata | api", html)
+
+    def test_literature_radar_web_shows_prerun_source_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.set_team_setting(
+                RADAR_SETTINGS_KEY,
+                {
+                    "sources": ["semantic_scholar_recommendations", "openreview", "openalex"],
+                    "max_results": 5,
+                    "limit": 3,
+                },
+            )
+            html = render_literature_radar_page(database)
+
+        self.assertIn("Pre-run readiness:", html)
+        self.assertIn("status: blocked", html)
+        self.assertIn("blocked sources: semantic_scholar_recommendations, openreview", html)
+        self.assertIn("missing: semantic_scholar_recommendations needs Semantic Scholar positive seed paper ID", html)
+        self.assertIn("missing: openreview needs OpenReview invitation ID", html)
+        self.assertIn("recommended: openalex uses OpenAlex mailto/contact", html)
+
+    def test_literature_radar_settings_payload_is_read_only_status_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.set_team_setting(
+                RADAR_SETTINGS_KEY,
+                {
+                    "sources": ["semantic_scholar_recommendations", "openalex"],
+                    "seed_paper_ids": ["seed-1"],
+                    "source_contact_email": "radar@example.org",
+                    "max_results": 5,
+                    "limit": 3,
+                },
+            )
+
+            with mock.patch.dict("os.environ", {"SEMANTIC_SCHOLAR_API_KEY": "secret-s2-key"}, clear=False):
+                payload = build_literature_radar_settings_payload(database)
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["links"]["html"], "/radar")
+        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openalex"])
+        self.assertEqual(payload["collection_config"]["seed_paper_ids"], ["seed-1"])
+        self.assertTrue(payload["collection_config"]["openalex_mailto_configured"])
+        self.assertEqual(payload["collection_config"]["semantic_scholar_api_key_configured"], True)
+        self.assertEqual(payload["source_readiness"]["status"], "ready")
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
+        self.assertEqual(payload["supported_source_ids"], radar_supported_source_ids())
+        selected = [option["id"] for option in payload["source_options"] if option["selected"]]
+        self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
+        self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
+        self.assertNotIn("secret-s2-key", json.dumps(payload))
 
     def test_literature_radar_web_run_can_save_source_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
