@@ -26,9 +26,14 @@ def build_parser() -> argparse.ArgumentParser:
         "dblp",
         "dblp_venues",
         "semantic_scholar",
+        "semantic_scholar_authors",
+        "semantic_scholar_citations",
+        "semantic_scholar_references",
         "semantic_scholar_recommendations",
         "openalex",
+        "openalex_venues",
         "openreview",
+        "openreview_venues",
         "crossref",
         "usenix_security",
         "ndss",
@@ -39,10 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--summarize", action="store_true")
     run.add_argument("--summary-limit", type=int)
     run.add_argument("--semantic-scholar-api-key")
+    run.add_argument("--semantic-scholar-author-id", action="append", default=[])
     run.add_argument("--seed-paper-id", action="append", default=[])
     run.add_argument("--negative-seed-paper-id", action="append", default=[])
     run.add_argument("--openalex-mailto")
     run.add_argument("--openreview-invitation", action="append", default=[])
+    run.add_argument("--openreview-venue-profile", action="append", default=[])
+    run.add_argument("--include-openreview-unaccepted", action="store_true")
     run.add_argument("--crossref-mailto")
     run.add_argument("--unpaywall-email")
     run.add_argument("--conference-year", type=int)
@@ -105,10 +113,13 @@ def main(argv: list[str] | None = None) -> int:
             summarize=args.summarize,
             summary_limit=args.summary_limit,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
+            semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
             seed_paper_ids=args.seed_paper_id or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
             openreview_invitations=args.openreview_invitation or None,
+            openreview_venue_profiles=args.openreview_venue_profile or None,
+            openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,

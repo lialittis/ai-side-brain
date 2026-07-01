@@ -16,16 +16,19 @@ from urllib.parse import quote, quote_plus, urlencode, urljoin
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_spaces
+from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_selector, normalize_spaces
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
 DBLP_PUBLICATION_SEARCH_URL = "https://dblp.org/search/publ/api"
+OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENREVIEW_API2_NOTES_URL = "https://api2.openreview.net/notes"
 OPENREVIEW_WEB_URL = "https://openreview.net"
+SEMANTIC_SCHOLAR_AUTHOR_BATCH_URL = "https://api.semanticscholar.org/graph/v1/author/batch"
 SEMANTIC_SCHOLAR_PAPER_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+SEMANTIC_SCHOLAR_PAPER_URL = "https://api.semanticscholar.org/graph/v1/paper"
 SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 UNPAYWALL_API_URL = "https://api.unpaywall.org/v2"
 USENIX_BASE_URL = "https://www.usenix.org"
@@ -48,6 +51,28 @@ OPENALEX_SELECT_FIELDS = [
     "concepts",
     "topics",
 ]
+OPENALEX_SOURCE_SELECT_FIELDS = [
+    "id",
+    "display_name",
+    "type",
+    "works_count",
+    "cited_by_count",
+    "issn",
+    "issn_l",
+    "host_organization",
+    "host_organization_name",
+]
+OPENREVIEW_VENUE_PROFILES = [
+    {
+        "id": "iclr",
+        "name": "ICLR",
+        "group": "ai_ml",
+        "venue_id_template": "ICLR.cc/{year}/Conference",
+        "submission_invitation_templates": ["ICLR.cc/{year}/Conference/-/Submission"],
+        "accepted_venueid_templates": ["ICLR.cc/{year}/Conference"],
+        "accepted_decision_keywords": ["accept", "accepted", "poster", "spotlight", "oral"],
+    },
+]
 SEMANTIC_SCHOLAR_FIELDS = [
     "paperId",
     "corpusId",
@@ -62,9 +87,16 @@ SEMANTIC_SCHOLAR_FIELDS = [
     "publicationTypes",
     "fieldsOfStudy",
     "s2FieldsOfStudy",
+    "citationCount",
+    "influentialCitationCount",
+    "referenceCount",
     "isOpenAccess",
     "openAccessPdf",
 ]
+SEMANTIC_SCHOLAR_RELATED_PAPER_KEYS = {
+    "citations": "citingPaper",
+    "references": "citedPaper",
+}
 DEFAULT_ARXIV_CATEGORIES = ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"]
 DEFAULT_TIMEOUT_SECONDS = 30
 
@@ -732,6 +764,67 @@ def collect_openalex_works(
     return parse_openalex_works(content, query_url=url, collected_at=now)
 
 
+def collect_openalex_venue_publications(
+    *,
+    venue_profiles: list[str] | None = None,
+    year: int | None = None,
+    max_results: int = 50,
+    mailto: str | None = None,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_profiles = expand_dblp_venue_profiles(venue_profiles)
+    selected_year = year or (now or datetime.now(timezone.utc)).year
+    selected_fetcher = fetcher or fetch_url
+    papers = []
+    seen_source_ids = set()
+    seen_paper_keys = set()
+    for profile in selected_profiles:
+        for alias in openalex_venue_profile_aliases(profile):
+            source_url = build_openalex_sources_url(search=alias, max_results=5, mailto=mailto)
+            source_candidates = parse_openalex_sources(
+                selected_fetcher(source_url),
+                query_url=source_url,
+            )
+            matched_sources = [
+                source
+                for source in source_candidates
+                if openalex_source_matches_profile(source, profile)
+            ]
+            for source in matched_sources[:2]:
+                source_id = source.get("id") or ""
+                if not source_id or source_id in seen_source_ids:
+                    continue
+                seen_source_ids.add(source_id)
+                works_url = build_openalex_venue_works_url(
+                    source_id=source_id,
+                    year=selected_year,
+                    max_results=max_results,
+                    mailto=mailto,
+                )
+                candidates = parse_openalex_works(
+                    selected_fetcher(works_url),
+                    query_url=works_url,
+                    collected_at=now,
+                )
+                for paper in candidates:
+                    key = paper.get("dedupe_key")
+                    if key in seen_paper_keys:
+                        continue
+                    seen_paper_keys.add(key)
+                    papers.append(
+                        annotate_openalex_venue_paper(
+                            paper,
+                            profile=profile,
+                            source=source,
+                            year=selected_year,
+                            source_query_url=source_url,
+                            works_query_url=works_url,
+                        )
+                    )
+    return papers
+
+
 def build_openalex_works_url(
     *,
     query_terms: list[str],
@@ -751,6 +844,81 @@ def build_openalex_works_url(
     if mailto:
         params["mailto"] = mailto
     return f"{OPENALEX_WORKS_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def build_openalex_sources_url(
+    *,
+    search: str,
+    max_results: int = 5,
+    page: int = 1,
+    mailto: str | None = None,
+    select_fields: list[str] | None = None,
+) -> str:
+    params = {
+        "search": normalize_spaces(search),
+        "per-page": str(max(1, min(200, max_results))),
+        "page": str(max(1, page)),
+        "select": ",".join(select_fields or OPENALEX_SOURCE_SELECT_FIELDS),
+    }
+    if mailto:
+        params["mailto"] = mailto
+    return f"{OPENALEX_SOURCES_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def build_openalex_venue_works_url(
+    *,
+    source_id: str,
+    year: int,
+    max_results: int = 50,
+    page: int = 1,
+    mailto: str | None = None,
+    select_fields: list[str] | None = None,
+) -> str:
+    selected_source_id = openalex_id_from_url(source_id)
+    filters = [
+        f"primary_location.source.id:{selected_source_id}",
+        f"publication_year:{int(year)}",
+    ]
+    params = {
+        "filter": ",".join(filters),
+        "per-page": str(max(1, min(200, max_results))),
+        "page": str(max(1, page)),
+        "sort": "publication_date:desc",
+        "select": ",".join(select_fields or OPENALEX_SELECT_FIELDS),
+    }
+    if mailto:
+        params["mailto"] = mailto
+    return f"{OPENALEX_WORKS_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def parse_openalex_sources(
+    content: bytes | str,
+    *,
+    query_url: str = "",
+) -> list[dict[str, Any]]:
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    sources = []
+    for record in payload.get("results") or []:
+        source_id = openalex_id_from_url(record.get("id") or "")
+        display_name = normalize_spaces(record.get("display_name") or "")
+        if not source_id or not display_name:
+            continue
+        sources.append(
+            {
+                "id": source_id,
+                "openalex_url": normalize_spaces(record.get("id") or ""),
+                "display_name": display_name,
+                "type": normalize_spaces(record.get("type") or ""),
+                "works_count": int_or_none(record.get("works_count")),
+                "cited_by_count": int_or_none(record.get("cited_by_count")),
+                "issn": [str(value) for value in record.get("issn") or []],
+                "issn_l": normalize_spaces(record.get("issn_l") or ""),
+                "host_organization": normalize_spaces(record.get("host_organization") or ""),
+                "host_organization_name": normalize_spaces(record.get("host_organization_name") or ""),
+                "query_url": query_url,
+            }
+        )
+    return sources
 
 
 def parse_openalex_works(
@@ -808,6 +976,63 @@ def parse_openalex_works(
             )
         )
     return papers
+
+
+def openalex_venue_profile_aliases(profile: dict[str, Any]) -> list[str]:
+    aliases = [
+        str(value)
+        for value in [
+            profile.get("name"),
+            *(profile.get("query_terms") or []),
+            *(profile.get("dblp_venues") or []),
+        ]
+        if str(value).strip()
+    ]
+    seen = set()
+    unique_aliases = []
+    for alias in aliases:
+        normalized = normalize_venue_match_text(alias)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_aliases.append(alias)
+    return unique_aliases
+
+
+def openalex_source_matches_profile(source: dict[str, Any], profile: dict[str, Any]) -> bool:
+    source_name = normalize_venue_match_text(source.get("display_name") or "")
+    if not source_name:
+        return False
+    aliases = [normalize_venue_match_text(alias) for alias in openalex_venue_profile_aliases(profile)]
+    return any(alias == source_name or alias in source_name or source_name in alias for alias in aliases if alias)
+
+
+def annotate_openalex_venue_paper(
+    paper: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    source: dict[str, Any],
+    year: int,
+    source_query_url: str,
+    works_query_url: str,
+) -> dict[str, Any]:
+    updated = dict(paper)
+    updated["source_records"] = [
+        {
+            **source_record,
+            "venue_profile_id": profile["id"],
+            "venue_profile_name": profile["name"],
+            "venue_group": profile["group"],
+            "venue_year": int(year),
+            "venue_query_url": works_query_url,
+            "openalex_source_id": source.get("id") or "",
+            "openalex_source_name": source.get("display_name") or "",
+            "openalex_source_type": source.get("type") or "",
+            "openalex_source_query_url": source_query_url,
+        }
+        for source_record in paper.get("source_records") or []
+    ]
+    return updated
 
 
 def openalex_identifiers(record: dict[str, Any]) -> dict[str, str]:
@@ -901,6 +1126,140 @@ def collect_openreview_notes(
     return papers
 
 
+def collect_openreview_venue_submissions(
+    *,
+    venue_profiles: list[str] | None = None,
+    year: int | None = None,
+    accepted_only: bool = True,
+    max_results: int = 50,
+    offset: int = 0,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_profiles = expand_openreview_venue_profiles(venue_profiles)
+    selected_year = year or (now or datetime.now(timezone.utc)).year
+    papers = []
+    for profile in selected_profiles:
+        for invitation in openreview_profile_invitations(profile, selected_year):
+            url = build_openreview_notes_url(invitation=invitation, max_results=max_results, offset=offset)
+            candidates = parse_openreview_notes(
+                (fetcher or fetch_url)(url),
+                invitation=invitation,
+                query_url=url,
+                collected_at=now,
+            )
+            for paper in candidates:
+                annotated = annotate_openreview_venue_paper(
+                    paper,
+                    profile=profile,
+                    year=selected_year,
+                    query_url=url,
+                )
+                if accepted_only and not openreview_paper_is_accepted(annotated, profile, selected_year):
+                    continue
+                papers.append(annotated)
+    return papers
+
+
+def openreview_venue_profiles() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": profile["id"],
+            "name": profile["name"],
+            "group": profile["group"],
+            "venue_id_template": profile["venue_id_template"],
+            "submission_invitation_templates": list(profile.get("submission_invitation_templates") or []),
+            "accepted_venueid_templates": list(profile.get("accepted_venueid_templates") or []),
+            "accepted_decision_keywords": list(profile.get("accepted_decision_keywords") or []),
+        }
+        for profile in OPENREVIEW_VENUE_PROFILES
+    ]
+
+
+def expand_openreview_venue_profiles(selectors: list[str] | None = None) -> list[dict[str, Any]]:
+    profiles = openreview_venue_profiles()
+    if not selectors:
+        return profiles
+    by_id = {profile["id"]: profile for profile in profiles}
+    by_group: dict[str, list[dict[str, Any]]] = {}
+    for profile in profiles:
+        by_group.setdefault(profile["group"], []).append(profile)
+    expanded = []
+    for selector in selectors:
+        normalized = normalize_selector(selector)
+        if normalized in by_id:
+            expanded.append(by_id[normalized])
+        elif normalized in by_group:
+            expanded.extend(by_group[normalized])
+        else:
+            raise ValueError(f"Unknown OpenReview venue profile or group: {selector}")
+    seen = set()
+    unique = []
+    for profile in expanded:
+        if profile["id"] in seen:
+            continue
+        seen.add(profile["id"])
+        unique.append(profile)
+    return unique
+
+
+def openreview_profile_invitations(profile: dict[str, Any], year: int) -> list[str]:
+    return [
+        template.format(year=int(year))
+        for template in profile.get("submission_invitation_templates") or []
+    ]
+
+
+def annotate_openreview_venue_paper(
+    paper: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    year: int,
+    query_url: str,
+) -> dict[str, Any]:
+    accepted = openreview_paper_is_accepted(paper, profile, year)
+    updated = dict(paper)
+    updated["source_records"] = [
+        {
+            **source_record,
+            "openreview_venue_profile_id": profile["id"],
+            "openreview_venue_profile_name": profile["name"],
+            "openreview_venue_group": profile["group"],
+            "openreview_venue_year": int(year),
+            "openreview_accepted": accepted,
+            "openreview_acceptance_status": "accepted" if accepted else "not_accepted_or_unknown",
+            "openreview_venue_query_url": query_url,
+        }
+        for source_record in paper.get("source_records") or []
+    ]
+    return updated
+
+
+def openreview_paper_is_accepted(paper: dict[str, Any], profile: dict[str, Any], year: int) -> bool:
+    source_records = paper.get("source_records") or []
+    accepted_venueids = {
+        template.format(year=int(year))
+        for template in profile.get("accepted_venueid_templates") or []
+    }
+    accepted_decision_keywords = [
+        normalize_venue_match_text(keyword)
+        for keyword in profile.get("accepted_decision_keywords") or []
+        if normalize_venue_match_text(keyword)
+    ]
+    for source_record in source_records:
+        venueid = normalize_spaces(source_record.get("venueid") or "")
+        if venueid and venueid in accepted_venueids:
+            return True
+        decision = normalize_venue_match_text(source_record.get("decision") or "")
+        if not decision:
+            continue
+        if any(term in decision for term in ("reject", "withdraw", "desk reject")):
+            continue
+        if any(keyword in decision for keyword in accepted_decision_keywords):
+            return True
+    return False
+
+
 def build_openreview_notes_url(
     *,
     invitation: str,
@@ -950,6 +1309,7 @@ def parse_openreview_notes(
             "forum": forum_id,
             "number": note.get("number"),
             "venue": venue,
+            "venueid": openreview_content_text(note_content, "venueid"),
             "keywords": keywords,
             "tl_dr": openreview_content_text(note_content, "TL;DR"),
             "decision": openreview_content_text(note_content, "decision"),
@@ -1096,6 +1456,200 @@ def parse_semantic_scholar_search(
     )
 
 
+def collect_semantic_scholar_author_papers(
+    *,
+    author_ids: list[str],
+    max_results: int = 50,
+    api_key: str | None = None,
+    fetcher: PostFetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    url = build_semantic_scholar_author_batch_url()
+    body = build_semantic_scholar_author_batch_body(author_ids=author_ids)
+    headers = {"x-api-key": api_key} if api_key else {}
+    content = fetcher(url, body, headers) if fetcher else fetch_json_post(url, body, headers)
+    return parse_semantic_scholar_author_papers(
+        content,
+        query_url=url,
+        author_ids=author_ids,
+        max_results=max_results,
+        collected_at=now,
+    )
+
+
+def build_semantic_scholar_author_batch_url(*, fields: list[str] | None = None) -> str:
+    params = {"fields": ",".join(fields or semantic_scholar_author_batch_fields())}
+    return f"{SEMANTIC_SCHOLAR_AUTHOR_BATCH_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def semantic_scholar_author_batch_fields() -> list[str]:
+    return [
+        "authorId",
+        "name",
+        "url",
+        "paperCount",
+        "citationCount",
+        "hIndex",
+        *(f"papers.{field}" for field in SEMANTIC_SCHOLAR_FIELDS),
+    ]
+
+
+def build_semantic_scholar_author_batch_body(*, author_ids: list[str]) -> bytes:
+    selected_author_ids = [author_id.strip() for author_id in author_ids if author_id.strip()]
+    if not selected_author_ids:
+        raise ValueError("Semantic Scholar author tracking requires at least one author ID.")
+    return json.dumps({"ids": selected_author_ids}, ensure_ascii=True, sort_keys=True).encode("utf-8")
+
+
+def parse_semantic_scholar_author_papers(
+    content: bytes | str,
+    *,
+    query_url: str = "",
+    author_ids: list[str] | None = None,
+    max_results: int = 50,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    authors = payload if isinstance(payload, list) else payload.get("data") or []
+    selected_author_ids = [author_id.strip() for author_id in author_ids or [] if author_id.strip()]
+    records: list[dict[str, Any]] = []
+    limit = max(1, max_results)
+    for author in authors:
+        author_id = normalize_spaces(author.get("authorId") or "")
+        if selected_author_ids and author_id and author_id not in selected_author_ids:
+            continue
+        author_context = {
+            "semantic_scholar_author_source": "author_tracking",
+            "tracked_author_id": author_id,
+            "tracked_author_name": normalize_spaces(author.get("name") or ""),
+            "tracked_author_url": normalize_spaces(author.get("url") or ""),
+            "tracked_author_paper_count": int_or_none(author.get("paperCount")),
+            "tracked_author_citation_count": int_or_none(author.get("citationCount")),
+            "tracked_author_h_index": int_or_none(author.get("hIndex")),
+        }
+        for paper in (author.get("papers") or [])[:limit]:
+            records.append({**paper, "_semantic_scholar_author_context": author_context})
+    return semantic_scholar_records_to_papers(
+        records,
+        query_url=query_url,
+        collected_at=collected_at,
+    )
+
+
+def collect_semantic_scholar_related_papers(
+    *,
+    paper_ids: list[str],
+    relation: str,
+    max_results: int = 50,
+    api_key: str | None = None,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_ids = [paper_id.strip() for paper_id in paper_ids if paper_id.strip()]
+    if not selected_ids:
+        raise ValueError("Semantic Scholar related-paper expansion requires at least one seed paper ID.")
+    papers: list[dict[str, Any]] = []
+    for paper_id in selected_ids:
+        url = build_semantic_scholar_related_papers_url(
+            paper_id=paper_id,
+            relation=relation,
+            max_results=max_results,
+        )
+        if fetcher:
+            content = fetcher(url)
+        else:
+            headers = {"x-api-key": api_key} if api_key else None
+            content = fetch_url(url, headers=headers)
+        papers.extend(
+            parse_semantic_scholar_related_papers(
+                content,
+                query_url=url,
+                seed_paper_id=paper_id,
+                relation=relation,
+                collected_at=now,
+            )
+        )
+    return papers
+
+
+def build_semantic_scholar_related_papers_url(
+    *,
+    paper_id: str,
+    relation: str,
+    max_results: int = 50,
+    offset: int = 0,
+    fields: list[str] | None = None,
+) -> str:
+    selected_relation = clean_semantic_scholar_relation(relation)
+    related_key = SEMANTIC_SCHOLAR_RELATED_PAPER_KEYS[selected_relation]
+    selected_fields = fields or semantic_scholar_related_fields(related_key)
+    params = {
+        "limit": str(max(1, min(1000, max_results))),
+        "offset": str(max(0, offset)),
+        "fields": ",".join(selected_fields),
+    }
+    encoded_paper_id = quote(paper_id.strip(), safe="")
+    return f"{SEMANTIC_SCHOLAR_PAPER_URL}/{encoded_paper_id}/{selected_relation}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def semantic_scholar_related_fields(related_key: str) -> list[str]:
+    return [
+        "contexts",
+        "intents",
+        "isInfluential",
+        *(f"{related_key}.{field}" for field in SEMANTIC_SCHOLAR_FIELDS),
+    ]
+
+
+def parse_semantic_scholar_related_papers(
+    content: bytes | str,
+    *,
+    query_url: str = "",
+    seed_paper_id: str,
+    relation: str,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_relation = clean_semantic_scholar_relation(relation)
+    related_key = SEMANTIC_SCHOLAR_RELATED_PAPER_KEYS[selected_relation]
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    records = payload.get("data") or []
+    if isinstance(payload, list):
+        records = payload
+    related_records = []
+    for record in records:
+        related_paper = record.get(related_key) or {}
+        if not related_paper:
+            continue
+        related_records.append(
+            {
+                **related_paper,
+                "_semantic_scholar_relation_context": {
+                    "semantic_scholar_relation": selected_relation,
+                    "seed_paper_id": seed_paper_id,
+                    "contexts": [str(value) for value in record.get("contexts") or []],
+                    "intents": [str(value) for value in record.get("intents") or []],
+                    "is_influential": bool(record.get("isInfluential")),
+                },
+            }
+        )
+    return semantic_scholar_records_to_papers(
+        related_records,
+        query_url=query_url,
+        collected_at=collected_at,
+        source_context={
+            "semantic_scholar_relation_source": selected_relation,
+            "seed_paper_id": seed_paper_id,
+        },
+    )
+
+
+def clean_semantic_scholar_relation(relation: str) -> str:
+    selected_relation = relation.strip().lower()
+    if selected_relation not in SEMANTIC_SCHOLAR_RELATED_PAPER_KEYS:
+        raise ValueError("Semantic Scholar relation must be 'citations' or 'references'.")
+    return selected_relation
+
+
 def collect_semantic_scholar_recommendations(
     *,
     positive_paper_ids: list[str],
@@ -1186,6 +1740,8 @@ def semantic_scholar_records_to_papers(
     papers = []
     context = source_context or {}
     for record in records:
+        relation_context = record.get("_semantic_scholar_relation_context") or {}
+        author_context = record.get("_semantic_scholar_author_context") or {}
         title = normalize_spaces(record.get("title") or "")
         paper_id = normalize_spaces(record.get("paperId") or "")
         if not title or not paper_id:
@@ -1214,9 +1770,14 @@ def semantic_scholar_records_to_papers(
             "publication_types": [str(value) for value in record.get("publicationTypes") or []],
             "fields_of_study": [str(value) for value in record.get("fieldsOfStudy") or []],
             "s2_fields_of_study": record.get("s2FieldsOfStudy") or [],
+            "citation_count": int_or_none(record.get("citationCount")),
+            "influential_citation_count": int_or_none(record.get("influentialCitationCount")),
+            "reference_count": int_or_none(record.get("referenceCount")),
             "is_open_access": bool(record.get("isOpenAccess")),
             "open_access_pdf": open_access_pdf,
             **context,
+            **relation_context,
+            **author_context,
         }
         papers.append(
             create_radar_paper(

@@ -92,9 +92,14 @@ def build_parser() -> argparse.ArgumentParser:
             "dblp",
             "dblp_venues",
             "semantic_scholar",
+            "semantic_scholar_authors",
+            "semantic_scholar_citations",
+            "semantic_scholar_references",
             "semantic_scholar_recommendations",
             "openalex",
+            "openalex_venues",
             "openreview",
+            "openreview_venues",
             "crossref",
             "usenix_security",
             "ndss",
@@ -117,6 +122,12 @@ def build_parser() -> argparse.ArgumentParser:
     radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
     radar.add_argument("--project", default="team-library", help="team library project id for imported papers")
     radar.add_argument("--semantic-scholar-api-key", help="optional Semantic Scholar API key")
+    radar.add_argument(
+        "--semantic-scholar-author-id",
+        action="append",
+        default=[],
+        help="Semantic Scholar author ID to track; repeatable",
+    )
     radar.add_argument("--seed-paper-id", action="append", default=[], help="positive Semantic Scholar seed paper id; repeatable")
     radar.add_argument(
         "--negative-seed-paper-id",
@@ -126,6 +137,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar.add_argument("--openalex-mailto", help="optional email for OpenAlex polite-pool requests")
     radar.add_argument("--openreview-invitation", action="append", default=[], help="OpenReview invitation id; repeatable")
+    radar.add_argument(
+        "--openreview-venue-profile",
+        action="append",
+        default=[],
+        help="OpenReview accepted-paper venue profile or group; e.g. iclr, ai_ml",
+    )
+    radar.add_argument(
+        "--include-openreview-unaccepted",
+        action="store_true",
+        help="include OpenReview submissions that are not marked accepted by the venue profile",
+    )
     radar.add_argument("--crossref-mailto", help="optional email for Crossref polite-pool requests")
     radar.add_argument("--unpaywall-email", help="optional email for legal OA PDF enrichment via Unpaywall")
     radar.add_argument("--conference-year", type=int, help="accepted-paper conference year for venue sources")
@@ -421,10 +443,13 @@ def main(argv: list[str] | None = None) -> int:
             min_import_score=args.min_score,
             project_id=args.project,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
+            semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
             seed_paper_ids=args.seed_paper_id or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
             openreview_invitations=args.openreview_invitation or None,
+            openreview_venue_profiles=args.openreview_venue_profile or None,
+            openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,

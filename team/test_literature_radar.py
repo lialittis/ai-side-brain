@@ -371,6 +371,70 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(recommendations.call_args.kwargs["max_results"], 2)
             self.assertEqual(recommendations.call_args.kwargs["api_key"], "test-key")
 
+    def test_run_team_literature_radar_collects_semantic_scholar_author_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="author-paper-1",
+                title="Author Tracked Memory Safety for Agentic Security",
+                abstract="Memory safety, system security, and agentic security from a tracked author.",
+                identifiers={"semantic_scholar_id": "author-paper-1"},
+                links={"landing": "https://www.semanticscholar.org/paper/author-paper-1"},
+            )
+            with mock.patch(
+                "team.literature_radar.collect_semantic_scholar_author_papers",
+                return_value=[paper],
+            ) as authors:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["semantic_scholar_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    semantic_scholar_api_key="test-key",
+                    semantic_scholar_author_ids=["author-1"],
+                )
+
+            self.assertEqual(result["sources"], ["semantic_scholar_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_ids"], ["author-1"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+            self.assertEqual(authors.call_args.kwargs["api_key"], "test-key")
+
+    def test_run_team_literature_radar_collects_semantic_scholar_graph_related_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="reference-paper-1",
+                title="Memory Safety Reference Graph Paper for Secure Agents",
+                abstract="Citation graph context for memory safety, system security, LLM security, and agentic security.",
+                identifiers={"semantic_scholar_id": "reference-paper-1"},
+                links={"landing": "https://www.semanticscholar.org/paper/reference-paper-1"},
+            )
+            with mock.patch(
+                "team.literature_radar.collect_semantic_scholar_related_papers",
+                return_value=[paper],
+            ) as related:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["semantic_scholar_references", "semantic_scholar_citations"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    semantic_scholar_api_key="test-key",
+                    seed_paper_ids=["seed-positive"],
+                )
+
+            self.assertEqual(result["sources"], ["semantic_scholar_references", "semantic_scholar_citations"])
+            self.assertEqual(result["collected_count"], 2)
+            self.assertGreaterEqual(result["recommendation_count"], 1)
+            self.assertEqual(related.call_count, 2)
+            self.assertEqual([call.kwargs["relation"] for call in related.call_args_list], ["references", "citations"])
+            self.assertEqual(related.call_args_list[0].kwargs["paper_ids"], ["seed-positive"])
+            self.assertEqual(related.call_args_list[0].kwargs["api_key"], "test-key")
+
     def test_run_team_literature_radar_collects_openalex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -398,6 +462,70 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(openalex.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(openalex.call_args.kwargs["max_results"], 2)
             self.assertEqual(openalex.call_args.kwargs["mailto"], "radar@example.com")
+
+    def test_run_team_literature_radar_collects_openalex_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W9876543210",
+                title="OpenAlex Venue Memory Safety for Systems Security",
+                abstract="Memory safety and system security from a venue profile.",
+                year=2026,
+                venue="ACM Conference on Computer and Communications Security",
+                identifiers={"openalex_id": "W9876543210", "doi": "10.1145/ccs-openalex"},
+                links={"landing": "https://openalex.org/W9876543210"},
+            )
+            with mock.patch("team.literature_radar.collect_openalex_venue_publications", return_value=[paper]) as venues:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["openalex_venues"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    openalex_mailto="radar@example.com",
+                    conference_year=2026,
+                    dblp_venue_profiles=["security"],
+                )
+
+            self.assertEqual(result["sources"], ["openalex_venues"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            venues.assert_called_once()
+            self.assertEqual(venues.call_args.kwargs["venue_profiles"], ["security"])
+            self.assertEqual(venues.call_args.kwargs["year"], 2026)
+            self.assertEqual(venues.call_args.kwargs["max_results"], 2)
+            self.assertEqual(venues.call_args.kwargs["mailto"], "radar@example.com")
+
+    def test_run_team_literature_radar_collects_openreview_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="openreview",
+                source_paper_id="accepted123",
+                title="OpenReview Venue Memory Safety for Agents",
+                abstract="Memory safety, system security, and agentic security from accepted venue metadata.",
+                year=2026,
+                venue="ICLR",
+                links={"landing": "https://openreview.net/forum?id=accepted123"},
+            )
+            with mock.patch("team.literature_radar.collect_openreview_venue_submissions", return_value=[paper]) as venues:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["openreview_venues"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    conference_year=2026,
+                    openreview_venue_profiles=["iclr"],
+                )
+
+            self.assertEqual(result["sources"], ["openreview_venues"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            venues.assert_called_once()
+            self.assertEqual(venues.call_args.kwargs["venue_profiles"], ["iclr"])
+            self.assertEqual(venues.call_args.kwargs["year"], 2026)
+            self.assertTrue(venues.call_args.kwargs["accepted_only"])
+            self.assertEqual(venues.call_args.kwargs["max_results"], 2)
 
     def test_run_team_literature_radar_collects_crossref_and_enriches_unpaywall(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -580,12 +708,17 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "arxiv",
                             "--query-term",
                             "memory safety",
+                            "--semantic-scholar-author-id",
+                            "author-1",
                             "--seed-paper-id",
                             "seed-positive",
                             "--negative-seed-paper-id",
                             "seed-negative",
                             "--venue-profile",
                             "security",
+                            "--openreview-venue-profile",
+                            "iclr",
+                            "--include-openreview-unaccepted",
                             "--max-results",
                             "2",
                             "--limit",
@@ -610,9 +743,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
+            self.assertEqual(runner.call_args.kwargs["semantic_scholar_author_ids"], ["author-1"])
             self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
             self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
             self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
+            self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
+            self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
             self.assertIsNone(runner.call_args.kwargs["openalex_mailto"])
             self.assertIsNone(runner.call_args.kwargs["openreview_invitations"])
             self.assertIsNone(runner.call_args.kwargs["crossref_mailto"])

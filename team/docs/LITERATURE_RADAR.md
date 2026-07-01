@@ -51,6 +51,14 @@ This keeps automatic collection broad without filling the team library with
 every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
 pages.
 
+The Radar page also has a `Run Radar` form for ad hoc team usage. It uses the
+same Team Interest keywords as the CLI, keeps review-first import behavior, and
+can optionally enable local or OpenRouter summaries. Entering Semantic Scholar
+seed IDs without selecting a seed-based source enables recommendations; selecting
+references or citations uses the same seed IDs for graph expansion. OpenReview
+invitation IDs, OpenReview venue profiles, Semantic Scholar author IDs, and DBLP
+venue profiles automatically enable their matching collectors for that run.
+
 ## CLI Runner
 
 The current runnable Team entry point is:
@@ -74,9 +82,14 @@ Useful options:
 - `--min-score`: minimum score required before import.
 - `--semantic-scholar-api-key`: optional API key for higher Semantic Scholar
   API rate limits; `SEMANTIC_SCHOLAR_API_KEY` is also supported.
-- `--seed-paper-id`: positive Semantic Scholar seed paper ID for related-paper
-  recommendations; repeatable. Passing a seed ID automatically enables the
-  `semantic_scholar_recommendations` source.
+- `--semantic-scholar-author-id`: Semantic Scholar author ID to track; repeatable.
+  Use with the `semantic_scholar_authors` source to collect recent papers from
+  authors the team already follows.
+- `--seed-paper-id`: positive Semantic Scholar seed paper ID for seed-based
+  graph expansion; repeatable. Passing a seed ID without an explicit seed-based
+  source automatically enables `semantic_scholar_recommendations`. Explicit
+  sources can use `semantic_scholar_recommendations`,
+  `semantic_scholar_references`, or `semantic_scholar_citations`.
 - `--negative-seed-paper-id`: Semantic Scholar seed paper ID to steer related
   recommendations away from; repeatable.
 - `--openalex-mailto`: optional email for OpenAlex polite-pool requests;
@@ -85,6 +98,12 @@ Useful options:
   venue submission invitation; repeatable. `OPENREVIEW_INVITATIONS` can also
   provide comma-separated IDs. The `openreview` source requires at least one
   invitation ID.
+- `--openreview-venue-profile`: OpenReview accepted-paper venue profile or
+  group for the `openreview_venues` source; repeatable. Initial selectors are
+  `iclr` and `ai_ml`.
+- `--include-openreview-unaccepted`: include OpenReview submissions that are not
+  marked accepted by the venue profile. By default, `openreview_venues` keeps
+  accepted papers only.
 - `--crossref-mailto`: optional email for Crossref polite-pool requests;
   `CROSSREF_MAILTO` is also supported.
 - `--unpaywall-email`: optional email for Unpaywall legal OA/PDF enrichment;
@@ -93,7 +112,8 @@ Useful options:
 - `--conference-year`: accepted-paper page year for USENIX Security and NDSS;
   defaults to the current calendar year.
 - `--venue-profile`: DBLP venue profile or group for the `dblp_venues` source;
-  repeatable. Supported group selectors include `security`, `systems`,
+  repeatable. The same selectors also drive the `openalex_venues` source for
+  source-ID-based OpenAlex cross-checking. Supported group selectors include `security`, `systems`,
   `programming_languages_memory_safety`, and `software_engineering`; specific
   selectors include `acm_ccs`, `ieee_sp`, `pldi`, `icse`, and the other profile
   IDs documented in the shared source.
@@ -101,17 +121,28 @@ Useful options:
   defaults to cycle 1.
 - `--json`: emit machine-readable output for automation.
 
-OpenReview is intentionally explicit because venue schemas and invitation IDs
-vary. Example:
+OpenReview has two modes. Use `openreview` for an explicit invitation ID when
+you know the venue schema. Use `openreview_venues` for configured venue presets
+that default to accepted-only filtering from OpenReview `venueid` or decision
+metadata. Examples:
 
 ```bash
 python team/research_cli.py radar-run --source openreview --openreview-invitation ICLR.cc/2026/Conference/-/Submission
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 ```
 
 Example seed-paper expansion:
 
 ```bash
 python team/research_cli.py radar-run --seed-paper-id 649def34f8be52c8b66281af98ae884c09aef38b
+python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id 649def34f8be52c8b66281af98ae884c09aef38b
+python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id 649def34f8be52c8b66281af98ae884c09aef38b
+```
+
+Example author tracking:
+
+```bash
+python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id 2281351310
 ```
 
 Example OpenRouter summaries:
@@ -124,6 +155,8 @@ Example top-conference DBLP metadata:
 
 ```bash
 python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 ```
 
 Without `--import-results`, the runner only collects metadata, deduplicates,
@@ -169,6 +202,10 @@ It reads `.env` first and supports these optional variables:
 
 - `RADAR_SOURCES`: space-separated sources. Default:
   `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
+  Optional seed-based sources include `semantic_scholar_recommendations`,
+  `semantic_scholar_references`, and `semantic_scholar_citations`; author
+  tracking uses `semantic_scholar_authors`; venue cross-checking can use
+  `openalex_venues`; OpenReview venue presets use `openreview_venues`.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
@@ -176,8 +213,14 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_CONFERENCE_YEAR`, `RADAR_USENIX_CYCLES`.
 - `RADAR_DBLP_VENUES`: space-separated DBLP venue profile/group selectors for
   the `dblp_venues` source.
+- `RADAR_OPENREVIEW_VENUES`: space-separated OpenReview venue profile/group
+  selectors for the `openreview_venues` source.
+- `RADAR_OPENREVIEW_INCLUDE_UNACCEPTED=1`: include non-accepted OpenReview
+  submissions for preset venue runs.
 - `RADAR_SEED_PAPER_IDS`, `RADAR_NEGATIVE_SEED_PAPER_IDS`: space-separated
   Semantic Scholar paper IDs for related-paper expansion.
+- `RADAR_AUTHOR_IDS`: space-separated Semantic Scholar author IDs for the
+  `semantic_scholar_authors` source.
 - `RADAR_DB_PATH`, `RADAR_OUTPUT_DIR`.
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`, `OPENALEX_MAILTO`,
   `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
@@ -196,22 +239,26 @@ Current implemented shared collectors:
 - arXiv API collector for configured categories and interest terms;
 - DBLP publication search API collector;
 - DBLP venue-profile collector for the required top conference groups;
+- OpenAlex venue-profile collector that resolves Sources and fetches Works by
+  source ID/year;
 - Semantic Scholar Academic Graph paper search collector;
+- Semantic Scholar author-paper tracking for configured author IDs;
+- Semantic Scholar citation/reference graph expansion around seed papers;
 - Semantic Scholar Recommendations API seed-paper expansion;
 - OpenAlex Works API collector;
 - Crossref Works metadata collector;
 - OpenReview API v2 notes collector for configured invitations;
+- OpenReview venue-profile collector with accepted-only filtering for configured
+  presets;
 - USENIX Security accepted-paper page collector;
 - NDSS accepted-paper page collector;
 - Unpaywall DOI OA/PDF enrichment.
 
 Recommended next MVP order:
 
-1. Semantic Scholar citation/reference expansion beyond recommendation seeds;
-2. OpenAlex venue/source-profile expansion for cross-checking DBLP venue runs;
-3. DBLP venue/cross-source conference enrichment;
-4. OpenReview accepted/decision filtering presets for known venues;
-5. IEEE S&P, ACM CCS, RAID, ACSAC, OSDI, SOSP, EuroSys, ATC, ASPLOS, PLDI,
+1. DBLP venue/cross-source conference enrichment;
+2. more OpenReview venue presets beyond the initial ICLR profile;
+3. IEEE S&P, ACM CCS, RAID, ACSAC, OSDI, SOSP, EuroSys, ATC, ASPLOS, PLDI,
    OOPSLA, POPL, ECOOP, ICSE, FSE, and ASE venue presets.
 
 Scheduling should remain product-owned: Team Side-Brain can run a cron/systemd

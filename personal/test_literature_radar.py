@@ -167,6 +167,72 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(recommendations.call_args.kwargs["api_key"], "test-key")
             self.assertIn("Related Agentic Security for Memory Safety", Path(result["report_path"]).read_text(encoding="utf-8"))
 
+    def test_personal_literature_radar_collects_semantic_scholar_author_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="author-paper-personal",
+                title="Author Tracked Memory Safety Paper",
+                abstract="Memory safety and LLM security from a tracked author.",
+                identifiers={"semantic_scholar_id": "author-paper-personal"},
+                links={"landing": "https://www.semanticscholar.org/paper/author-paper-personal"},
+            )
+            with mock.patch(
+                "personal.literature_radar.collect_semantic_scholar_author_papers",
+                return_value=[paper],
+            ) as authors:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["semantic_scholar_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    semantic_scholar_api_key="test-key",
+                    semantic_scholar_author_ids=["author-1"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["semantic_scholar_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_ids"], ["author-1"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+            self.assertEqual(authors.call_args.kwargs["api_key"], "test-key")
+
+    def test_personal_literature_radar_collects_semantic_scholar_graph_related_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="reference-paper-personal",
+                title="Reference Graph Paper for Memory Safety",
+                abstract="Memory safety and LLM security in citation graph context.",
+                identifiers={"semantic_scholar_id": "reference-paper-personal"},
+                links={"landing": "https://www.semanticscholar.org/paper/reference-paper-personal"},
+            )
+            with mock.patch(
+                "personal.literature_radar.collect_semantic_scholar_related_papers",
+                return_value=[paper],
+            ) as related:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["semantic_scholar_references"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    semantic_scholar_api_key="test-key",
+                    seed_paper_ids=["seed-positive"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["semantic_scholar_references"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            related.assert_called_once()
+            self.assertEqual(related.call_args.kwargs["paper_ids"], ["seed-positive"])
+            self.assertEqual(related.call_args.kwargs["relation"], "references")
+            self.assertEqual(related.call_args.kwargs["api_key"], "test-key")
+
     def test_personal_literature_radar_collects_dblp_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -199,6 +265,72 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
             self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
 
+    def test_personal_literature_radar_collects_openalex_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W9876543210",
+                title="OpenAlex Venue Memory Safety Paper",
+                abstract="Memory safety and system security from OpenAlex venue metadata.",
+                year=2026,
+                venue="ACM Conference on Computer and Communications Security",
+                identifiers={"openalex_id": "W9876543210", "doi": "10.1145/ccs-openalex"},
+                links={"landing": "https://openalex.org/W9876543210"},
+            )
+            with mock.patch("personal.literature_radar.collect_openalex_venue_publications", return_value=[paper]) as venues:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["openalex_venues"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    openalex_mailto="radar@example.com",
+                    conference_year=2026,
+                    dblp_venue_profiles=["security"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["openalex_venues"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            venues.assert_called_once()
+            self.assertEqual(venues.call_args.kwargs["venue_profiles"], ["security"])
+            self.assertEqual(venues.call_args.kwargs["year"], 2026)
+            self.assertEqual(venues.call_args.kwargs["max_results"], 2)
+            self.assertEqual(venues.call_args.kwargs["mailto"], "radar@example.com")
+
+    def test_personal_literature_radar_collects_openreview_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="openreview",
+                source_paper_id="accepted123",
+                title="OpenReview Venue Memory Safety Paper",
+                abstract="Memory safety and system security from accepted OpenReview venue metadata.",
+                year=2026,
+                venue="ICLR",
+                links={"landing": "https://openreview.net/forum?id=accepted123"},
+            )
+            with mock.patch("personal.literature_radar.collect_openreview_venue_submissions", return_value=[paper]) as venues:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["openreview_venues"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    conference_year=2026,
+                    openreview_venue_profiles=["iclr"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["openreview_venues"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            venues.assert_called_once()
+            self.assertEqual(venues.call_args.kwargs["venue_profiles"], ["iclr"])
+            self.assertEqual(venues.call_args.kwargs["year"], 2026)
+            self.assertTrue(venues.call_args.kwargs["accepted_only"])
+            self.assertEqual(venues.call_args.kwargs["max_results"], 2)
+
     def test_personal_literature_radar_cli_passes_seed_paper_ids(self) -> None:
         fake_result = {
             "run_id": "personalradar_example",
@@ -221,12 +353,17 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "run",
                         "--source",
                         "semantic_scholar_recommendations",
+                        "--semantic-scholar-author-id",
+                        "author-1",
                         "--seed-paper-id",
                         "seed-positive",
                         "--negative-seed-paper-id",
                         "seed-negative",
                         "--venue-profile",
                         "security",
+                        "--openreview-venue-profile",
+                        "iclr",
+                        "--include-openreview-unaccepted",
                         "--summarize",
                         "--summary-limit",
                         "1",
@@ -236,9 +373,12 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         runner.assert_called_once()
+        self.assertEqual(runner.call_args.kwargs["semantic_scholar_author_ids"], ["author-1"])
         self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
         self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
         self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
+        self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
+        self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
         self.assertTrue(runner.call_args.kwargs["summarize"])
         self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
         self.assertEqual(json.loads(stdout.getvalue())["run_id"], "personalradar_example")

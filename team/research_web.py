@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import example_topic_profiles, topic_profile_by_id
-from team.literature_radar import import_radar_recommendation
+from team.literature_radar import DEFAULT_RADAR_SOURCES, import_radar_recommendation, run_team_literature_radar
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -45,6 +45,29 @@ SORT_OPTIONS = [
     ("relevance", "Relevance"),
     ("importance", "Importance"),
 ]
+RADAR_WEB_SOURCE_OPTIONS = [
+    ("arxiv", "arXiv"),
+    ("dblp", "DBLP"),
+    ("semantic_scholar", "Semantic Scholar"),
+    ("openalex", "OpenAlex"),
+    ("crossref", "Crossref"),
+    ("usenix_security", "USENIX Security"),
+    ("ndss", "NDSS"),
+    ("dblp_venues", "DBLP Venues"),
+    ("openalex_venues", "OpenAlex Venues"),
+    ("openreview", "OpenReview"),
+    ("openreview_venues", "OpenReview Venues"),
+    ("semantic_scholar_authors", "S2 Authors"),
+    ("semantic_scholar_recommendations", "Semantic Scholar Seeds"),
+    ("semantic_scholar_references", "S2 References"),
+    ("semantic_scholar_citations", "S2 Citations"),
+]
+RADAR_WEB_DEFAULT_SOURCES = set(DEFAULT_RADAR_SOURCES)
+RADAR_WEB_SEED_SOURCES = {
+    "semantic_scholar_citations",
+    "semantic_scholar_references",
+    "semantic_scholar_recommendations",
+}
 
 
 class NoRedirectHandler(urllib_request.HTTPRedirectHandler):
@@ -382,6 +405,34 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .radar-run-link:hover, .radar-run-link.active {{ border-color: #9db7e8; background: #f5f8ff; text-decoration: none; }}
     .radar-run-title {{ font-weight: 750; overflow-wrap: anywhere; }}
+    .radar-run-form {{
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }}
+    .radar-source-grid {{
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }}
+    .radar-source-grid label, .radar-option-line {{
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #344054;
+      font-size: 13px;
+    }}
+    .radar-run-form textarea {{
+      min-height: 52px;
+      resize: vertical;
+    }}
+    .radar-number-row {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }}
     .radar-summary {{
       display: flex;
       flex-wrap: wrap;
@@ -620,6 +671,7 @@ def render_literature_radar_page(
       <section class="panel">
         <h2>Runs</h2>
         {render_radar_run_list(runs, selected_run)}
+        {render_radar_run_form()}
       </section>
       <section class="panel">
         {render_radar_run_detail(selected_run, recommendations)}
@@ -629,9 +681,76 @@ def render_literature_radar_page(
     return page("Literature Radar", body, active="radar")
 
 
+def render_radar_run_form() -> str:
+    sources = "\n".join(render_radar_source_checkbox(source_id, label) for source_id, label in RADAR_WEB_SOURCE_OPTIONS)
+    return f"""
+    <form class="radar-run-form" method="post" action="/radar/run">
+      <h2>Run Now</h2>
+      <div class="radar-source-grid">{sources}</div>
+      <div class="radar-number-row">
+        <label>
+          <span class="muted">Max/source</span>
+          <input type="number" name="max_results" min="1" max="100" value="20">
+        </label>
+        <label>
+          <span class="muted">Recommendations</span>
+          <input type="number" name="limit" min="1" max="50" value="10">
+        </label>
+      </div>
+      <label class="radar-option-line">
+        <input type="checkbox" name="summarize" value="1" checked>
+        <span>Summaries</span>
+      </label>
+      <label>
+        <span class="muted">Summary provider</span>
+        <select name="summary_provider">
+          <option value="local" selected>Local</option>
+          <option value="openrouter">OpenRouter</option>
+        </select>
+      </label>
+      <label>
+        <span class="muted">Author IDs</span>
+        <textarea name="semantic_scholar_author_ids" placeholder="Semantic Scholar author IDs"></textarea>
+      </label>
+      <label>
+        <span class="muted">Seed paper IDs</span>
+        <textarea name="seed_paper_ids" placeholder="Semantic Scholar IDs"></textarea>
+      </label>
+      <label>
+        <span class="muted">OpenReview invitations</span>
+        <textarea name="openreview_invitations" placeholder="ICLR.cc/2026/Conference/-/Submission"></textarea>
+      </label>
+      <label>
+        <span class="muted">OpenReview profiles</span>
+        <input name="openreview_venue_profiles" placeholder="iclr, ai_ml">
+      </label>
+      <label>
+        <span class="muted">Venue profiles</span>
+        <input name="venue_profiles" placeholder="security, systems">
+      </label>
+      <button class="button primary" type="submit">Run Radar</button>
+    </form>
+    """
+
+
+def render_radar_source_checkbox(source_id: str, label: str) -> str:
+    checked = " checked" if source_id in RADAR_WEB_DEFAULT_SOURCES else ""
+    field_name = radar_source_field_name(source_id)
+    return f"""
+    <label>
+      <input type="checkbox" name="{html_escape(field_name)}" value="1"{checked}>
+      <span>{html_escape(label)}</span>
+    </label>
+    """
+
+
+def radar_source_field_name(source_id: str) -> str:
+    return f"source_{source_id}"
+
+
 def render_radar_run_list(runs: list[dict[str, Any]], selected_run: dict[str, Any] | None) -> str:
     if not runs:
-        return '<div class="empty">No radar runs yet. Start with the CLI or scheduled runner.</div>'
+        return '<div class="empty">No radar runs yet.</div>'
     selected_id = selected_run.get("id") if selected_run else ""
     return '<div class="radar-runs">' + "\n".join(
         render_radar_run_link(run, active=run.get("id") == selected_id) for run in runs
@@ -1507,6 +1626,79 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
     return str(import_result["item_id"])
 
 
+def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    selected_sources = selected_radar_sources(fields)
+    semantic_scholar_author_ids = split_form_list(fields.get("semantic_scholar_author_ids", ""))
+    seed_paper_ids = split_form_list(fields.get("seed_paper_ids", ""))
+    openreview_invitations = split_form_list(fields.get("openreview_invitations", ""))
+    openreview_venue_profiles = split_form_list(fields.get("openreview_venue_profiles", ""))
+    dblp_venue_profiles = split_form_list(fields.get("venue_profiles", ""))
+    if semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
+        selected_sources.append("semantic_scholar_authors")
+    if seed_paper_ids and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES):
+        selected_sources.append("semantic_scholar_recommendations")
+    if openreview_invitations and "openreview" not in selected_sources:
+        selected_sources.append("openreview")
+    if openreview_venue_profiles and "openreview_venues" not in selected_sources:
+        selected_sources.append("openreview_venues")
+    if dblp_venue_profiles and "dblp_venues" not in selected_sources and "openalex_venues" not in selected_sources:
+        selected_sources.append("dblp_venues")
+    if not selected_sources:
+        raise ValueError("Select at least one radar source.")
+    result = run_team_literature_radar(
+        database,
+        sources=selected_sources,
+        max_results=clean_positive_int(fields.get("max_results", ""), default=20, maximum=100),
+        recommendation_limit=clean_positive_int(fields.get("limit", ""), default=10, maximum=50),
+        summarize=checkbox_enabled(fields, "summarize"),
+        summary_provider=clean_summary_provider(fields.get("summary_provider", "")),
+        semantic_scholar_author_ids=semantic_scholar_author_ids,
+        seed_paper_ids=seed_paper_ids,
+        openreview_invitations=openreview_invitations,
+        openreview_venue_profiles=openreview_venue_profiles,
+        dblp_venue_profiles=dblp_venue_profiles,
+    )
+    return str(result["run_id"])
+
+
+def selected_radar_sources(fields: dict[str, str]) -> list[str]:
+    return [
+        source_id
+        for source_id, _label in RADAR_WEB_SOURCE_OPTIONS
+        if checkbox_enabled(fields, radar_source_field_name(source_id))
+    ]
+
+
+def checkbox_enabled(fields: dict[str, str], name: str) -> bool:
+    return (fields.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def clean_summary_provider(value: str) -> str:
+    provider = (value or "local").strip().lower()
+    if provider not in {"local", "openrouter"}:
+        raise ValueError("Unsupported summary provider.")
+    return provider
+
+
+def clean_positive_int(value: str, *, default: int, maximum: int) -> int:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError as error:
+        raise ValueError("Expected a positive number.") from error
+    return min(maximum, max(1, parsed))
+
+
+def split_form_list(value: str) -> list[str]:
+    return [
+        part.strip()
+        for part in re.split(r"[\n, ]+", value or "")
+        if part.strip()
+    ]
+
+
 def required_field(fields: dict[str, str], name: str) -> str:
     value = (fields.get(name) or "").strip()
     if not value:
@@ -1637,6 +1829,9 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 item_id = import_radar_recommendation_to_library(self.database, fields)
                 run_id = fields.get("run_id") or ""
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/radar/run":
+                run_id = run_literature_radar_from_web(self.database, fields)
+                self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote('Radar run completed.')}")
             elif parsed.path == "/interests/save":
                 keyword = save_team_interest(self.database, fields)
                 self.redirect(f"/interests?notice={quote(f'Saved {keyword}.')}")

@@ -79,7 +79,12 @@ python team/research_cli.py inbox
 python team/research_cli.py analyze-pending --retry-failed
 python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --source usenix_security --source ndss --output team/logs/literature-radar.md
 python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 python team/research_cli.py radar-run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
+python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
 python team/research_cli.py radar-history
 python team/research_cli.py radar-report
@@ -92,13 +97,14 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
-- Literature Radar page with stored run history, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Literature Radar page with ad hoc `Run Radar`, stored run history, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
-For daily radar usage, run `team/scripts/run_literature_radar.sh` from cron or
-manually, open `/radar`, scan the latest recommendations, and import only the
-papers the team wants to track in the main library.
+For daily radar usage, run `team/scripts/run_literature_radar.sh` from cron, or
+open `/radar` and use `Run Radar` for an ad hoc check. Scan the latest
+recommendations and import only the papers the team wants to track in the main
+library.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

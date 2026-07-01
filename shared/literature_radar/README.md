@@ -78,15 +78,28 @@ Current implemented collectors:
 - `collect_semantic_scholar_search(...)` calls the Semantic Scholar Academic
   Graph paper search API and preserves citation-graph identifiers plus OA PDF
   metadata when available.
+- `collect_semantic_scholar_author_papers(...)` tracks configured Semantic
+  Scholar authors through the author batch endpoint and preserves author profile
+  context with each returned paper.
+- `collect_semantic_scholar_related_papers(...)` expands around seed papers via
+  Semantic Scholar citation/reference graph endpoints and preserves relation
+  edge metadata such as seed ID, intents, context snippets, and influential
+  flags.
 - `collect_semantic_scholar_recommendations(...)` calls the Semantic Scholar
   Recommendations API with positive and optional negative seed paper IDs, then
   maps the returned related papers into the same radar paper schema.
 - `collect_openalex_works(...)` calls the OpenAlex Works API and preserves DOI,
   venue, citation count, topic/concept, OA status, and OA PDF metadata when
   available.
+- `collect_openalex_venue_publications(...)` resolves configured venue profiles
+  through OpenAlex Sources, then filters Works by source ID and publication year
+  to cross-check top-conference metadata without scraping.
 - `collect_openreview_notes(...)` calls the OpenReview API v2 notes endpoint for
   configured invitation IDs and preserves submission title, authors, abstract,
   keywords, forum link, PDF link metadata, TL;DR, and decisions when available.
+- `collect_openreview_venue_submissions(...)` expands configured OpenReview
+  venue profiles into known invitation IDs, annotates venue context, and defaults
+  to accepted-only filtering from `venueid` or decision metadata.
 - `collect_usenix_security_accepted_papers(...)` parses official USENIX
   Security accepted-paper pages by year/cycle and stores title, authors,
   abstract text when available, and paper/source links.

@@ -16,8 +16,12 @@ from shared.literature_radar import (
     collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
+    collect_openalex_venue_publications,
     collect_openalex_works,
     collect_openreview_notes,
+    collect_openreview_venue_submissions,
+    collect_semantic_scholar_author_papers,
+    collect_semantic_scholar_related_papers,
     collect_semantic_scholar_recommendations,
     collect_semantic_scholar_search,
     collect_usenix_security_accepted_papers,
@@ -63,6 +67,11 @@ DEFAULT_RADAR_SOURCES = (
     "usenix_security",
     "ndss",
 )
+SEMANTIC_SCHOLAR_SEED_SOURCES = {
+    "semantic_scholar_citations",
+    "semantic_scholar_references",
+    "semantic_scholar_recommendations",
+}
 
 
 def run_team_literature_radar(
@@ -88,14 +97,17 @@ def run_team_literature_radar(
     openreview_invitations: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
+    semantic_scholar_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
+    openreview_venue_profiles: list[str] | None = None,
+    openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_terms = query_terms or team_radar_query_terms(database)
     selected_sources = list(sources or DEFAULT_RADAR_SOURCES)
-    if seed_paper_ids and "semantic_scholar_recommendations" not in selected_sources:
+    if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
     run = database.create_literature_radar_run(
         sources=selected_sources,
@@ -118,8 +130,11 @@ def run_team_literature_radar(
             openreview_invitations=openreview_invitations,
             crossref_mailto=crossref_mailto,
             unpaywall_email=unpaywall_email,
+            semantic_scholar_author_ids=semantic_scholar_author_ids,
             conference_year=conference_year,
             dblp_venue_profiles=dblp_venue_profiles,
+            openreview_venue_profiles=openreview_venue_profiles,
+            openreview_accepted_only=openreview_accepted_only,
             usenix_security_cycles=usenix_security_cycles,
             now=now,
         )
@@ -273,8 +288,11 @@ def collect_team_radar_candidates(
     openreview_invitations: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
+    semantic_scholar_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
+    openreview_venue_profiles: list[str] | None = None,
+    openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
@@ -283,9 +301,14 @@ def collect_team_radar_candidates(
         "dblp",
         "dblp_venues",
         "semantic_scholar",
+        "semantic_scholar_authors",
+        "semantic_scholar_citations",
+        "semantic_scholar_references",
         "semantic_scholar_recommendations",
         "openalex",
+        "openalex_venues",
         "openreview",
+        "openreview_venues",
         "crossref",
         "usenix_security",
         "ndss",
@@ -324,15 +347,36 @@ def collect_team_radar_candidates(
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
             )
         )
-    if "semantic_scholar_recommendations" in sources:
-        selected_seed_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
-        if not selected_seed_ids:
-            raise ValueError(
-                "Semantic Scholar recommendations require --seed-paper-id or RADAR_SEED_PAPER_IDS."
+    if "semantic_scholar_authors" in sources:
+        papers.extend(
+            collect_semantic_scholar_author_papers(
+                author_ids=required_semantic_scholar_author_ids(semantic_scholar_author_ids),
+                max_results=max_results,
+                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
             )
+        )
+    if "semantic_scholar_references" in sources:
+        papers.extend(
+            collect_semantic_scholar_related_papers(
+                paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
+                relation="references",
+                max_results=max_results,
+                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+            )
+        )
+    if "semantic_scholar_citations" in sources:
+        papers.extend(
+            collect_semantic_scholar_related_papers(
+                paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
+                relation="citations",
+                max_results=max_results,
+                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+            )
+        )
+    if "semantic_scholar_recommendations" in sources:
         papers.extend(
             collect_semantic_scholar_recommendations(
-                positive_paper_ids=selected_seed_ids,
+                positive_paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
@@ -346,6 +390,15 @@ def collect_team_radar_candidates(
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
             )
         )
+    if "openalex_venues" in sources:
+        papers.extend(
+            collect_openalex_venue_publications(
+                venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
+                year=selected_conference_year,
+                max_results=max_results,
+                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+            )
+        )
     if "openreview" in sources:
         selected_invitations = openreview_invitations or env_list("OPENREVIEW_INVITATIONS")
         if not selected_invitations:
@@ -353,6 +406,15 @@ def collect_team_radar_candidates(
         papers.extend(
             collect_openreview_notes(
                 invitations=selected_invitations,
+                max_results=max_results,
+            )
+        )
+    if "openreview_venues" in sources:
+        papers.extend(
+            collect_openreview_venue_submissions(
+                venue_profiles=openreview_venue_profiles or env_list("RADAR_OPENREVIEW_VENUES"),
+                year=selected_conference_year,
+                accepted_only=openreview_accepted_only,
                 max_results=max_results,
             )
         )
@@ -383,6 +445,24 @@ def collect_team_radar_candidates(
             for paper in papers
         ]
     return papers
+
+
+def required_semantic_scholar_seed_ids(seed_paper_ids: list[str] | None = None) -> list[str]:
+    selected_seed_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
+    if not selected_seed_ids:
+        raise ValueError(
+            "Semantic Scholar graph expansion requires --seed-paper-id or RADAR_SEED_PAPER_IDS."
+        )
+    return selected_seed_ids
+
+
+def required_semantic_scholar_author_ids(author_ids: list[str] | None = None) -> list[str]:
+    selected_author_ids = author_ids or env_list("RADAR_AUTHOR_IDS")
+    if not selected_author_ids:
+        raise ValueError(
+            "Semantic Scholar author tracking requires --semantic-scholar-author-id or RADAR_AUTHOR_IDS."
+        )
+    return selected_author_ids
 
 
 def env_list(name: str) -> list[str]:

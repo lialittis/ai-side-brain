@@ -32,14 +32,19 @@ long-term project or resource notes.
 ```bash
 python scripts/personal_literature_radar.py run --source arxiv --source dblp
 python scripts/personal_literature_radar.py run --source dblp_venues --venue-profile security --conference-year 2026
+python scripts/personal_literature_radar.py run --source openalex_venues --venue-profile security --conference-year 2026
+python scripts/personal_literature_radar.py run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 python scripts/personal_literature_radar.py run --source arxiv --summarize
 python scripts/personal_literature_radar.py run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+python scripts/personal_literature_radar.py run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
+python scripts/personal_literature_radar.py run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python scripts/personal_literature_radar.py history
 ```
 
-Seed-paper runs use Semantic Scholar related-paper recommendations and still
-write only review reports and index entries until you explicitly move accepted
-papers into private memory.
+Semantic Scholar runs can use recommendations, references, citations, or tracked
+authors to expand around papers and researchers you already care about. Personal
+Radar still writes only review reports and index entries until you explicitly
+move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
 `indexes/literature-radar-runs.json` history.
 The same index stores the PDF-access decision metadata for each recommendation

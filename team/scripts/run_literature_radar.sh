@@ -49,6 +49,15 @@ if [[ -n "${RADAR_DBLP_VENUES:-}" ]]; then
     ARGS+=("--venue-profile" "$venue_profile")
   done
 fi
+if [[ -n "${RADAR_OPENREVIEW_VENUES:-}" ]]; then
+  read -r -a OPENREVIEW_VENUES <<< "$RADAR_OPENREVIEW_VENUES"
+  for venue_profile in "${OPENREVIEW_VENUES[@]}"; do
+    ARGS+=("--openreview-venue-profile" "$venue_profile")
+  done
+fi
+if [[ "${RADAR_OPENREVIEW_INCLUDE_UNACCEPTED:-0}" == "1" ]]; then
+  ARGS+=("--include-openreview-unaccepted")
+fi
 if [[ -n "${RADAR_USENIX_CYCLES:-}" ]]; then
   read -r -a USENIX_CYCLES <<< "$RADAR_USENIX_CYCLES"
   for cycle in "${USENIX_CYCLES[@]}"; do
@@ -59,6 +68,12 @@ if [[ -n "${RADAR_SEED_PAPER_IDS:-}" ]]; then
   read -r -a SEED_PAPER_IDS <<< "$RADAR_SEED_PAPER_IDS"
   for paper_id in "${SEED_PAPER_IDS[@]}"; do
     ARGS+=("--seed-paper-id" "$paper_id")
+  done
+fi
+if [[ -n "${RADAR_AUTHOR_IDS:-}" ]]; then
+  read -r -a AUTHOR_IDS <<< "$RADAR_AUTHOR_IDS"
+  for author_id in "${AUTHOR_IDS[@]}"; do
+    ARGS+=("--semantic-scholar-author-id" "$author_id")
   done
 fi
 if [[ -n "${RADAR_NEGATIVE_SEED_PAPER_IDS:-}" ]]; then

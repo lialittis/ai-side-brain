@@ -6,10 +6,15 @@ import unittest
 
 from shared.literature_radar import (
     build_arxiv_query_url,
+    build_semantic_scholar_author_batch_body,
+    build_semantic_scholar_author_batch_url,
     build_crossref_works_url,
     build_dblp_publication_search_url,
+    build_openalex_sources_url,
+    build_openalex_venue_works_url,
     build_openalex_works_url,
     build_openreview_notes_url,
+    build_semantic_scholar_related_papers_url,
     build_semantic_scholar_recommendations_body,
     build_semantic_scholar_recommendations_url,
     build_semantic_scholar_search_url,
@@ -17,23 +22,32 @@ from shared.literature_radar import (
     build_ndss_accepted_papers_url,
     build_usenix_security_accepted_papers_url,
     collect_arxiv,
+    collect_semantic_scholar_author_papers,
     collect_crossref_works,
     collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
+    collect_openalex_venue_publications,
     collect_openalex_works,
     collect_openreview_notes,
+    collect_openreview_venue_submissions,
+    collect_semantic_scholar_related_papers,
     collect_semantic_scholar_recommendations,
     collect_semantic_scholar_search,
     collect_usenix_security_accepted_papers,
     create_radar_paper,
     enrich_paper_with_unpaywall,
+    expand_openreview_venue_profiles,
+    openreview_venue_profiles,
     parse_arxiv_atom,
+    parse_semantic_scholar_author_papers,
     parse_crossref_works,
     parse_dblp_publication_search,
     parse_ndss_accepted_papers,
+    parse_openalex_sources,
     parse_openalex_works,
     parse_openreview_notes,
+    parse_semantic_scholar_related_papers,
     parse_semantic_scholar_recommendations,
     parse_semantic_scholar_search,
     parse_usenix_security_accepted_papers,
@@ -219,6 +233,86 @@ SEMANTIC_SCHOLAR_RECOMMENDATIONS_FIXTURE = """
 """
 
 
+SEMANTIC_SCHOLAR_REFERENCES_FIXTURE = """
+{
+  "offset": 0,
+  "data": [
+    {
+      "contexts": ["We build on prior agentic security work."],
+      "intents": ["background", "methodology"],
+      "isInfluential": true,
+      "citedPaper": {
+        "paperId": "reference-paper-1",
+        "corpusId": 112233,
+        "externalIds": {
+          "DOI": "10.1145/reference"
+        },
+        "url": "https://www.semanticscholar.org/paper/reference",
+        "title": "Reference Graph Paper for Secure Agents",
+        "abstract": "Citation graph context for memory safety and agentic security.",
+        "authors": [
+          {"authorId": "3", "name": "Dana Example"}
+        ],
+        "year": 2025,
+        "venue": "Example Security",
+        "publicationDate": "2025-08-01",
+        "publicationTypes": ["Conference"],
+        "fieldsOfStudy": ["Computer Science"],
+        "s2FieldsOfStudy": [{"category": "Computer Science", "source": "s2-fos-model"}],
+        "citationCount": 42,
+        "influentialCitationCount": 5,
+        "referenceCount": 18,
+        "isOpenAccess": true,
+        "openAccessPdf": {"url": "https://example.org/reference.pdf"}
+      }
+    }
+  ]
+}
+"""
+
+
+SEMANTIC_SCHOLAR_AUTHOR_BATCH_FIXTURE = """
+[
+  {
+    "authorId": "author-1",
+    "url": "https://www.semanticscholar.org/author/author-1",
+    "name": "Eve Example",
+    "paperCount": 12,
+    "citationCount": 345,
+    "hIndex": 8,
+    "papers": [
+      {
+        "paperId": "author-paper-1",
+        "corpusId": 778899,
+        "externalIds": {
+          "DOI": "10.1145/author-paper",
+          "ArXiv": "2602.00001"
+        },
+        "url": "https://www.semanticscholar.org/paper/author-paper-1",
+        "title": "Author Tracked Memory Safety for Agents",
+        "abstract": "Memory safety and agentic security from a tracked author.",
+        "authors": [
+          {"authorId": "author-1", "name": "Eve Example"},
+          {"authorId": "author-2", "name": "Frank Example"}
+        ],
+        "year": 2026,
+        "venue": "Example Security",
+        "publicationDate": "2026-02-03",
+        "publicationTypes": ["Conference"],
+        "fieldsOfStudy": ["Computer Science"],
+        "s2FieldsOfStudy": [{"category": "Computer Science", "source": "s2-fos-model"}],
+        "citationCount": 7,
+        "influentialCitationCount": 1,
+        "referenceCount": 20,
+        "isOpenAccess": true,
+        "openAccessPdf": {"url": "https://arxiv.org/pdf/2602.00001"}
+      }
+    ]
+  }
+]
+"""
+
+
 UNPAYWALL_FIXTURE = """
 {
   "doi": "10.1145/example",
@@ -319,6 +413,72 @@ OPENALEX_FIXTURE = """
 """
 
 
+OPENALEX_SOURCE_FIXTURE = """
+{
+  "meta": {"count": 1, "page": 1, "per_page": 1},
+  "results": [
+    {
+      "id": "https://openalex.org/S123456789",
+      "display_name": "ACM Conference on Computer and Communications Security",
+      "type": "conference",
+      "works_count": 5000,
+      "cited_by_count": 123456,
+      "issn": [],
+      "issn_l": null,
+      "host_organization": "https://openalex.org/P4310319808",
+      "host_organization_name": "Association for Computing Machinery"
+    }
+  ]
+}
+"""
+
+
+OPENALEX_VENUE_WORKS_FIXTURE = """
+{
+  "meta": {"count": 1, "page": 1, "per_page": 1},
+  "results": [
+    {
+      "id": "https://openalex.org/W9876543210",
+      "ids": {
+        "openalex": "https://openalex.org/W9876543210",
+        "doi": "https://doi.org/10.1145/ccs-openalex"
+      },
+      "doi": "https://doi.org/10.1145/ccs-openalex",
+      "display_name": "OpenAlex Venue Memory Safety for Systems Security",
+      "abstract_inverted_index": {
+        "Memory": [0],
+        "safety": [1],
+        "and": [2],
+        "system": [3],
+        "security": [4]
+      },
+      "publication_year": 2026,
+      "publication_date": "2026-11-02",
+      "type": "article",
+      "authorships": [
+        {"author": {"display_name": "Alice Example"}}
+      ],
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.1145/ccs-openalex",
+        "pdf_url": "",
+        "source": {
+          "id": "https://openalex.org/S123456789",
+          "display_name": "ACM Conference on Computer and Communications Security"
+        }
+      },
+      "best_oa_location": {
+        "pdf_url": "https://example.org/ccs-openalex.pdf"
+      },
+      "open_access": {"is_oa": true, "oa_status": "green"},
+      "cited_by_count": 9,
+      "concepts": [{"display_name": "Computer security"}],
+      "topics": [{"display_name": "Systems Security"}]
+    }
+  ]
+}
+"""
+
+
 OPENREVIEW_FIXTURE = """
 {
   "notes": [
@@ -336,6 +496,48 @@ OPENREVIEW_FIXTURE = """
         "pdf": {"value": "/pdf?id=note123"},
         "TL;DR": {"value": "Agentic security benchmark."},
         "decision": {"value": "Accept"}
+      }
+    }
+  ]
+}
+"""
+
+
+OPENREVIEW_VENUE_FIXTURE = """
+{
+  "notes": [
+    {
+      "id": "accepted123",
+      "forum": "accepted123",
+      "number": 7,
+      "invitation": "ICLR.cc/2026/Conference/-/Submission",
+      "tcdate": 1767225600000,
+      "content": {
+        "title": {"value": "Accepted Agentic Security for LLM Systems"},
+        "abstract": {"value": "We study LLM security, agent safety, and prompt injection defenses."},
+        "authors": {"value": ["Alice Example", "Bob Example"]},
+        "keywords": {"value": ["LLM security", "AI safety"]},
+        "pdf": {"value": "/pdf?id=accepted123"},
+        "venueid": {"value": "ICLR.cc/2026/Conference"},
+        "venue": {"value": "ICLR 2026 Conference"},
+        "decision": {"value": "Accept (poster)"}
+      }
+    },
+    {
+      "id": "rejected123",
+      "forum": "rejected123",
+      "number": 8,
+      "invitation": "ICLR.cc/2026/Conference/-/Submission",
+      "tcdate": 1767225600000,
+      "content": {
+        "title": {"value": "Rejected Generic Vision System"},
+        "abstract": {"value": "A generic computer vision system."},
+        "authors": {"value": ["Carol Example"]},
+        "keywords": {"value": ["vision"]},
+        "pdf": {"value": "/pdf?id=rejected123"},
+        "venueid": {"value": "ICLR.cc/2026/Conference/Rejected"},
+        "venue": {"value": "ICLR 2026 Conference"},
+        "decision": {"value": "Reject"}
       }
     }
   ]
@@ -606,6 +808,63 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(papers[0]["source_id"], "openalex")
         self.assertEqual(len(seen_urls), 1)
 
+    def test_builds_and_parses_openalex_sources(self) -> None:
+        url = build_openalex_sources_url(
+            search="ACM CCS",
+            max_results=3,
+            mailto="radar@example.com",
+        )
+        sources = parse_openalex_sources(OPENALEX_SOURCE_FIXTURE, query_url=url)
+
+        self.assertIn("api.openalex.org/sources", url)
+        self.assertIn("search=ACM+CCS", url)
+        self.assertIn("per-page=3", url)
+        self.assertIn("mailto=radar%40example.com", url)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["id"], "S123456789")
+        self.assertEqual(sources[0]["display_name"], "ACM Conference on Computer and Communications Security")
+        self.assertEqual(sources[0]["type"], "conference")
+        self.assertEqual(sources[0]["works_count"], 5000)
+
+    def test_collect_openalex_venue_publications_resolves_sources_and_annotates_profiles(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            if "api.openalex.org/sources" in url:
+                return OPENALEX_SOURCE_FIXTURE.encode("utf-8")
+            return OPENALEX_VENUE_WORKS_FIXTURE.encode("utf-8")
+
+        works_url = build_openalex_venue_works_url(source_id="https://openalex.org/S123456789", year=2026)
+        papers = collect_openalex_venue_publications(
+            venue_profiles=["acm_ccs"],
+            year=2026,
+            max_results=10,
+            mailto="radar@example.com",
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("primary_location.source.id%3AS123456789", works_url)
+        self.assertIn("publication_year%3A2026", works_url)
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "openalex")
+        self.assertEqual(paper["title"], "OpenAlex Venue Memory Safety for Systems Security")
+        self.assertEqual(paper["venue"], "ACM Conference on Computer and Communications Security")
+        self.assertEqual(paper["year"], 2026)
+        self.assertTrue(any("api.openalex.org/sources" in url for url in seen_urls))
+        self.assertTrue(any("api.openalex.org/works" in url for url in seen_urls))
+        source_record = paper["source_records"][0]
+        self.assertEqual(source_record["venue_profile_id"], "acm_ccs")
+        self.assertEqual(source_record["venue_group"], "security")
+        self.assertEqual(source_record["venue_year"], 2026)
+        self.assertEqual(source_record["openalex_source_id"], "S123456789")
+        self.assertEqual(
+            source_record["openalex_source_name"],
+            "ACM Conference on Computer and Communications Security",
+        )
+
     def test_builds_and_parses_openreview_notes(self) -> None:
         url = build_openreview_notes_url(
             invitation="ICLR.cc/2026/Conference/-/Submission",
@@ -651,6 +910,56 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(papers[0]["source_id"], "openreview")
         self.assertEqual(len(seen_urls), 1)
 
+    def test_openreview_venue_profiles_expand_and_filter_accepted_submissions(self) -> None:
+        profiles = openreview_venue_profiles()
+        expanded = expand_openreview_venue_profiles(["ai_ml"])
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return OPENREVIEW_VENUE_FIXTURE.encode("utf-8")
+
+        papers = collect_openreview_venue_submissions(
+            venue_profiles=["iclr"],
+            year=2026,
+            accepted_only=True,
+            max_results=20,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("iclr", [profile["id"] for profile in profiles])
+        self.assertEqual([profile["id"] for profile in expanded], ["iclr"])
+        self.assertEqual(len(papers), 1)
+        self.assertIn("ICLR.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "openreview")
+        self.assertEqual(paper["source_paper_id"], "accepted123")
+        self.assertEqual(paper["title"], "Accepted Agentic Security for LLM Systems")
+        source_record = paper["source_records"][0]
+        self.assertEqual(source_record["venueid"], "ICLR.cc/2026/Conference")
+        self.assertEqual(source_record["decision"], "Accept (poster)")
+        self.assertEqual(source_record["openreview_venue_profile_id"], "iclr")
+        self.assertEqual(source_record["openreview_venue_group"], "ai_ml")
+        self.assertTrue(source_record["openreview_accepted"])
+        self.assertEqual(source_record["openreview_acceptance_status"], "accepted")
+
+    def test_openreview_venue_collection_can_include_unaccepted_submissions(self) -> None:
+        def fetcher(url: str) -> bytes:
+            return OPENREVIEW_VENUE_FIXTURE.encode("utf-8")
+
+        papers = collect_openreview_venue_submissions(
+            venue_profiles=["iclr"],
+            year=2026,
+            accepted_only=False,
+            max_results=20,
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(papers), 2)
+        rejected = next(paper for paper in papers if paper["source_paper_id"] == "rejected123")
+        self.assertFalse(rejected["source_records"][0]["openreview_accepted"])
+
     def test_builds_and_parses_semantic_scholar_search(self) -> None:
         url = build_semantic_scholar_search_url(
             query_terms=["memory safety", "agentic security"],
@@ -691,6 +1000,111 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(len(papers), 1)
         self.assertEqual(papers[0]["source_id"], "semantic_scholar")
         self.assertEqual(len(seen_urls), 1)
+
+    def test_builds_and_parses_semantic_scholar_author_papers(self) -> None:
+        url = build_semantic_scholar_author_batch_url()
+        body = build_semantic_scholar_author_batch_body(author_ids=["author-1"])
+        papers = parse_semantic_scholar_author_papers(
+            SEMANTIC_SCHOLAR_AUTHOR_BATCH_FIXTURE,
+            query_url=url,
+            author_ids=["author-1"],
+            max_results=3,
+            collected_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("api.semanticscholar.org/graph/v1/author/batch", url)
+        self.assertIn("papers.paperId", url)
+        self.assertEqual(json.loads(body.decode("utf-8")), {"ids": ["author-1"]})
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "semantic_scholar")
+        self.assertEqual(paper["source_paper_id"], "author-paper-1")
+        self.assertEqual(paper["title"], "Author Tracked Memory Safety for Agents")
+        self.assertEqual(paper["authors"], ["Eve Example", "Frank Example"])
+        self.assertEqual(paper["identifiers"]["semantic_scholar_id"], "author-paper-1")
+        self.assertEqual(paper["identifiers"]["doi"], "10.1145/author-paper")
+        source_record = paper["source_records"][0]
+        self.assertEqual(source_record["semantic_scholar_author_source"], "author_tracking")
+        self.assertEqual(source_record["tracked_author_id"], "author-1")
+        self.assertEqual(source_record["tracked_author_name"], "Eve Example")
+        self.assertEqual(source_record["tracked_author_h_index"], 8)
+
+    def test_collect_semantic_scholar_author_papers_uses_injected_post_fetcher(self) -> None:
+        seen_requests = []
+
+        def fetcher(url: str, body: bytes, headers: dict[str, str]) -> bytes:
+            seen_requests.append((url, json.loads(body.decode("utf-8")), headers))
+            return SEMANTIC_SCHOLAR_AUTHOR_BATCH_FIXTURE.encode("utf-8")
+
+        papers = collect_semantic_scholar_author_papers(
+            author_ids=["author-1"],
+            max_results=1,
+            api_key="test-key",
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(len(seen_requests), 1)
+        self.assertIn("/graph/v1/author/batch", seen_requests[0][0])
+        self.assertEqual(seen_requests[0][1], {"ids": ["author-1"]})
+        self.assertEqual(seen_requests[0][2]["x-api-key"], "test-key")
+
+    def test_semantic_scholar_author_tracking_requires_author_ids(self) -> None:
+        with self.assertRaisesRegex(ValueError, "author ID"):
+            build_semantic_scholar_author_batch_body(author_ids=[])
+
+    def test_builds_and_parses_semantic_scholar_references(self) -> None:
+        url = build_semantic_scholar_related_papers_url(
+            paper_id="seed-paper-1",
+            relation="references",
+            max_results=12,
+        )
+        papers = parse_semantic_scholar_related_papers(
+            SEMANTIC_SCHOLAR_REFERENCES_FIXTURE,
+            query_url=url,
+            seed_paper_id="seed-paper-1",
+            relation="references",
+            collected_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("api.semanticscholar.org/graph/v1/paper/seed-paper-1/references", url)
+        self.assertIn("limit=12", url)
+        self.assertIn("citedPaper.paperId", url)
+        self.assertIn("contexts", url)
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "semantic_scholar")
+        self.assertEqual(paper["source_paper_id"], "reference-paper-1")
+        self.assertEqual(paper["title"], "Reference Graph Paper for Secure Agents")
+        self.assertEqual(paper["authors"], ["Dana Example"])
+        self.assertEqual(paper["identifiers"]["doi"], "10.1145/reference")
+        source_record = paper["source_records"][0]
+        self.assertEqual(source_record["semantic_scholar_relation_source"], "references")
+        self.assertEqual(source_record["semantic_scholar_relation"], "references")
+        self.assertEqual(source_record["seed_paper_id"], "seed-paper-1")
+        self.assertEqual(source_record["intents"], ["background", "methodology"])
+        self.assertTrue(source_record["is_influential"])
+        self.assertEqual(source_record["citation_count"], 42)
+
+    def test_collect_semantic_scholar_related_papers_uses_injected_fetcher(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return SEMANTIC_SCHOLAR_REFERENCES_FIXTURE.encode("utf-8")
+
+        papers = collect_semantic_scholar_related_papers(
+            paper_ids=["seed-a", "seed-b"],
+            relation="references",
+            max_results=2,
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(papers), 2)
+        self.assertEqual(len(seen_urls), 2)
+        self.assertIn("/paper/seed-a/references", seen_urls[0])
+        self.assertEqual(papers[0]["source_records"][0]["semantic_scholar_relation_source"], "references")
+        self.assertEqual(papers[1]["source_records"][0]["seed_paper_id"], "seed-b")
 
     def test_builds_and_parses_semantic_scholar_recommendations(self) -> None:
         url = build_semantic_scholar_recommendations_url(max_results=7)

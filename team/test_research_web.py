@@ -24,6 +24,7 @@ from team.research_web import (
     remove_paper_tag,
     remove_team_interest,
     import_radar_recommendation_to_library,
+    run_literature_radar_from_web,
     save_team_interest,
     submit_research_item,
     update_paper_tag,
@@ -147,6 +148,13 @@ class TeamResearchWebTest(unittest.TestCase):
 
             self.assertIn("Literature Radar", html)
             self.assertIn("Scheduled recommendations", html)
+            self.assertIn('action="/radar/run"', html)
+            self.assertIn("Run Radar", html)
+            self.assertIn("S2 Authors", html)
+            self.assertIn("S2 References", html)
+            self.assertIn("S2 Citations", html)
+            self.assertIn("OpenAlex Venues", html)
+            self.assertIn("OpenReview Venues", html)
             self.assertIn("Memory Safety for Agentic Security Workflows", html)
             self.assertIn("Ada Lovelace, Grace Hopper", html)
             self.assertIn("Matched interest keywords", html)
@@ -163,6 +171,110 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Add to Library", html)
             self.assertIn('action="/radar/import"', html)
             self.assertIn("https://arxiv.org/abs/2601.00006", html)
+
+    def test_literature_radar_web_run_uses_team_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_test"},
+            ) as runner:
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_arxiv": "1",
+                        "max_results": "500",
+                        "limit": "0",
+                        "summarize": "1",
+                        "summary_provider": "local",
+                        "semantic_scholar_author_ids": "author-1",
+                        "seed_paper_ids": "seed-1\nseed-2",
+                        "openreview_invitations": "ICLR.cc/2026/Conference/-/Submission",
+                        "openreview_venue_profiles": "iclr ai_ml",
+                        "venue_profiles": "security systems",
+                    },
+                )
+
+        self.assertEqual(run_id, "radar_run_test")
+        runner.assert_called_once()
+        kwargs = runner.call_args.kwargs
+        self.assertEqual(
+            kwargs["sources"],
+            [
+                "arxiv",
+                "semantic_scholar_authors",
+                "semantic_scholar_recommendations",
+                "openreview",
+                "openreview_venues",
+                "dblp_venues",
+            ],
+        )
+        self.assertEqual(kwargs["max_results"], 100)
+        self.assertEqual(kwargs["recommendation_limit"], 1)
+        self.assertTrue(kwargs["summarize"])
+        self.assertEqual(kwargs["summary_provider"], "local")
+        self.assertEqual(kwargs["semantic_scholar_author_ids"], ["author-1"])
+        self.assertEqual(kwargs["seed_paper_ids"], ["seed-1", "seed-2"])
+        self.assertEqual(kwargs["openreview_invitations"], ["ICLR.cc/2026/Conference/-/Submission"])
+        self.assertEqual(kwargs["openreview_venue_profiles"], ["iclr", "ai_ml"])
+        self.assertEqual(kwargs["dblp_venue_profiles"], ["security", "systems"])
+
+    def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_reference"},
+            ) as runner:
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_semantic_scholar_references": "1",
+                        "seed_paper_ids": "seed-1",
+                    },
+                )
+
+        self.assertEqual(run_id, "radar_run_reference")
+        self.assertEqual(runner.call_args.kwargs["sources"], ["semantic_scholar_references"])
+        self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-1"])
+
+    def test_literature_radar_web_run_keeps_explicit_openalex_venue_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_openalex_venue"},
+            ) as runner:
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_openalex_venues": "1",
+                        "venue_profiles": "security",
+                    },
+                )
+
+        self.assertEqual(run_id, "radar_run_openalex_venue")
+        self.assertEqual(runner.call_args.kwargs["sources"], ["openalex_venues"])
+        self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
+
+    def test_literature_radar_web_run_keeps_explicit_openreview_venue_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_openreview_venue"},
+            ) as runner:
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_openreview_venues": "1",
+                        "openreview_venue_profiles": "iclr",
+                    },
+                )
+
+        self.assertEqual(run_id, "radar_run_openreview_venue")
+        self.assertEqual(runner.call_args.kwargs["sources"], ["openreview_venues"])
+        self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
 
     def test_radar_recommendation_import_adds_latest_paper_and_marks_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
