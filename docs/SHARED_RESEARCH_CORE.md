@@ -94,7 +94,63 @@ Shared Research Core must not contain:
 ## Implementation Order
 
 1. Keep the shared contracts in `shared/research/`.
-2. Build a small shared Python package for validation, IDs, and local JSON storage helpers.
-3. Add a Personal adapter that can turn a captured DOI/URL/file into a reviewed resource note suggestion.
-4. Add a Team adapter that can store the same normalized objects under `team/data/` first, then later PostgreSQL/MinIO.
+2. Build a small shared Python package for validation, IDs, and local deterministic card/screening helpers.
+3. Add a Team adapter that stores normalized objects and review state in local SQLite.
+4. Add a Personal adapter that can turn a captured DOI/URL/file into a reviewed resource note suggestion.
 5. Add AI card generation and relevance screening behind explicit opt-in, preserving provider, model, prompt version, and source trace.
+
+## Current Runnable Use Case
+
+The first runnable Team use case is deterministic and does not call external APIs:
+
+```bash
+python team/research_cli.py demo
+```
+
+Flow:
+
+```text
+manual public demo source
+-> shared research source
+-> shared research item
+-> shared research card
+-> shared relevance screening
+-> team research record
+-> team review inbox
+-> explicit accept action
+-> team project library entry
+-> basic Markdown brief
+```
+
+Default output is written to ignored local SQLite state:
+
+```text
+team/data/research/team_research.sqlite3
+```
+
+For tests or temporary runs, override the database path:
+
+```bash
+python team/research_cli.py demo \
+  --db-path /tmp/team-research-demo.sqlite3
+```
+
+Manual intake can be tested without external lookups:
+
+```bash
+python team/research_cli.py add-manual \
+  --title "Example paper title" \
+  --abstract "Example abstract text" \
+  --topic dynamic-radiative-cooling \
+  --project demo-project
+```
+
+Review and routing:
+
+```bash
+python team/research_cli.py inbox
+python team/research_cli.py show ITEM_ID
+python team/research_cli.py accept ITEM_ID --project demo-project --why "Relevant benchmark"
+python team/research_cli.py library demo-project
+python team/research_cli.py brief --project demo-project
+```

@@ -407,6 +407,29 @@ The next Personal architectural step is to create the Cloudflare Queue resource,
 
 The first shared research goal is to create a minimal research intelligence loop that both Personal and Team can use: source intake, research-card extraction, relevance screening, and reviewed output routing.
 
+The first runnable Team adapter MVP is:
+
+```bash
+python team/research_cli.py demo
+python team/research_web.py
+python team/research_cli.py inbox
+python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
+python team/research_cli.py library dynamic-radiative-cooling
+python team/research_cli.py brief --project dynamic-radiative-cooling
+```
+
+The CLI is intended for admin/local control. Team members should use the web UI at:
+
+```text
+http://127.0.0.1:8790
+```
+
+It writes generated Team state to an ignored local SQLite database:
+
+```text
+team/data/research/team_research.sqlite3
+```
+
 ---
 
 ## Roadmap
@@ -438,12 +461,13 @@ The first shared research goal is to create a minimal research intelligence loop
 * [ ] Add richer mobile capture modes
 * [ ] Explore MCP-based AI tool integration
 * [ ] Design permission levels for AI-assisted actions
-* [ ] Add Shared Research Core local source intake
-* [ ] Add Shared Research Core research-card extraction
-* [ ] Add Shared Research Core relevance screening
+* [x] Add Shared Research Core local source intake
+* [x] Add Shared Research Core research-card extraction
+* [x] Add Shared Research Core relevance screening
 * [ ] Add Personal research-resource adapter
-* [ ] Add Team Side-Brain research adapter
-* [ ] Add Team Side-Brain weekly research brief generation
+* [x] Add Team Side-Brain research adapter
+* [x] Add Team Side-Brain local SQLite review workflow
+* [x] Add Team Side-Brain basic weekly research brief generation
 
 ---
 

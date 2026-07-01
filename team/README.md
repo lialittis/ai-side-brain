@@ -40,3 +40,55 @@ team/object-storage/
 team/indexes/
 team/logs/
 ```
+
+Run the current deterministic end-to-end research demo:
+
+```bash
+python team/research_cli.py demo
+```
+
+Launch the team-member web UI:
+
+```bash
+python team/research_web.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8790
+```
+
+The local MVP runs shared source intake, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation without external API calls.
+
+The CLI remains the admin/local-control surface. Team members should use the web UI for intake, review, project library, and brief workflows.
+
+Useful commands:
+
+```bash
+python team/research_cli.py add-manual --title "..." --abstract "..."
+python team/research_cli.py inbox
+python team/research_cli.py show ITEM_ID
+python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
+python team/research_cli.py library dynamic-radiative-cooling
+python team/research_cli.py brief --project dynamic-radiative-cooling
+```
+
+Web UI surfaces:
+
+- dashboard with intake form and review queue;
+- manual research item submission;
+- item review page with card, relevance, and accept form;
+- project library page;
+- Markdown brief page.
+
+Default local state:
+
+```text
+team/data/research/team_research.sqlite3
+```
+
+Planning docs:
+
+- [Research Core TODO](docs/RESEARCH_CORE_TODO.md)
+- [Research Workflow Design](docs/RESEARCH_WORKFLOW_DESIGN.md)
