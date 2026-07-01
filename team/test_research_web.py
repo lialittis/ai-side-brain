@@ -8,6 +8,7 @@ from unittest import mock
 
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
+    canonical_paper_url,
     render_latest_papers_page,
     render_submit_page,
     parse_post_form,
@@ -62,11 +63,30 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(papers[0]["link"], "https://example.org/paper")
             self.assertEqual(papers[0]["tags"], ["envelope", "radiative-cooling"])
             self.assertEqual(database.list_latest_relevant_papers(tag="envelope")[0]["item"]["id"], item_id)
+            self.assertEqual(database.find_item_by_url("https://example.org/paper")["id"], item_id)
 
             html = render_latest_papers_page(database)
             self.assertIn("Switchable radiative cooling envelope control", html)
             self.assertIn("radiative-cooling", html)
             self.assertIn("Open Link", html)
+
+    def test_arxiv_url_submission_is_canonicalized_and_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch("team.research_web.analyze_submitted_item") as analyze:
+                first_id = submit_research_item(
+                    database,
+                    {"source_type": "url", "url": "https://arxiv.org/abs/2511.18868v2"},
+                )
+                duplicate_id = submit_research_item(
+                    database,
+                    {"source_type": "url", "url": "https://arxiv.org/pdf/2511.18868v1.pdf"},
+                )
+
+            self.assertEqual(first_id, duplicate_id)
+            self.assertEqual(analyze.call_count, 1)
+            self.assertEqual(canonical_paper_url("https://arxiv.org/pdf/2511.18868v1.pdf"), "https://arxiv.org/abs/2511.18868")
+            self.assertEqual(len(database.list_latest_relevant_papers()), 1)
 
     def test_pdf_submission_saves_file_and_lists_pdf_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -88,6 +108,44 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(papers[0]["tags"], [])
             self.assertTrue(list(upload_dir.glob("*.pdf")))
             self.assertIn("Open PDF", render_latest_papers_page(database))
+
+    def test_duplicate_pdf_upload_reuses_existing_item_without_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            pdf_content = b"%PDF-1.4 same paper content"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                with mock.patch("team.research_web.analyze_submitted_item") as analyze:
+                    first_id = submit_research_item(
+                        database,
+                        {"source_type": "pdf_upload"},
+                        upload=("paper-a.pdf", pdf_content),
+                    )
+                    duplicate_id = submit_research_item(
+                        database,
+                        {"source_type": "pdf_upload"},
+                        upload=("paper-b.pdf", pdf_content),
+                    )
+
+            self.assertEqual(first_id, duplicate_id)
+            self.assertEqual(analyze.call_count, 1)
+            self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+            self.assertEqual(len(list(upload_dir.glob("*.pdf"))), 1)
+
+    def test_invalid_pdf_upload_is_rejected_before_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                with self.assertRaisesRegex(ValueError, "not a valid PDF"):
+                    submit_research_item(
+                        database,
+                        {"source_type": "pdf_upload"},
+                        upload=("paper.pdf", b"not a pdf"),
+                    )
+
+            self.assertFalse(upload_dir.exists())
+            self.assertEqual(database.list_latest_relevant_papers(), [])
 
     def test_link_only_submission_shows_even_when_screening_needs_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

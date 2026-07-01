@@ -336,6 +336,60 @@ class TeamResearchDatabase:
             for row in rows
         ]
 
+    def find_item_by_url(self, url: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM research_items WHERE url = ?",
+                (url,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def find_item_by_identifier(self, key: str, value: str) -> dict[str, Any] | None:
+        self.initialize()
+        if not key or not value:
+            return None
+        with self.connect() as connection:
+            rows = connection.execute("SELECT record_json FROM research_items").fetchall()
+        for row in rows:
+            item = loads(row["record_json"])
+            if str((item.get("identifiers") or {}).get(key) or "") == value:
+                return item
+        return None
+
+    def mark_item_rejected_by_ai(
+        self,
+        item_id: str,
+        *,
+        reason: str,
+        now: datetime | None = None,
+    ) -> None:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        bundle = self.get_bundle(item_id)
+        team_record = bundle.get("team_record")
+        library_entries = bundle.get("library_entries") or []
+        with self.connect() as connection:
+            if team_record:
+                updated_record = dict(team_record)
+                updated_record.update(
+                    {
+                        "review_status": "rejected",
+                        "team_notes": reason,
+                        "updated_at": timestamp,
+                    }
+                )
+                self._upsert_team_record(connection, updated_record)
+            for entry in library_entries:
+                updated_entry = dict(entry)
+                updated_entry.update(
+                    {
+                        "status": "archived",
+                        "reason": reason,
+                    }
+                )
+                self._upsert_library_entry(connection, updated_entry)
+
     def list_projects(self) -> list[dict[str, Any]]:
         self.initialize()
         with self.connect() as connection:

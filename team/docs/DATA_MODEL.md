@@ -113,7 +113,7 @@ item_id:
 provider: openrouter
 model:
 prompt_version:
-status: pending | running | succeeded | failed | pending_unsupported_link
+status: pending | running | succeeded | failed | pending_unsupported_link | rejected_non_paper
 error:
 started_at:
 completed_at:

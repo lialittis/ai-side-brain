@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -31,6 +31,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8790
 DEFAULT_PROJECT = "team-library"
 UPLOAD_DIR = ROOT / "team" / "uploads" / "research"
+TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 
 
 def html_escape(value: Any) -> str:
@@ -68,10 +69,22 @@ def title_from_filename(filename: str) -> str:
     return readable_title(Path(safe_filename(filename)).stem)
 
 
-def save_uploaded_pdf(filename: str, content: bytes, upload_dir: Path | None = None) -> str:
+def pdf_digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def validate_pdf_upload(filename: str, content: bytes) -> None:
     if not content:
         raise ValueError("Uploaded PDF is empty.")
-    digest = hashlib.sha256(content).hexdigest()[:16]
+    if b"%PDF-" not in content[:1024]:
+        raise ValueError("Uploaded file is not a valid PDF.")
+    if filename and not safe_filename(filename).lower().endswith(".pdf"):
+        raise ValueError("Uploaded file must be a PDF.")
+
+
+def save_uploaded_pdf(filename: str, content: bytes, upload_dir: Path | None = None) -> str:
+    validate_pdf_upload(filename, content)
+    digest = pdf_digest(content)[:16]
     safe_name = safe_filename(filename)
     if not safe_name.lower().endswith(".pdf"):
         safe_name = f"{safe_name}.pdf"
@@ -83,6 +96,32 @@ def save_uploaded_pdf(filename: str, content: bytes, upload_dir: Path | None = N
         return str(path.relative_to(ROOT))
     except ValueError:
         return str(path)
+
+
+def canonical_paper_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("Paper link must be an absolute URL.")
+    scheme = parsed.scheme.lower()
+    netloc = parsed.netloc.lower()
+    path = re.sub(r"/+", "/", parsed.path or "/")
+    if netloc.endswith("arxiv.org"):
+        parts = [part for part in path.split("/") if part]
+        if len(parts) >= 2 and parts[0] in {"abs", "pdf"}:
+            arxiv_id = parts[1].removesuffix(".pdf")
+            arxiv_id = re.sub(r"v\d+$", "", arxiv_id, flags=re.IGNORECASE)
+            return f"https://arxiv.org/abs/{arxiv_id}"
+    query = ""
+    if not path.lower().endswith(".pdf"):
+        kept = [
+            (key, value)
+            for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
+            if not key.lower().startswith("utm_") and key.lower() not in TRACKING_QUERY_KEYS
+            for value in values
+        ]
+        query = urlencode(sorted(kept))
+    normalized_path = path.rstrip("/") or "/"
+    return urlunparse((scheme, netloc, normalized_path, "", query, ""))
 
 
 def page(title: str, body: str, *, active: str = "papers") -> str:
@@ -266,7 +305,8 @@ def relevance_pill(label: str | None) -> str:
 
 def ai_status_pill(status: str | None) -> str:
     value = status or "local"
-    css = "good" if value == "succeeded" else "warn" if value in {"pending", "running", "failed", "pending_unsupported_link"} else ""
+    warn_statuses = {"pending", "running", "failed", "pending_unsupported_link", "rejected_non_paper"}
+    css = "good" if value == "succeeded" else "warn" if value in warn_statuses else ""
     return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
 
 
@@ -388,14 +428,23 @@ def submit_research_item(
     if source_type == "pdf_upload":
         if upload is None:
             raise ValueError("PDF upload source requires a PDF file.")
+        validate_pdf_upload(upload[0], upload[1])
+        digest = pdf_digest(upload[1])
+        existing_item = database.find_item_by_identifier("pdf_sha256", digest)
+        if existing_item:
+            return existing_item["id"]
         object_key = save_uploaded_pdf(upload[0], upload[1])
-        source_value = object_key
+        source_value = f"sha256:{digest}"
         title = (fields.get("title") or "").strip() or title_from_filename(upload[0])
-        link_metadata = {"object_key": object_key}
+        link_metadata = {"object_key": object_key, "identifiers": {"pdf_sha256": digest}}
     else:
-        url = (fields.get("url") or "").strip()
-        if not url:
+        raw_url = (fields.get("url") or "").strip()
+        if not raw_url:
             raise ValueError("URL source requires a paper link.")
+        url = canonical_paper_url(raw_url)
+        existing_item = database.find_item_by_url(url)
+        if existing_item:
+            return existing_item["id"]
         source_type = "url"
         source_value = url
         title = (fields.get("title") or "").strip() or title_from_url(url)
@@ -407,6 +456,7 @@ def submit_research_item(
         "authors": [],
         "item_type": "paper",
         "tags": tags,
+        "identifiers": {},
         **link_metadata,
     }
     if fields.get("year"):

@@ -86,7 +86,7 @@ Web UI surfaces:
 - Latest Relevant Papers page with tag filtering and paper/PDF links;
 - Submit page with only two choices: paste one paper link, or upload one PDF.
 
-PDF uploads are stored locally under ignored Team state. With `OPENROUTER_API_KEY` set, uploaded PDFs, direct PDF links, and arXiv links are analyzed through OpenRouter. Plain DOI, journal, and HTML links are saved and marked `pending_unsupported_link` until a resolver is added.
+PDF uploads are stored locally under ignored Team state. The submit path skips exact duplicate URLs and duplicate PDF hashes before analysis, and rejects malformed PDF uploads before saving. With `OPENROUTER_API_KEY` set, uploaded PDFs, direct PDF links, and arXiv links are analyzed through OpenRouter. Plain DOI, journal, and HTML links are saved and marked `pending_unsupported_link` until a resolver is added. PDFs classified as non-papers are archived as `rejected_non_paper`.
 
 OpenRouter configuration can live in ignored `.env`:
 

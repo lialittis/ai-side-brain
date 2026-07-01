@@ -34,8 +34,18 @@ RELEVANCE_LABELS = {"highly_relevant", "possibly_relevant", "low_relevance", "ne
 TEAM_RESEARCH_ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["metadata", "research_card", "relevance_screening", "tags"],
+    "required": ["document_classification", "metadata", "research_card", "relevance_screening", "tags"],
     "properties": {
+        "document_classification": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["document_type", "is_research_paper", "rejection_reason"],
+            "properties": {
+                "document_type": {"type": "string", "enum": ["research_paper", "non_paper", "unclear"]},
+                "is_research_paper": {"type": "boolean"},
+                "rejection_reason": {"type": "string"},
+            },
+        },
         "metadata": {
             "type": "object",
             "additionalProperties": False,
@@ -194,6 +204,15 @@ class TeamResearchAnalyzer:
                 screening=screening,
                 tags=tags,
             )
+            if is_non_paper_response(response):
+                reason = non_paper_reason(response)
+                self.database.mark_item_rejected_by_ai(item["id"], reason=reason)
+                return self.database.complete_ai_analysis_run(
+                    run["id"],
+                    status="rejected_non_paper",
+                    error=reason,
+                    response=response,
+                )
         except Exception as error:
             return self.database.complete_ai_analysis_run(run["id"], status="failed", error=str(error))
 
@@ -258,6 +277,9 @@ def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> 
     system = (
         "You analyze Team Side-Brain research submissions. Use only the provided source, "
         "metadata, PDF content, and topic profile hints. Return only JSON matching the schema. "
+        "First classify whether the document is a research paper. If it is not a research paper, "
+        "set document_type to non_paper, is_research_paper to false, give a concise rejection_reason, "
+        "set relevance label to low_relevance, and use conservative 'unknown' values for required fields. "
         "Do not invent unknown bibliographic facts; use null, empty arrays, or 'unknown' when needed."
     )
     prompt_payload = {
@@ -310,10 +332,23 @@ def build_records_from_ai_response(
     screening_payload = (
         response.get("relevance_screening") if isinstance(response.get("relevance_screening"), dict) else {}
     )
+    non_paper = is_non_paper_response(response)
+    if non_paper:
+        reason = non_paper_reason(response)
+        screening_payload = {
+            "score": 0,
+            "label": "low_relevance",
+            "reasons": [reason],
+            "matched_terms": [],
+            "suggested_contexts": [],
+            "suggested_actions": [],
+            "confidence": "high",
+        }
 
     item = dict(existing_item)
     item.update(
         {
+            "item_type": "other" if non_paper else existing_item.get("item_type", "paper"),
             "title": clean_string(metadata.get("title")) or existing_item["title"],
             "authors": clean_string_list(metadata.get("authors")),
             "abstract": clean_string(metadata.get("abstract")),
@@ -374,7 +409,27 @@ def build_records_from_ai_response(
     validate_relevance_screening(screening)
 
     tags = normalize_tags(response.get("tags"))
+    if non_paper:
+        tags = sorted({*tags, "non-paper"})
     return item, card, screening, tags
+
+
+def is_non_paper_response(response: dict[str, Any]) -> bool:
+    classification = response.get("document_classification")
+    if not isinstance(classification, dict):
+        return False
+    if classification.get("document_type") == "non_paper":
+        return True
+    return classification.get("is_research_paper") is False
+
+
+def non_paper_reason(response: dict[str, Any]) -> str:
+    classification = response.get("document_classification")
+    if isinstance(classification, dict):
+        reason = clean_string(classification.get("rejection_reason"))
+        if reason:
+            return reason
+    return "AI classified the uploaded document as not a research paper."
 
 
 def prompt_topic_profile(topic_id: str) -> dict[str, Any]:

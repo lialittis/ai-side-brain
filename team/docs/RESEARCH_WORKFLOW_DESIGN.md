@@ -192,7 +192,7 @@ Current MVP surfaces:
 
 - Latest Relevant Papers: one scan-friendly page with newest relevant items, customized tags, relevance label, and open link/PDF actions.
 - Submit: two source-only choices, paste one paper URL or upload one PDF. The backend should fill metadata, tags, topic routing, and summaries.
-- AI analysis: when `OPENROUTER_API_KEY` is configured, uploaded PDFs, direct PDF URLs, and arXiv links are analyzed on submit. Without a key, the item is still saved and marked `AI: pending`; unsupported links are kept as `AI: pending_unsupported_link`.
+- AI analysis: duplicate URLs/PDF hashes and malformed PDFs are handled before OpenRouter. When `OPENROUTER_API_KEY` is configured, uploaded PDFs, direct PDF URLs, and arXiv links are analyzed on submit. Without a key, the item is still saved and marked `AI: pending`; unsupported links are kept as `AI: pending_unsupported_link`; non-paper PDFs are archived as `AI: rejected_non_paper`.
 
 ### Intake
 

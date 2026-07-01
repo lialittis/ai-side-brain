@@ -60,9 +60,9 @@ Current web UI features:
 - latest relevant papers page with customized tag filtering and paper/PDF links;
 - submit page with only two choices: paste one paper link, or upload one PDF.
 
-The current submit path derives a placeholder title from the link or PDF filename. AI metadata extraction, tagging, and full PDF text extraction are later Research Core features.
+The current submit path normalizes paper links, skips exact duplicate URLs and duplicate PDF hashes, rejects malformed PDF uploads before saving, and derives a placeholder title from the link or PDF filename when AI metadata is not available.
 
-With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, direct PDF URLs, and arXiv links. Unsupported links are still saved and can be revisited later. Retry pending or failed analysis with:
+With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, direct PDF URLs, and arXiv links. The same AI call classifies whether the PDF is a research paper; non-papers are archived as `rejected_non_paper`. Unsupported links are still saved and can be revisited later. Retry pending or failed analysis with:
 
 ```bash
 python team/research_cli.py analyze-pending --retry-failed
