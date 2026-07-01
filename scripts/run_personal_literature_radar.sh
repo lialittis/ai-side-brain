@@ -22,6 +22,9 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 JSON_PATH="$OUTPUT_DIR/personal-literature-radar-$STAMP.json"
 QUEUE_PATH="$OUTPUT_DIR/personal-literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-queue-$STAMP.json"
+LATEST_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-latest.json"
+LATEST_QUEUE_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.txt"
+LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
 read -r -a SOURCES <<< "${PERSONAL_RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
@@ -123,6 +126,10 @@ fi
 
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
+if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  cp "$JSON_PATH" "$LATEST_JSON_PATH"
+fi
+
 if [[ "${PERSONAL_RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   QUEUE_ARGS=(
     "scripts/personal_literature_radar.py"
@@ -141,10 +148,21 @@ if [[ "${PERSONAL_RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   fi
   "$PYTHON_BIN" "${QUEUE_ARGS[@]}" > "$QUEUE_JSON_PATH"
   "$PYTHON_BIN" "${QUEUE_TEXT_ARGS[@]}" > "$QUEUE_PATH"
+  if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$QUEUE_JSON_PATH" "$LATEST_QUEUE_JSON_PATH"
+    cp "$QUEUE_PATH" "$LATEST_QUEUE_PATH"
+  fi
 fi
 
 echo "Personal Literature Radar JSON: $JSON_PATH"
+if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  echo "Personal Literature Radar latest JSON: $LATEST_JSON_PATH"
+fi
 if [[ "${PERSONAL_RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   echo "Personal Literature Radar queue: $QUEUE_PATH"
   echo "Personal Literature Radar queue JSON: $QUEUE_JSON_PATH"
+  if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    echo "Personal Literature Radar latest queue: $LATEST_QUEUE_PATH"
+    echo "Personal Literature Radar latest queue JSON: $LATEST_QUEUE_JSON_PATH"
+  fi
 fi

@@ -56,12 +56,14 @@ python scripts/personal_literature_radar.py papers
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status dismissed
 python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Logs/personal-literature-radar-weekly.md
+python scripts/personal_literature_radar.py brief --days 7 --json
 ```
 
 For periodic personal reports, run the one-shot script from cron or a systemd
 timer:
 
 ```bash
+scripts/run_personal_literature_radar_cycle.sh
 scripts/run_personal_literature_radar.sh
 scripts/build_personal_literature_radar_brief.sh
 ```
@@ -69,12 +71,22 @@ scripts/build_personal_literature_radar_brief.sh
 User-level systemd timer templates live under `infra/systemd/user/`; see
 `infra/systemd/README.md`.
 
-The script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
+The cycle script is the simplest daily command: it runs collection, writes queue
+snapshots, then builds the stored brief. Set `PERSONAL_RADAR_CYCLE_RUN_COLLECTION=0`
+or `PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
+The run script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
 set. It also writes a text and JSON `personal-literature-radar-queue-*` snapshot
 for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
 brief script writes a Markdown and JSON roll-up over stored runs
-without collecting again. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
+without collecting again. Scheduled scripts also refresh stable
+`personal-literature-radar-latest.json`,
+`personal-literature-radar-queue-latest.*`, and
+`personal-literature-radar-brief-latest.*` files unless
+`PERSONAL_RADAR_WRITE_LATEST=0`. The JSON brief uses the same stored-read contract as
+the CLI `brief --json`: `kind=personal_literature_radar_brief`, selected
+limits, run count, latest-run health, review counts, active queue preview,
+index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
@@ -83,7 +95,8 @@ without collecting again. Useful environment variables include `PERSONAL_RADAR_S
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
-many active queue papers the run script writes. PDF caching only applies to ranked
+many active queue papers the run script writes. Use `PERSONAL_RADAR_WRITE_LATEST=0`
+to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief
 variables include
@@ -128,15 +141,21 @@ Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated
 paper without downloading or redistributing PDFs. Recommendation reports also
-include the source URL, access timestamp, OA status, license, local PDF path when
-present, and the reason a PDF can or cannot be downloaded.
+include the access kind, source URL, access timestamp, OA status, license, local
+PDF path when present, and the reason a PDF can or cannot be downloaded. Access
+kind distinguishes arXiv/open repository PDFs, arXiv-only links, confirmed OA PDFs, restricted
+publisher PDFs, DOI-only links, publisher-only links, local PDFs, and
+metadata-only records.
 If one source fails during a multi-source run, Personal Radar records the run as
 `partial`, keeps recommendations from successful sources, records per-source
 candidate counts, and appends source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
 lines, context, venue coverage, and PDF policy for the top stored
-recommendations. Stored runs also
+recommendations. `brief --json` returns the same Markdown plus latest-run
+health, review counts, active queue preview, and paths to the local run index
+and paper-history files, so local automation can consume stored briefs without
+parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief

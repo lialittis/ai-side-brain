@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from personal.literature_radar import (
     DEFAULT_PERSONAL_RADAR_SOURCES,
+    build_personal_literature_radar_brief_payload,
     build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
@@ -23,7 +24,6 @@ from personal.literature_radar import (
     run_personal_literature_radar,
 )
 from shared.literature_radar import (
-    build_radar_history_brief,
     format_radar_source_stats,
     radar_history_review_status,
     radar_latest_signal_lines,
@@ -395,27 +395,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "brief":
-        runs = read_personal_radar_index(args.root_path)[: args.run_limit]
-        brief = build_radar_history_brief(
-            runs,
-            title="Personal Literature Radar Brief",
+        result = build_personal_literature_radar_brief_payload(
+            args.root_path,
             days=args.days,
-            recommendation_limit=args.limit,
+            limit=args.limit,
+            run_limit=args.run_limit,
         )
-        result = {
-            "brief": brief,
-            "run_count": len(runs),
-            "days": args.days,
-            "recommendation_limit": args.limit,
-        }
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(brief, encoding="utf-8")
+            args.output.write_text(result["brief"], encoding="utf-8")
             result["brief_path"] = str(args.output)
         if args.json:
             print_json(result)
         else:
-            print(brief, end="")
+            print(result["brief"], end="")
         return 0
 
     parser.error(f"unsupported command: {args.command}")

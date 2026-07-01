@@ -16,6 +16,7 @@ from shared.literature_radar import (
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
+    build_radar_history_brief,
     build_recommendation_report,
     build_radar_review_queue,
     build_venue_coverage_summary,
@@ -368,6 +369,59 @@ def build_team_literature_radar_queue_payload(
             "radar": "/radar",
             "radar_papers": f"/radar/papers?limit={selected_limit}",
             "weekly_brief": "/radar/brief?days=7&limit=20",
+        },
+    }
+
+
+def build_team_literature_radar_brief_payload(
+    database: TeamResearchDatabase,
+    *,
+    days: int = 7,
+    limit: int = 20,
+    run_limit: int = 50,
+) -> dict[str, Any]:
+    selected_days = max(1, int(days))
+    selected_limit = max(1, int(limit))
+    selected_run_limit = max(1, int(run_limit))
+    review_counts = database.literature_radar_paper_review_counts()
+    queue = build_radar_review_queue(
+        database.list_literature_radar_papers(limit=None),
+        limit=selected_limit,
+        review_counts=review_counts,
+    )
+    runs = database.list_literature_radar_runs(limit=selected_run_limit)
+    run_bundles = [
+        {
+            "run": run,
+            "recommendations": database.list_literature_radar_recommendations(run["id"]),
+        }
+        for run in runs
+    ]
+    brief = build_radar_history_brief(
+        run_bundles,
+        title="Team Literature Radar Brief",
+        days=selected_days,
+        recommendation_limit=selected_limit,
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_brief",
+        "days": selected_days,
+        "recommendation_limit": selected_limit,
+        "run_limit": selected_run_limit,
+        "run_count": len(run_bundles),
+        "review_counts": review_counts,
+        "queue": {
+            "review": queue.get("review") or "",
+            "papers": queue.get("papers") or [],
+        },
+        "latest_run": team_literature_radar_run_summary(runs[0] if runs else None),
+        "brief": brief,
+        "links": {
+            "radar": "/radar",
+            "html": f"/radar/brief?days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}",
+            "json": f"/radar/brief.json?days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}",
+            "queue": f"/radar/queue.json?limit={selected_limit}",
         },
     }
 

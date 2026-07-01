@@ -21,6 +21,8 @@ OUTPUT_DIR="${PERSONAL_RADAR_BRIEF_OUTPUT_DIR:-memory/06_Logs}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BRIEF_PATH="$OUTPUT_DIR/personal-literature-radar-brief-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/personal-literature-radar-brief-$STAMP.json"
+LATEST_BRIEF_PATH="$OUTPUT_DIR/personal-literature-radar-brief-latest.md"
+LATEST_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-brief-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
 ARGS=(
@@ -36,5 +38,14 @@ ARGS=(
 
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
+if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  cp "$BRIEF_PATH" "$LATEST_BRIEF_PATH"
+  cp "$JSON_PATH" "$LATEST_JSON_PATH"
+fi
+
 echo "Personal Literature Radar brief: $BRIEF_PATH"
 echo "Personal Literature Radar brief JSON: $JSON_PATH"
+if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  echo "Personal Literature Radar latest brief: $LATEST_BRIEF_PATH"
+  echo "Personal Literature Radar latest brief JSON: $LATEST_JSON_PATH"
+fi

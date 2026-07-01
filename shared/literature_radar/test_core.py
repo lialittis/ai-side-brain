@@ -304,28 +304,64 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             links={"landing": "https://example.org/local"},
         )
         local_paper["local_pdf_path"] = "team/uploads/research/local.pdf"
+        arxiv_link_only_paper = create_radar_paper(
+            source_id="openalex",
+            source_paper_id="arxiv-link",
+            title="arXiv Link Metadata",
+            links={"arxiv": "https://arxiv.org/abs/2601.00044"},
+        )
+        doi_only_paper = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="doi-4",
+            title="DOI Only Metadata",
+            identifiers={"doi": "10.5555/metadata"},
+            links={"doi": "https://doi.org/10.5555/metadata"},
+        )
+        publisher_only_paper = create_radar_paper(
+            source_id="dblp",
+            source_paper_id="publisher-1",
+            title="Publisher Link Metadata",
+            links={"publisher": "https://publisher.example/landing"},
+        )
 
         arxiv_decision = assess_pdf_access(arxiv_paper, now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))
         self.assertTrue(arxiv_decision["can_download"])
+        self.assertEqual(arxiv_decision["access_kind"], "arxiv_pdf")
         self.assertEqual(arxiv_decision["license"], "")
         self.assertEqual(arxiv_decision["oa_status"], "")
         self.assertEqual(arxiv_decision["local_pdf_path"], "")
         self.assertFalse(arxiv_decision["downloaded"])
         decision = assess_pdf_access(publisher_paper)
         self.assertFalse(decision["can_download"])
+        self.assertEqual(decision["access_kind"], "restricted_pdf")
         self.assertEqual(decision["reason"], "pdf_url_present_but_oa_or_license_not_confirmed")
         self.assertEqual(decision["source_url"], "https://publisher.example/paywalled.pdf")
         oa_decision = assess_pdf_access(oa_paper)
         self.assertTrue(oa_decision["can_download"])
+        self.assertEqual(oa_decision["access_kind"], "open_access_pdf")
         self.assertEqual(oa_decision["reason"], "open_access_pdf_with_license_or_oa_status")
         self.assertEqual(oa_decision["license"], "cc-by")
         self.assertEqual(oa_decision["oa_status"], "green")
         local_decision = assess_pdf_access(local_paper)
         self.assertFalse(local_decision["can_download"])
+        self.assertEqual(local_decision["access_kind"], "local_pdf")
         self.assertTrue(local_decision["downloaded"])
         self.assertEqual(local_decision["local_pdf_path"], "team/uploads/research/local.pdf")
+        arxiv_link_decision = assess_pdf_access(arxiv_link_only_paper)
+        self.assertFalse(arxiv_link_decision["can_download"])
+        self.assertEqual(arxiv_link_decision["access_kind"], "arxiv_link")
+        self.assertEqual(arxiv_link_decision["source_url"], "https://arxiv.org/abs/2601.00044")
+        doi_decision = assess_pdf_access(doi_only_paper)
+        self.assertFalse(doi_decision["can_download"])
+        self.assertEqual(doi_decision["access_kind"], "doi_link")
+        self.assertEqual(doi_decision["source_url"], "https://doi.org/10.5555/metadata")
+        publisher_decision = assess_pdf_access(publisher_only_paper)
+        self.assertFalse(publisher_decision["can_download"])
+        self.assertEqual(publisher_decision["access_kind"], "publisher_link")
+        self.assertEqual(publisher_decision["source_url"], "https://publisher.example/landing")
         self.assertEqual(arxiv_decision["access_date"], "2026-07-01T12:00:00+00:00")
         self.assertIn("download allowed", pdf_access_report_text(arxiv_decision))
+        self.assertIn("kind=arxiv_pdf", pdf_access_report_text(arxiv_decision))
         self.assertIn("source=https://arxiv.org/pdf/2601.00001.pdf", pdf_access_report_text(arxiv_decision))
 
     def test_enriches_radar_papers_with_unpaywall_and_records_source_health(self) -> None:

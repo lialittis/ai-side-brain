@@ -23,6 +23,7 @@ from shared.literature_radar import (
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
+    build_radar_history_brief,
     build_recommendation_report,
     build_radar_pipeline_trace,
     build_radar_review_queue,
@@ -349,6 +350,47 @@ def build_personal_literature_radar_queue_payload(
         "limit": selected_limit,
         "latest_run": personal_literature_radar_run_summary(latest_run),
         "papers": queue.get("papers") or [],
+        "paths": {
+            "run_index": str(personal_radar_index_path(root)),
+            "paper_history": str(personal_radar_paper_history_path(root)),
+        },
+    }
+
+
+def build_personal_literature_radar_brief_payload(
+    root: Path,
+    *,
+    days: int = 7,
+    limit: int = 20,
+    run_limit: int = 50,
+) -> dict[str, Any]:
+    selected_days = max(1, int(days))
+    selected_limit = max(1, int(limit))
+    selected_run_limit = max(1, int(run_limit))
+    records = read_personal_radar_paper_history(root)
+    review_counts = radar_review_counts(records)
+    queue = build_radar_review_queue(records, limit=selected_limit, review_counts=review_counts)
+    runs = read_personal_radar_index(root)[:selected_run_limit]
+    brief = build_radar_history_brief(
+        runs,
+        title="Personal Literature Radar Brief",
+        days=selected_days,
+        recommendation_limit=selected_limit,
+    )
+    return {
+        "success": True,
+        "kind": "personal_literature_radar_brief",
+        "days": selected_days,
+        "recommendation_limit": selected_limit,
+        "run_limit": selected_run_limit,
+        "run_count": len(runs),
+        "review_counts": review_counts,
+        "queue": {
+            "review": queue.get("review") or "",
+            "papers": queue.get("papers") or [],
+        },
+        "latest_run": personal_literature_radar_run_summary(runs[0] if runs else None),
+        "brief": brief,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),
             "paper_history": str(personal_radar_paper_history_path(root)),

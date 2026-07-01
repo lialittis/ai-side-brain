@@ -500,7 +500,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
     license_text = normalize_spaces(str(paper.get("license") or links.get("license") or ""))
     oa_status = normalize_spaces(str(paper.get("oa_status") or links.get("oa_status") or ""))
     pdf_url = links.get("pdf") or links.get("oa_pdf") or links.get("arxiv_pdf") or ""
-    source_url = links.get("landing") or links.get("doi") or links.get("arxiv") or pdf_url
+    source_url = links.get("landing") or links.get("doi") or links.get("arxiv") or links.get("publisher") or pdf_url
     local_pdf_path = normalize_spaces(str(paper.get("local_pdf_path") or ""))
 
     if local_pdf_path:
@@ -509,6 +509,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             "local_pdf_already_available",
             source_url,
             pdf_url,
+            access_kind="local_pdf",
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
@@ -521,6 +522,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             "arxiv_or_open_repository",
             source_url,
             pdf_url,
+            access_kind="arxiv_pdf",
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
@@ -535,6 +537,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             "open_access_pdf_with_license_or_oa_status",
             source_url,
             pdf_url,
+            access_kind="open_access_pdf",
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
@@ -546,6 +549,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             "pdf_url_present_but_oa_or_license_not_confirmed",
             source_url,
             pdf_url,
+            access_kind="restricted_pdf",
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
@@ -556,6 +560,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
         "metadata_only_no_legal_pdf_found",
         source_url,
         "",
+        access_kind=metadata_only_access_kind(links, source_url),
         license_text=license_text,
         oa_status=oa_status,
         local_pdf_path=local_pdf_path,
@@ -569,6 +574,7 @@ def pdf_access_decision(
     source_url: str,
     pdf_url: str,
     *,
+    access_kind: str = "",
     license_text: str = "",
     oa_status: str = "",
     local_pdf_path: str = "",
@@ -577,6 +583,7 @@ def pdf_access_decision(
 ) -> dict[str, Any]:
     return {
         "can_download": can_download,
+        "access_kind": access_kind,
         "reason": reason,
         "source_url": source_url,
         "pdf_url": pdf_url,
@@ -586,6 +593,16 @@ def pdf_access_decision(
         "downloaded": downloaded,
         "access_date": iso_timestamp(now or datetime.now(timezone.utc)),
     }
+
+
+def metadata_only_access_kind(links: dict[str, Any], source_url: str) -> str:
+    if links.get("arxiv") or "arxiv.org/" in str(source_url):
+        return "arxiv_link"
+    if links.get("doi") or "doi.org/" in str(source_url):
+        return "doi_link"
+    if links.get("publisher"):
+        return "publisher_link"
+    return "metadata_only"
 
 
 def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
@@ -2337,6 +2354,7 @@ def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:
     allowed = "download allowed" if pdf_access.get("can_download") else "metadata/link only"
     parts = [
         allowed,
+        f"kind={pdf_access.get('access_kind') or 'unknown'}",
         f"reason={pdf_access.get('reason') or 'unknown'}",
         f"oa={pdf_access.get('oa_status') or 'unknown'}",
         f"license={pdf_access.get('license') or 'unknown'}",

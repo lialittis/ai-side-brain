@@ -25,7 +25,6 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     assess_pdf_access,
-    build_radar_history_brief,
     build_radar_review_queue,
     radar_latest_signal_lines,
 )
@@ -33,6 +32,7 @@ from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     build_team_radar_scorer,
     import_radar_recommendation,
@@ -830,25 +830,18 @@ def render_literature_radar_brief_page(
     limit: int = 20,
     run_limit: int = 50,
 ) -> str:
-    runs = database.list_literature_radar_runs(limit=run_limit)
-    run_bundles = [
-        {
-            "run": run,
-            "recommendations": database.list_literature_radar_recommendations(run["id"]),
-        }
-        for run in runs
-    ]
-    brief = build_radar_history_brief(
-        run_bundles,
-        title="Team Literature Radar Brief",
+    payload = build_team_literature_radar_brief_payload(
+        database,
         days=days,
-        recommendation_limit=limit,
+        limit=limit,
+        run_limit=run_limit,
     )
     body = f"""
     {render_topline("Radar Brief", "Weekly or daily roll-up from stored Literature Radar runs.", "/radar", "Radar")}
     <section class="panel">
       {render_radar_brief_form(days=days, limit=limit)}
-      <pre class="radar-brief-output">{html_escape(brief)}</pre>
+      <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
+      <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
     </section>
     """
     return page("Radar Brief", body, active="radar")
@@ -931,6 +924,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     return f"""
     <div class="radar-brief-link">
       <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
+      <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
       <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
     </div>
@@ -2997,6 +2991,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/radar/brief":
                 self.respond_html(
                     render_literature_radar_brief_page(
+                        self.database,
+                        days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                    )
+                )
+            elif parsed.path == "/radar/brief.json":
+                self.respond_json(
+                    build_team_literature_radar_brief_payload(
                         self.database,
                         days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),

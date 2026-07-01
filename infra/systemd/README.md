@@ -50,12 +50,18 @@ Collection timers also write active queue snapshots by default:
 `personal-literature-radar-queue-*` under `memory/06_Logs/`. Set
 `RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable those files;
 set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size.
+Scheduled scripts also refresh stable `*-latest.*` copies for dashboards,
+aliases, or notification jobs. Set `RADAR_WRITE_LATEST=0` or
+`PERSONAL_RADAR_WRITE_LATEST=0` to keep only timestamped history.
 
 For a simpler cron-style setup, `team/scripts/run_literature_radar_cycle.sh`
 runs Team collection and then builds the Team brief in one command. It defaults
 to `RADAR_USE_SAVED_DEFAULTS=1`, so it is usually the right command for a
-single daily team job. The separate systemd units above keep collection and
-weekly brief generation on independent schedules.
+single daily team job. `scripts/run_personal_literature_radar_cycle.sh` does the
+same for Personal Literature Radar, using `PERSONAL_RADAR_CYCLE_RUN_COLLECTION`
+and `PERSONAL_RADAR_CYCLE_BUILD_BRIEF` as optional phase toggles. The separate
+systemd units above keep collection and weekly brief generation on independent
+schedules.
 
 PDF caching is off by default. Set `RADAR_CACHE_PDFS=1` with
 `RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs`, or

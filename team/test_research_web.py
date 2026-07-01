@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
+from urllib.request import urlopen
 from unittest import mock
 
 from shared.literature_radar import create_radar_paper, recommend_papers
@@ -27,6 +30,7 @@ from team.research_web import (
     remove_team_interest,
     import_radar_recommendation_to_library,
     import_radar_paper_to_library,
+    make_handler,
     review_radar_paper,
     run_literature_radar_from_web,
     save_team_interest,
@@ -147,6 +151,100 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(payload["latest_run"]["status"], "failed")
             self.assertEqual(payload["latest_run"]["source_error_count"], 1)
             self.assertEqual(payload["latest_run"]["source_errors"][0]["source_id"], "dblp")
+
+    def test_radar_json_routes_serve_stored_queue_and_brief_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00051",
+                title="Route Verified Radar Queue Paper",
+                abstract="System security and memory safety evidence for the Team Radar queue.",
+                identifiers={"arxiv_id": "2601.00051"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00051"},
+                discovered_at=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
+            )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["summary"] = {
+                "short_summary": "A queued paper exposed through the JSON route.",
+                "relationship_to_interests": "Matches system security and memory safety.",
+                "why_attention": "Useful for route-level Team Radar automation.",
+                "suggested_next_step": "review_metadata",
+                "confidence": "medium",
+                "source_trace": {"processor": "local-radar-summary-v0.1"},
+            }
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 8, 10, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=[recommendation],
+                source_stats=[
+                    {
+                        "source_id": "arxiv",
+                        "status": "succeeded",
+                        "collected_count": 1,
+                        "recorded_at": "2026-07-01T08:11:00+00:00",
+                    }
+                ],
+                now=datetime(2026, 7, 1, 8, 11, tzinfo=timezone.utc),
+            )
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(database))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                with urlopen(f"http://127.0.0.1:{port}/radar/queue.json?limit=1", timeout=5) as response:
+                    queue_payload = json.loads(response.read().decode("utf-8"))
+                    queue_content_type = response.headers.get("Content-Type")
+                    queue_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5",
+                    timeout=5,
+                ) as response:
+                    brief_payload = json.loads(response.read().decode("utf-8"))
+                    brief_content_type = response.headers.get("Content-Type")
+                    brief_status = response.status
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                server.server_close()
+
+            self.assertEqual(queue_status, 200)
+            self.assertEqual(queue_content_type, "application/json")
+            self.assertTrue(queue_payload["success"])
+            self.assertEqual(queue_payload["kind"], "team_literature_radar_queue")
+            self.assertEqual(queue_payload["limit"], 1)
+            self.assertEqual(queue_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
+            self.assertEqual(queue_payload["latest_run"]["id"], run["id"])
+            self.assertEqual(queue_payload["latest_run"]["status"], "succeeded")
+            self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
+            self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertIn(
+                "Signal: A queued paper exposed through the JSON route.",
+                queue_payload["papers"][0]["signal_lines"],
+            )
+            self.assertEqual(queue_payload["links"]["radar_papers"], "/radar/papers?limit=1")
+            self.assertEqual(brief_status, 200)
+            self.assertEqual(brief_content_type, "application/json")
+            self.assertTrue(brief_payload["success"])
+            self.assertEqual(brief_payload["kind"], "team_literature_radar_brief")
+            self.assertEqual(brief_payload["days"], 7)
+            self.assertEqual(brief_payload["recommendation_limit"], 1)
+            self.assertEqual(brief_payload["run_limit"], 5)
+            self.assertEqual(brief_payload["run_count"], 1)
+            self.assertEqual(brief_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
+            self.assertEqual(brief_payload["queue"]["review"], "unreviewed")
+            self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertEqual(brief_payload["latest_run"]["id"], run["id"])
+            self.assertIn("Team Literature Radar Brief", brief_payload["brief"])
+            self.assertIn("Route Verified Radar Queue Paper", brief_payload["brief"])
+            self.assertEqual(brief_payload["links"]["radar"], "/radar")
+            self.assertEqual(brief_payload["links"]["json"], "/radar/brief.json?days=7&limit=1&run_limit=5")
 
     def test_literature_radar_page_lists_stored_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

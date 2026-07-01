@@ -15,7 +15,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.literature_radar import (
-    build_radar_history_brief,
     format_radar_source_stats,
     radar_latest_signal_lines,
 )
@@ -23,6 +22,7 @@ from shared.research import topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     run_team_literature_radar,
 )
@@ -807,34 +807,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-brief":
-        runs = database.list_literature_radar_runs(limit=args.run_limit)
-        run_bundles = [
-            {
-                "run": run,
-                "recommendations": database.list_literature_radar_recommendations(run["id"]),
-            }
-            for run in runs
-        ]
-        brief = build_radar_history_brief(
-            run_bundles,
-            title="Team Literature Radar Brief",
+        result = build_team_literature_radar_brief_payload(
+            database,
             days=args.days,
-            recommendation_limit=args.limit,
+            limit=args.limit,
+            run_limit=args.run_limit,
         )
-        result = {
-            "brief": brief,
-            "run_count": len(run_bundles),
-            "days": args.days,
-            "recommendation_limit": args.limit,
-        }
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(brief, encoding="utf-8")
+            args.output.write_text(result["brief"], encoding="utf-8")
             result["brief_path"] = str(args.output)
         if args.json:
             print_json(result)
         else:
-            print(brief, end="")
+            print(result["brief"], end="")
         return 0
 
     parser.error(f"unsupported command: {args.command}")

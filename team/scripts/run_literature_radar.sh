@@ -22,6 +22,10 @@ REPORT_PATH="$OUTPUT_DIR/literature-radar-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/literature-radar-$STAMP.json"
 QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
+LATEST_REPORT_PATH="$OUTPUT_DIR/literature-radar-latest.md"
+LATEST_JSON_PATH="$OUTPUT_DIR/literature-radar-latest.json"
+LATEST_QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-latest.txt"
+LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
 USE_SAVED_DEFAULTS="${RADAR_USE_SAVED_DEFAULTS:-0}"
@@ -142,6 +146,11 @@ fi
 
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
+if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  cp "$REPORT_PATH" "$LATEST_REPORT_PATH"
+  cp "$JSON_PATH" "$LATEST_JSON_PATH"
+fi
+
 if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   QUEUE_ARGS=(
     "team/research_cli.py"
@@ -162,11 +171,23 @@ if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   fi
   "$PYTHON_BIN" "${QUEUE_ARGS[@]}" > "$QUEUE_JSON_PATH"
   "$PYTHON_BIN" "${QUEUE_TEXT_ARGS[@]}" > "$QUEUE_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$QUEUE_JSON_PATH" "$LATEST_QUEUE_JSON_PATH"
+    cp "$QUEUE_PATH" "$LATEST_QUEUE_PATH"
+  fi
 fi
 
 echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
+if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+  echo "Literature Radar latest report: $LATEST_REPORT_PATH"
+  echo "Literature Radar latest JSON: $LATEST_JSON_PATH"
+fi
 if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   echo "Literature Radar queue: $QUEUE_PATH"
   echo "Literature Radar queue JSON: $QUEUE_JSON_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    echo "Literature Radar latest queue: $LATEST_QUEUE_PATH"
+    echo "Literature Radar latest queue JSON: $LATEST_QUEUE_JSON_PATH"
+  fi
 fi

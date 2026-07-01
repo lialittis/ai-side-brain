@@ -39,6 +39,7 @@ The web UI exposes stored radar runs at:
 ```text
 http://127.0.0.1:8790/radar
 http://127.0.0.1:8790/radar/brief?days=7
+http://127.0.0.1:8790/radar/brief.json?days=7
 http://127.0.0.1:8790/radar/papers
 http://127.0.0.1:8790/radar/queue.json
 ```
@@ -91,6 +92,12 @@ reads stored Radar state; it does not collect sources, download PDFs, or call AI
 The payload includes `review_counts`, `latest_run` health and source stats, the
 active paper records, persisted signal lines, and links back to the HTML review
 surfaces.
+Stored daily or weekly briefs are also available as local JSON at
+`/radar/brief.json?days=7&limit=20`. That endpoint reads the same stored runs as
+the HTML brief and CLI `radar-brief --json`; it does not collect sources,
+download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
+health, limits, run count, review counts, the active queue preview, and links
+back to the Team Radar pages.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -229,9 +236,12 @@ python team/research_cli.py radar-run --source openreview_venues --openreview-ve
 
 Without `--import-results`, the runner only collects metadata, deduplicates,
 scores, and writes/reports recommendations. Each report item includes the PDF
-policy decision with source URL, access timestamp, OA status, license, local PDF
-path when present, and the reason a PDF can or cannot be downloaded. This is the
-safer default for early daily or weekly scheduled runs.
+policy decision with access kind, source URL, access timestamp, OA status,
+license, local PDF path when present, and the reason a PDF can or cannot be
+downloaded. Access kind distinguishes arXiv/open repository PDFs, arXiv-only
+links, confirmed OA PDFs, restricted publisher PDFs, DOI-only links,
+publisher-only links, local PDFs, and metadata-only records. This is the safer default for early daily or
+weekly scheduled runs.
 
 Stored runs can be inspected later:
 
@@ -244,6 +254,7 @@ python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
 python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
 python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
+python team/research_cli.py radar-brief --days 7 --json
 ```
 
 ## Stored Run History
@@ -297,6 +308,12 @@ For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
 `python team/research_cli.py radar-queue --json` return the same active queue
 shape with review counts, latest-run health/source stats, persisted signal
 lines, paper records, and links back to the HTML review surfaces.
+`/radar/brief.json?days=7&limit=20` and
+`python team/research_cli.py radar-brief --json` return the same stored brief
+shape with `kind=team_literature_radar_brief`, the selected limits, run count,
+latest-run health/source stats, review counts, active queue preview, the
+Markdown brief, and links back to the HTML brief, Radar page, JSON endpoint,
+and queue JSON.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, and source errors are shown in
@@ -317,7 +334,9 @@ Stored run history keeps collection settings such as limits, conference year,
 venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
 were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
-Brief`, so team members can review it without using the CLI.
+Brief`, and the matching JSON payload is available through `Brief JSON`, so team
+members can review it without using the CLI while local automation can consume
+the same stored-roll-up contract.
 
 ## Scheduling
 
@@ -339,13 +358,18 @@ saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
 
 The run script writes a Markdown report and matching JSON result into
-`team/logs/`. It also writes text and JSON `literature-radar-queue-*` snapshots
+`team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
+local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. It also writes
+text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
 includes latest-run health, source-error counts, stored summary,
 relevance/context signal, and matched interests for daily review. The JSON
 snapshot uses the same queue payload as `radar-queue --json`, including
-`latest_run` health plus per-paper `signal_lines`. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
-brief script writes a stored-run roll-up without collecting again. The cycle
+`latest_run` health plus per-paper `signal_lines`. Stable
+`literature-radar-queue-latest.*` files are refreshed when latest-copy output is
+enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
+brief script writes a stored-run roll-up without collecting again and refreshes
+`literature-radar-brief-latest.*` when latest-copy output is enabled. The cycle
 script runs both in order; if collection fails, the brief step does not run.
 
 PDF caching is disabled by default. To cache only legal open-access PDFs for
@@ -380,6 +404,8 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
 - `RADAR_WRITE_QUEUE=0`: skip writing queue snapshots from
   `run_literature_radar.sh`.
+- `RADAR_WRITE_LATEST=0`: skip refreshing stable `*-latest.*` copies while
+  keeping timestamped report, queue, and brief history.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.

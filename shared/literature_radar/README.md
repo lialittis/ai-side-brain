@@ -162,8 +162,11 @@ unauthorized sources must not be downloaded or redistributed.
 
 `assess_pdf_access(...)` records the download decision separately from metadata
 collection. Its record includes `source_url`, `access_date`, `license`,
-`oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`, and the
-reason why a PDF should or should not be downloaded.
+`oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`,
+`access_kind`, and the reason why a PDF should or should not be downloaded.
+`access_kind` distinguishes local PDFs, arXiv/open repository PDFs, arXiv-only
+links, confirmed open-access PDFs, restricted publisher PDFs, DOI-only links,
+publisher-only links, and metadata-only records.
 
 `cache_open_access_pdf(...)` is an optional, policy-gated cache helper for
 product adapters. It only calls its injected fetcher when `assess_pdf_access`
