@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import unittest
 
 from shared.literature_radar import (
@@ -9,16 +10,20 @@ from shared.literature_radar import (
     build_dblp_publication_search_url,
     build_openalex_works_url,
     build_openreview_notes_url,
+    build_semantic_scholar_recommendations_body,
+    build_semantic_scholar_recommendations_url,
     build_semantic_scholar_search_url,
     build_unpaywall_doi_url,
     build_ndss_accepted_papers_url,
     build_usenix_security_accepted_papers_url,
     collect_arxiv,
     collect_crossref_works,
+    collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
     collect_openalex_works,
     collect_openreview_notes,
+    collect_semantic_scholar_recommendations,
     collect_semantic_scholar_search,
     collect_usenix_security_accepted_papers,
     create_radar_paper,
@@ -29,6 +34,7 @@ from shared.literature_radar import (
     parse_ndss_accepted_papers,
     parse_openalex_works,
     parse_openreview_notes,
+    parse_semantic_scholar_recommendations,
     parse_semantic_scholar_search,
     parse_usenix_security_accepted_papers,
     parse_unpaywall_record,
@@ -73,6 +79,46 @@ DBLP_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
         <doi>10.1145/example</doi>
         <ee>https://doi.org/10.1145/example</ee>
         <url>https://dblp.org/rec/conf/ccs/Example2026</url>
+      </info>
+    </hit>
+  </hits>
+</dblp>
+"""
+
+
+DBLP_VENUE_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
+<dblp>
+  <hits total="3" computed="3" sent="3" first="0">
+    <hit score="4" id="conf/ccs/MemorySafety2026">
+      <info>
+        <authors>
+          <author>Alice Example</author>
+        </authors>
+        <title>Memory Safety for Systems Security</title>
+        <venue>CCS</venue>
+        <year>2026</year>
+        <type>Conference and Workshop Papers</type>
+        <doi>10.1145/ccs-example</doi>
+        <ee>https://doi.org/10.1145/ccs-example</ee>
+        <url>https://dblp.org/rec/conf/ccs/MemorySafety2026</url>
+      </info>
+    </hit>
+    <hit score="2" id="conf/ccs/Old2025">
+      <info>
+        <title>Old CCS Paper</title>
+        <venue>CCS</venue>
+        <year>2025</year>
+        <type>Conference and Workshop Papers</type>
+        <url>https://dblp.org/rec/conf/ccs/Old2025</url>
+      </info>
+    </hit>
+    <hit score="1" id="conf/icse/Other2026">
+      <info>
+        <title>Wrong Venue Paper</title>
+        <venue>ICSE</venue>
+        <year>2026</year>
+        <type>Conference and Workshop Papers</type>
+        <url>https://dblp.org/rec/conf/icse/Other2026</url>
       </info>
     </hit>
   </hits>
@@ -138,6 +184,35 @@ SEMANTIC_SCHOLAR_FIXTURE = """
       "s2FieldsOfStudy": [{"category": "Computer Science", "source": "s2-fos-model"}],
       "isOpenAccess": true,
       "openAccessPdf": {"url": "https://arxiv.org/pdf/2601.00001"}
+    }
+  ]
+}
+"""
+
+
+SEMANTIC_SCHOLAR_RECOMMENDATIONS_FIXTURE = """
+{
+  "recommendedPapers": [
+    {
+      "paperId": "rec-paper-1",
+      "corpusId": 987654,
+      "externalIds": {
+        "DOI": "10.1145/recommended"
+      },
+      "url": "https://www.semanticscholar.org/paper/recommended",
+      "title": "Recommended Memory Safety for Agentic Systems",
+      "abstract": "System security and memory safety recommendations for agentic systems.",
+      "authors": [
+        {"authorId": "1", "name": "Carol Example"}
+      ],
+      "year": 2026,
+      "venue": "Example Security",
+      "publicationDate": "2026-03-04",
+      "publicationTypes": ["Conference"],
+      "fieldsOfStudy": ["Computer Science"],
+      "s2FieldsOfStudy": [{"category": "Computer Science", "source": "s2-fos-model"}],
+      "isOpenAccess": false,
+      "openAccessPdf": null
     }
   ]
 }
@@ -458,6 +533,33 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(papers[0]["source_id"], "dblp")
         self.assertEqual(len(seen_urls), 1)
 
+    def test_collect_dblp_venue_publications_filters_and_annotates_profiles(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return DBLP_VENUE_FIXTURE.encode("utf-8")
+
+        papers = collect_dblp_venue_publications(
+            venue_profiles=["acm_ccs"],
+            year=2026,
+            max_results=20,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "dblp")
+        self.assertEqual(paper["title"], "Memory Safety for Systems Security")
+        self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["venue"], "CCS")
+        self.assertIn("ACM+CCS+2026", seen_urls[0])
+        self.assertEqual(paper["source_records"][0]["venue_profile_id"], "acm_ccs")
+        self.assertEqual(paper["source_records"][0]["venue_group"], "security")
+        self.assertEqual(paper["source_records"][0]["venue_year"], 2026)
+        self.assertIn("venue_query_url", paper["source_records"][0])
+
     def test_builds_and_parses_openalex_works(self) -> None:
         url = build_openalex_works_url(
             query_terms=["memory safety", "system security"],
@@ -589,6 +691,73 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(len(papers), 1)
         self.assertEqual(papers[0]["source_id"], "semantic_scholar")
         self.assertEqual(len(seen_urls), 1)
+
+    def test_builds_and_parses_semantic_scholar_recommendations(self) -> None:
+        url = build_semantic_scholar_recommendations_url(max_results=7)
+        body = build_semantic_scholar_recommendations_body(
+            positive_paper_ids=["649def34f8be52c8b66281af98ae884c09aef38b"],
+            negative_paper_ids=["0045ad0c1e14a4d1f4b011c92eb36b8df63d65bc"],
+        )
+        papers = parse_semantic_scholar_recommendations(
+            SEMANTIC_SCHOLAR_RECOMMENDATIONS_FIXTURE,
+            query_url=url,
+            positive_paper_ids=["649def34f8be52c8b66281af98ae884c09aef38b"],
+            negative_paper_ids=["0045ad0c1e14a4d1f4b011c92eb36b8df63d65bc"],
+            collected_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("api.semanticscholar.org/recommendations/v1/papers", url)
+        self.assertIn("limit=7", url)
+        self.assertIn("openAccessPdf", url)
+        self.assertEqual(
+            json.loads(body.decode("utf-8")),
+            {
+                "negativePaperIds": ["0045ad0c1e14a4d1f4b011c92eb36b8df63d65bc"],
+                "positivePaperIds": ["649def34f8be52c8b66281af98ae884c09aef38b"],
+            },
+        )
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "semantic_scholar")
+        self.assertEqual(paper["source_paper_id"], "rec-paper-1")
+        self.assertEqual(paper["title"], "Recommended Memory Safety for Agentic Systems")
+        self.assertEqual(paper["authors"], ["Carol Example"])
+        self.assertEqual(paper["identifiers"]["doi"], "10.1145/recommended")
+        self.assertEqual(
+            paper["source_records"][0]["recommendation_source"],
+            "semantic_scholar_recommendations",
+        )
+        self.assertEqual(
+            paper["source_records"][0]["positive_paper_ids"],
+            ["649def34f8be52c8b66281af98ae884c09aef38b"],
+        )
+
+    def test_collect_semantic_scholar_recommendations_uses_injected_post_fetcher(self) -> None:
+        seen_requests = []
+
+        def fetcher(url: str, body: bytes, headers: dict[str, str]) -> bytes:
+            seen_requests.append((url, json.loads(body.decode("utf-8")), headers))
+            return SEMANTIC_SCHOLAR_RECOMMENDATIONS_FIXTURE.encode("utf-8")
+
+        papers = collect_semantic_scholar_recommendations(
+            positive_paper_ids=["paper-a"],
+            negative_paper_ids=["paper-b"],
+            max_results=1,
+            api_key="test-key",
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["source_id"], "semantic_scholar")
+        self.assertEqual(len(seen_requests), 1)
+        self.assertIn("recommendations/v1/papers", seen_requests[0][0])
+        self.assertEqual(seen_requests[0][1]["positivePaperIds"], ["paper-a"])
+        self.assertEqual(seen_requests[0][1]["negativePaperIds"], ["paper-b"])
+        self.assertEqual(seen_requests[0][2]["x-api-key"], "test-key")
+
+    def test_semantic_scholar_recommendations_require_positive_seed_ids(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive seed paper ID"):
+            build_semantic_scholar_recommendations_body(positive_paper_ids=[])
 
     def test_parses_and_applies_unpaywall_enrichment(self) -> None:
         url = build_unpaywall_doi_url(doi="https://doi.org/10.1145/example", email="radar@example.com")

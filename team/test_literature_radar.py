@@ -12,7 +12,18 @@ from unittest import mock
 from shared.literature_radar import create_radar_paper, recommend_papers
 from team import research_cli
 from team.literature_radar import import_radar_recommendation, run_team_literature_radar
+from team.literature_radar_ai import TEAM_RADAR_SUMMARY_SCHEMA, summarize_radar_recommendations_with_openrouter
 from team.research_db import TeamResearchDatabase
+
+
+class FakeSummaryClient:
+    def __init__(self, response: dict[str, object]) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return self.response
 
 
 class TeamLiteratureRadarTest(unittest.TestCase):
@@ -91,6 +102,109 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp.call_count, 3)
             self.assertEqual(len(database.list_latest_relevant_papers()), 1)
 
+    def test_run_team_literature_radar_attaches_local_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00008",
+                title="Memory Safety for Agentic Security",
+                abstract=(
+                    "This paper studies memory safety, system security, LLM security, "
+                    "and AI agent security for agentic security workflows."
+                ),
+                identifiers={"arxiv_id": "2601.00008"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00008"},
+            )
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    summarize=True,
+                    summary_provider="local",
+                    now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
+
+            summary = result["recommendations"][0]["summary"]
+            self.assertIn("memory safety, system security", summary["short_summary"])
+            self.assertEqual(summary["source_trace"]["processor"], "local-radar-summary-v0.1")
+            self.assertIn("Summary: This paper studies memory safety", result["report"])
+            stored = database.list_literature_radar_recommendations(result["run_id"])[0]
+            self.assertEqual(stored["summary"]["source_trace"]["processor"], "local-radar-summary-v0.1")
+
+    def test_run_team_literature_radar_links_recommendations_to_existing_library_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            baseline = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00011",
+                title="Agentic Security Baseline",
+                abstract="Prior work on agentic security, LLM security, memory safety, and system security.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00011"},
+            )
+            baseline["tags"] = ["agentic-security"]
+            import_radar_recommendation(database, recommend_papers([baseline])[0])
+            candidate = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00012",
+                title="Memory Safety for Agentic Security",
+                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00012"},
+            )
+            candidate["tags"] = ["agentic-security"]
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[candidate]):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
+
+            context = result["recommendations"][0]["context"]
+            self.assertIn("LLM security", context["matched_interest_terms"])
+            self.assertEqual(context["related_items"][0]["title"], "Agentic Security Baseline")
+            self.assertIn("Related to existing context", context["relationship_summary"])
+            self.assertIn("Context: Matches active interests", result["report"])
+            stored = database.list_literature_radar_recommendations(result["run_id"])[0]
+            self.assertEqual(stored["context"]["related_items"][0]["title"], "Agentic Security Baseline")
+
+    def test_openrouter_summary_adapter_uses_structured_output(self) -> None:
+        paper = create_radar_paper(
+            source_id="semantic_scholar",
+            source_paper_id="paper-summary",
+            title="Agentic Security for Memory Safety",
+            abstract="This paper studies LLM security and memory safety for agents.",
+            links={"landing": "https://www.semanticscholar.org/paper/paper-summary"},
+        )
+        recommendation = recommend_papers([paper])[0]
+        client = FakeSummaryClient(
+            {
+                "short_summary": "A concise AI summary.",
+                "relationship_to_interests": "Connects to memory safety and LLM security.",
+                "why_attention": "It is useful for team review.",
+                "suggested_next_step": "read_metadata_and_open_link",
+                "confidence": "high",
+            }
+        )
+
+        summarized = summarize_radar_recommendations_with_openrouter(
+            [recommendation],
+            client=client,
+            model="test/model",
+            query_terms=["memory safety"],
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(summarized[0]["summary"]["short_summary"], "A concise AI summary.")
+        self.assertEqual(summarized[0]["summary"]["source_trace"]["ai_model"], "test/model")
+        self.assertEqual(client.calls[0]["response_schema"], TEAM_RADAR_SUMMARY_SCHEMA)
+        self.assertEqual(client.calls[0]["schema_name"], "team_literature_radar_summary")
+        self.assertIn("Agentic Security for Memory Safety", str(client.calls[0]["messages"]))
+
     def test_run_team_literature_radar_persists_run_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -137,7 +251,16 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(len(recommendations), 1)
             self.assertEqual(recommendations[0]["title"], "Memory Safety for Agentic Security Systems")
             self.assertEqual(recommendations[0]["rank"], 1)
+            self.assertTrue(recommendations[0]["novelty"]["is_new"])
+            self.assertTrue(recommendations[0]["pdf_access"]["can_download"])
+            self.assertEqual(recommendations[0]["pdf_access"]["reason"], "arxiv_or_open_repository")
             self.assertEqual(recommendations[0]["imported_item_id"], first["imported"][0]["item_id"])
+            self.assertIn("Novelty: new this run", first["report"])
+
+            repeated_recommendations = database.list_literature_radar_recommendations(second["run_id"])
+            self.assertFalse(repeated_recommendations[0]["novelty"]["is_new"])
+            self.assertEqual(repeated_recommendations[0]["novelty"]["seen_count_before_run"], 1)
+            self.assertIn("Novelty: seen before", second["report"])
 
             paper_history = database.get_literature_radar_paper(paper["dedupe_key"])
             self.assertIsNotNone(paper_history)
@@ -147,6 +270,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(paper_history["seen_count"], 2)
             self.assertEqual(paper_history["source_ids"], ["arxiv"])
             self.assertEqual(paper_history["imported_item_id"], first["imported"][0]["item_id"])
+            self.assertTrue(paper_history["pdf_access"]["can_download"])
+            self.assertEqual(paper_history["pdf_access"]["source_url"], "https://arxiv.org/abs/2601.00004")
+            self.assertEqual(paper_history["pdf_access"]["local_pdf_path"], "")
+            self.assertFalse(paper_history["pdf_access"]["downloaded"])
 
     def test_run_team_literature_radar_collects_semantic_scholar(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -178,6 +305,71 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(semantic.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(semantic.call_args.kwargs["max_results"], 2)
             self.assertEqual(semantic.call_args.kwargs["api_key"], "test-key")
+
+    def test_run_team_literature_radar_collects_dblp_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="dblp",
+                source_paper_id="conf/ccs/MemorySafety2026",
+                title="Memory Safety for Systems Security",
+                abstract="Memory safety and system security.",
+                year=2026,
+                venue="CCS",
+                identifiers={"doi": "10.1145/ccs-example"},
+                links={"landing": "https://dblp.org/rec/conf/ccs/MemorySafety2026"},
+            )
+            with mock.patch("team.literature_radar.collect_dblp_venue_publications", return_value=[paper]) as dblp_venues:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["dblp_venues"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    conference_year=2026,
+                    dblp_venue_profiles=["security"],
+                )
+
+            self.assertEqual(result["sources"], ["dblp_venues"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            dblp_venues.assert_called_once()
+            self.assertEqual(dblp_venues.call_args.kwargs["venue_profiles"], ["security"])
+            self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
+            self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
+
+    def test_run_team_literature_radar_collects_semantic_scholar_recommendations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="rec-paper-1",
+                title="Related Memory Safety for Agentic Systems",
+                abstract="Memory safety, system security, and AI agent security.",
+                identifiers={"semantic_scholar_id": "rec-paper-1"},
+                links={"landing": "https://www.semanticscholar.org/paper/rec-paper-1"},
+            )
+            with mock.patch(
+                "team.literature_radar.collect_semantic_scholar_recommendations",
+                return_value=[paper],
+            ) as recommendations:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["semantic_scholar_recommendations"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    semantic_scholar_api_key="test-key",
+                    seed_paper_ids=["seed-positive"],
+                    negative_seed_paper_ids=["seed-negative"],
+                )
+
+            self.assertEqual(result["sources"], ["semantic_scholar_recommendations"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            recommendations.assert_called_once()
+            self.assertEqual(recommendations.call_args.kwargs["positive_paper_ids"], ["seed-positive"])
+            self.assertEqual(recommendations.call_args.kwargs["negative_paper_ids"], ["seed-negative"])
+            self.assertEqual(recommendations.call_args.kwargs["max_results"], 2)
+            self.assertEqual(recommendations.call_args.kwargs["api_key"], "test-key")
 
     def test_run_team_literature_radar_collects_openalex(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -388,9 +580,20 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "arxiv",
                             "--query-term",
                             "memory safety",
+                            "--seed-paper-id",
+                            "seed-positive",
+                            "--negative-seed-paper-id",
+                            "seed-negative",
+                            "--venue-profile",
+                            "security",
                             "--max-results",
                             "2",
                             "--limit",
+                            "1",
+                            "--summarize",
+                            "--summary-provider",
+                            "local",
+                            "--summary-limit",
                             "1",
                             "--json",
                         ]
@@ -402,8 +605,14 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(runner.call_args.kwargs["max_results"], 2)
             self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 1)
+            self.assertTrue(runner.call_args.kwargs["summarize"])
+            self.assertEqual(runner.call_args.kwargs["summary_provider"], "local")
+            self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
+            self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
+            self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
+            self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
             self.assertIsNone(runner.call_args.kwargs["openalex_mailto"])
             self.assertIsNone(runner.call_args.kwargs["openreview_invitations"])
             self.assertIsNone(runner.call_args.kwargs["crossref_mailto"])

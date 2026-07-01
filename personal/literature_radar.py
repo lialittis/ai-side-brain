@@ -15,13 +15,18 @@ from pathlib import Path
 from typing import Any
 
 from shared.literature_radar import (
+    add_local_recommendation_summaries,
+    add_recommendation_context,
+    add_recommendation_novelty,
     build_recommendation_report,
     collect_arxiv,
     collect_crossref_works,
+    collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
     collect_openalex_works,
     collect_openreview_notes,
+    collect_semantic_scholar_recommendations,
     collect_semantic_scholar_search,
     collect_usenix_security_accepted_papers,
     default_radar_topic_profile,
@@ -50,30 +55,41 @@ def run_personal_literature_radar(
     query_terms: list[str] | None = None,
     max_results: int = 25,
     recommendation_limit: int = 10,
+    summarize: bool = False,
+    summary_limit: int | None = None,
     semantic_scholar_api_key: str | None = None,
+    seed_paper_ids: list[str] | None = None,
+    negative_seed_paper_ids: list[str] | None = None,
     openalex_mailto: str | None = None,
     openreview_invitations: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     conference_year: int | None = None,
+    dblp_venue_profiles: list[str] | None = None,
     usenix_security_cycles: list[int] | None = None,
     write_report: bool = True,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_now = now or datetime.now(timezone.utc)
     selected_sources = list(sources or DEFAULT_PERSONAL_RADAR_SOURCES)
+    if seed_paper_ids and "semantic_scholar_recommendations" not in selected_sources:
+        selected_sources.append("semantic_scholar_recommendations")
     selected_terms = query_terms or default_personal_radar_query_terms()
     run_id = personal_radar_run_id(selected_sources, selected_terms, selected_now)
+    root = root_path or repo_root()
     collected = collect_personal_radar_candidates(
         sources=selected_sources,
         query_terms=selected_terms,
         max_results=max_results,
         semantic_scholar_api_key=semantic_scholar_api_key,
+        seed_paper_ids=seed_paper_ids,
+        negative_seed_paper_ids=negative_seed_paper_ids,
         openalex_mailto=openalex_mailto,
         openreview_invitations=openreview_invitations,
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
         conference_year=conference_year,
+        dblp_venue_profiles=dblp_venue_profiles,
         usenix_security_cycles=usenix_security_cycles,
         now=selected_now,
     )
@@ -82,12 +98,28 @@ def run_personal_literature_radar(
         topic_profile=default_radar_topic_profile(),
         limit=recommendation_limit,
     )
+    recommendations = annotate_personal_recommendation_novelty(
+        root,
+        recommendations,
+        now=selected_now,
+    )
+    recommendations = add_recommendation_context(
+        recommendations,
+        context_items=personal_radar_context_items(root),
+        interest_terms=selected_terms,
+        now=selected_now,
+    )
+    if summarize:
+        recommendations = summarize_personal_recommendations(
+            recommendations,
+            limit=summary_limit,
+            now=selected_now,
+        )
     report = build_recommendation_report(
         recommendations,
         title="Personal Literature Radar Report",
         generated_at=selected_now,
     )
-    root = root_path or repo_root()
     report_path = None
     if write_report:
         report_path = write_personal_radar_report(root, report, selected_now)
@@ -114,24 +146,111 @@ def run_personal_literature_radar(
     }
 
 
+def summarize_personal_recommendations(
+    recommendations: list[dict[str, Any]],
+    *,
+    limit: int | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    summarized = add_local_recommendation_summaries(recommendations, now=now)
+    if limit is None:
+        return summarized
+    return [
+        summarized[index] if index < max(0, limit) else recommendation
+        for index, recommendation in enumerate(recommendations)
+    ]
+
+
+def annotate_personal_recommendation_novelty(
+    root: Path,
+    recommendations: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return add_recommendation_novelty(
+        recommendations,
+        history_by_dedupe_key=personal_radar_history_by_dedupe_key(root),
+        now=now,
+    )
+
+
+def personal_radar_history_by_dedupe_key(root: Path) -> dict[str, dict[str, Any]]:
+    histories: dict[str, dict[str, Any]] = {}
+    for run in reversed(read_personal_radar_index(root)):
+        timestamp = run.get("completed_at") or run.get("started_at")
+        for recommendation in run.get("recommendations") or []:
+            dedupe_key = recommendation.get("dedupe_key")
+            if not dedupe_key:
+                continue
+            history = histories.setdefault(
+                dedupe_key,
+                {
+                    "first_seen_at": timestamp,
+                    "latest_seen_at": timestamp,
+                    "seen_count": 0,
+                    "source_ids": ["personal"],
+                    "imported_item_id": None,
+                },
+            )
+            history["latest_seen_at"] = timestamp
+            history["seen_count"] = int(history.get("seen_count") or 0) + 1
+    return histories
+
+
+def personal_radar_context_items(root: Path, *, limit: int = 120) -> list[dict[str, Any]]:
+    context_items = []
+    for run in read_personal_radar_index(root):
+        for recommendation in run.get("recommendations") or []:
+            context_items.append(
+                {
+                    "id": recommendation.get("dedupe_key") or recommendation.get("title"),
+                    "dedupe_key": recommendation.get("dedupe_key"),
+                    "title": recommendation.get("title"),
+                    "abstract": " ".join(
+                        str(value or "")
+                        for value in [
+                            (recommendation.get("summary") or {}).get("short_summary")
+                            if isinstance(recommendation.get("summary"), dict)
+                            else "",
+                            (recommendation.get("context") or {}).get("relationship_summary")
+                            if isinstance(recommendation.get("context"), dict)
+                            else "",
+                        ]
+                    ),
+                    "tags": [],
+                    "interest_terms": run.get("query_terms") or [],
+                    "link": recommendation.get("link") or "",
+                    "source": "personal-radar-history",
+                }
+            )
+            if len(context_items) >= limit:
+                return context_items
+    return context_items
+
+
 def collect_personal_radar_candidates(
     *,
     sources: list[str],
     query_terms: list[str],
     max_results: int,
     semantic_scholar_api_key: str | None = None,
+    seed_paper_ids: list[str] | None = None,
+    negative_seed_paper_ids: list[str] | None = None,
     openalex_mailto: str | None = None,
     openreview_invitations: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     conference_year: int | None = None,
+    dblp_venue_profiles: list[str] | None = None,
     usenix_security_cycles: list[int] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     supported_sources = {
         "arxiv",
         "dblp",
+        "dblp_venues",
         "semantic_scholar",
+        "semantic_scholar_recommendations",
         "openalex",
         "openreview",
         "crossref",
@@ -157,10 +276,32 @@ def collect_personal_radar_candidates(
     if "dblp" in sources:
         for term in query_terms:
             papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+    if "dblp_venues" in sources:
+        papers.extend(
+            collect_dblp_venue_publications(
+                venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
+                year=selected_year,
+                max_results=max_results,
+            )
+        )
     if "semantic_scholar" in sources:
         papers.extend(
             collect_semantic_scholar_search(
                 query_terms=query_terms,
+                max_results=max_results,
+                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+            )
+        )
+    if "semantic_scholar_recommendations" in sources:
+        selected_seed_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
+        if not selected_seed_ids:
+            raise ValueError(
+                "Semantic Scholar recommendations require --seed-paper-id or RADAR_SEED_PAPER_IDS."
+            )
+        papers.extend(
+            collect_semantic_scholar_recommendations(
+                positive_paper_ids=selected_seed_ids,
+                negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
             )
@@ -260,6 +401,10 @@ def build_personal_radar_run_record(
                 "title": (recommendation.get("paper") or {}).get("title"),
                 "score": (recommendation.get("scoring") or {}).get("score"),
                 "label": (recommendation.get("scoring") or {}).get("label"),
+                "novelty": recommendation.get("novelty"),
+                "pdf_access": recommendation.get("pdf_access"),
+                "context": recommendation.get("context"),
+                "summary": recommendation.get("summary"),
                 "link": ((recommendation.get("paper") or {}).get("links") or {}).get("landing"),
             }
             for index, recommendation in enumerate(recommendations, start=1)
@@ -319,4 +464,3 @@ def radar_year(now: datetime | None = None) -> int:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
-

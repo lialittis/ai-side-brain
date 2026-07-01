@@ -24,7 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source", action="append", choices=[
         "arxiv",
         "dblp",
+        "dblp_venues",
         "semantic_scholar",
+        "semantic_scholar_recommendations",
         "openalex",
         "openreview",
         "crossref",
@@ -34,12 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--query-term", action="append", default=[])
     run.add_argument("--max-results", type=int, default=25)
     run.add_argument("--limit", type=int, default=10)
+    run.add_argument("--summarize", action="store_true")
+    run.add_argument("--summary-limit", type=int)
     run.add_argument("--semantic-scholar-api-key")
+    run.add_argument("--seed-paper-id", action="append", default=[])
+    run.add_argument("--negative-seed-paper-id", action="append", default=[])
     run.add_argument("--openalex-mailto")
     run.add_argument("--openreview-invitation", action="append", default=[])
     run.add_argument("--crossref-mailto")
     run.add_argument("--unpaywall-email")
     run.add_argument("--conference-year", type=int)
+    run.add_argument("--venue-profile", action="append", default=[])
     run.add_argument("--usenix-cycle", action="append", type=int, default=[])
     run.add_argument("--root-path", type=Path, default=ROOT)
     run.add_argument("--no-report", action="store_true", help="do not write memory/06_Logs report")
@@ -95,12 +102,17 @@ def main(argv: list[str] | None = None) -> int:
             query_terms=args.query_term or None,
             max_results=args.max_results,
             recommendation_limit=args.limit,
+            summarize=args.summarize,
+            summary_limit=args.summary_limit,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
+            seed_paper_ids=args.seed_paper_id or None,
+            negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
             openreview_invitations=args.openreview_invitation or None,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,
+            dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
             write_report=not args.no_report,
             root_path=args.root_path,

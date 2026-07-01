@@ -99,6 +99,135 @@ CONFERENCE_SOURCE_GROUPS: dict[str, list[str]] = {
     "software_engineering": ["ICSE", "FSE", "ASE"],
 }
 
+DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "usenix_security",
+        "name": "USENIX Security",
+        "group": "security",
+        "dblp_venues": ["USENIX Security Symposium", "USENIX Security"],
+        "query_terms": ["USENIX Security"],
+    },
+    {
+        "id": "ieee_sp",
+        "name": "IEEE Symposium on Security and Privacy",
+        "group": "security",
+        "dblp_venues": ["IEEE Symposium on Security and Privacy", "S&P", "IEEE S&P"],
+        "query_terms": ["IEEE Symposium on Security and Privacy"],
+    },
+    {
+        "id": "acm_ccs",
+        "name": "ACM CCS",
+        "group": "security",
+        "dblp_venues": ["CCS", "ACM Conference on Computer and Communications Security"],
+        "query_terms": ["ACM CCS", "CCS"],
+    },
+    {
+        "id": "ndss",
+        "name": "NDSS",
+        "group": "security",
+        "dblp_venues": ["NDSS"],
+        "query_terms": ["NDSS"],
+    },
+    {
+        "id": "raid",
+        "name": "RAID",
+        "group": "security",
+        "dblp_venues": ["RAID"],
+        "query_terms": ["RAID"],
+    },
+    {
+        "id": "acsac",
+        "name": "ACSAC",
+        "group": "security",
+        "dblp_venues": ["ACSAC", "Annual Computer Security Applications Conference"],
+        "query_terms": ["ACSAC"],
+    },
+    {
+        "id": "osdi",
+        "name": "OSDI",
+        "group": "systems",
+        "dblp_venues": ["OSDI"],
+        "query_terms": ["OSDI"],
+    },
+    {
+        "id": "sosp",
+        "name": "SOSP",
+        "group": "systems",
+        "dblp_venues": ["SOSP"],
+        "query_terms": ["SOSP"],
+    },
+    {
+        "id": "eurosys",
+        "name": "EuroSys",
+        "group": "systems",
+        "dblp_venues": ["EuroSys"],
+        "query_terms": ["EuroSys"],
+    },
+    {
+        "id": "usenix_atc",
+        "name": "USENIX ATC",
+        "group": "systems",
+        "dblp_venues": ["USENIX Annual Technical Conference", "USENIX ATC"],
+        "query_terms": ["USENIX ATC"],
+    },
+    {
+        "id": "asplos",
+        "name": "ASPLOS",
+        "group": "systems",
+        "dblp_venues": ["ASPLOS"],
+        "query_terms": ["ASPLOS"],
+    },
+    {
+        "id": "pldi",
+        "name": "PLDI",
+        "group": "programming_languages_memory_safety",
+        "dblp_venues": ["PLDI"],
+        "query_terms": ["PLDI"],
+    },
+    {
+        "id": "oopsla",
+        "name": "OOPSLA",
+        "group": "programming_languages_memory_safety",
+        "dblp_venues": ["OOPSLA"],
+        "query_terms": ["OOPSLA"],
+    },
+    {
+        "id": "popl",
+        "name": "POPL",
+        "group": "programming_languages_memory_safety",
+        "dblp_venues": ["POPL"],
+        "query_terms": ["POPL"],
+    },
+    {
+        "id": "ecoop",
+        "name": "ECOOP",
+        "group": "programming_languages_memory_safety",
+        "dblp_venues": ["ECOOP"],
+        "query_terms": ["ECOOP"],
+    },
+    {
+        "id": "icse",
+        "name": "ICSE",
+        "group": "software_engineering",
+        "dblp_venues": ["ICSE"],
+        "query_terms": ["ICSE"],
+    },
+    {
+        "id": "fse",
+        "name": "FSE",
+        "group": "software_engineering",
+        "dblp_venues": ["FSE", "ESEC/SIGSOFT FSE"],
+        "query_terms": ["FSE"],
+    },
+    {
+        "id": "ase",
+        "name": "ASE",
+        "group": "software_engineering",
+        "dblp_venues": ["ASE"],
+        "query_terms": ["ASE"],
+    },
+]
+
 TREND_SIGNAL_SOURCES = [
     "Scholar Inbox",
     "Hugging Face Papers",
@@ -194,6 +323,9 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     },
 }
 
+LOCAL_RADAR_SUMMARY_PROCESSOR = "local-radar-summary-v0.1"
+LOCAL_RADAR_CONTEXT_PROCESSOR = "local-radar-context-v0.1"
+
 
 def source_registry() -> list[dict[str, Any]]:
     return [dict(source) for source in SOURCE_REGISTRY]
@@ -215,6 +347,51 @@ def default_radar_topic_profile() -> dict[str, Any]:
             for topic_id, topic in DEFAULT_RADAR_TOPIC_PROFILE["topics"].items()
         },
     }
+
+
+def dblp_venue_profiles() -> list[dict[str, Any]]:
+    return [
+        {
+            **profile,
+            "dblp_venues": list(profile.get("dblp_venues") or []),
+            "query_terms": list(profile.get("query_terms") or []),
+        }
+        for profile in DBLP_VENUE_PROFILES
+    ]
+
+
+def expand_dblp_venue_profiles(selectors: list[str] | None = None) -> list[dict[str, Any]]:
+    profiles = dblp_venue_profiles()
+    if not selectors:
+        return profiles
+    selected = []
+    seen_ids = set()
+    normalized_selectors = [normalize_selector(selector) for selector in selectors if normalize_selector(selector)]
+    groups = {normalize_selector(group) for group in CONFERENCE_SOURCE_GROUPS}
+    for selector in normalized_selectors:
+        matching_profiles = []
+        if selector in groups:
+            matching_profiles = [profile for profile in profiles if normalize_selector(profile.get("group")) == selector]
+        else:
+            matching_profiles = [
+                profile
+                for profile in profiles
+                if selector in {
+                    normalize_selector(profile.get("id")),
+                    normalize_selector(profile.get("name")),
+                }
+            ]
+        if not matching_profiles:
+            raise ValueError(f"Unknown DBLP venue profile or group: {selector}")
+        for profile in matching_profiles:
+            if profile["id"] not in seen_ids:
+                selected.append(profile)
+                seen_ids.add(profile["id"])
+    return selected
+
+
+def normalize_selector(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def create_radar_paper(
@@ -311,32 +488,97 @@ def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
     return list(merged.values())
 
 
-def assess_pdf_access(paper: dict[str, Any]) -> dict[str, Any]:
+def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     links = paper.get("links") or {}
     identifiers = paper.get("identifiers") or {}
-    license_text = normalize_spaces(str(paper.get("license") or links.get("license") or "")).lower()
-    oa_status = normalize_spaces(str(paper.get("oa_status") or links.get("oa_status") or "")).lower()
+    license_text = normalize_spaces(str(paper.get("license") or links.get("license") or ""))
+    oa_status = normalize_spaces(str(paper.get("oa_status") or links.get("oa_status") or ""))
     pdf_url = links.get("pdf") or links.get("oa_pdf") or links.get("arxiv_pdf") or ""
     source_url = links.get("landing") or links.get("doi") or links.get("arxiv") or pdf_url
+    local_pdf_path = normalize_spaces(str(paper.get("local_pdf_path") or ""))
 
-    if paper.get("local_pdf_path"):
-        return pdf_access_decision(False, "local_pdf_already_available", source_url, pdf_url)
+    if local_pdf_path:
+        return pdf_access_decision(
+            False,
+            "local_pdf_already_available",
+            source_url,
+            pdf_url,
+            license_text=license_text,
+            oa_status=oa_status,
+            local_pdf_path=local_pdf_path,
+            downloaded=True,
+            now=now,
+        )
     if identifiers.get("arxiv_id") or "arxiv.org/pdf/" in pdf_url:
-        return pdf_access_decision(True, "arxiv_or_open_repository", source_url, pdf_url)
-    if pdf_url and (license_allows_redistribution(license_text) or oa_status in {"gold", "green", "hybrid", "bronze", "open"}):
-        return pdf_access_decision(True, "open_access_pdf_with_license_or_oa_status", source_url, pdf_url)
+        return pdf_access_decision(
+            True,
+            "arxiv_or_open_repository",
+            source_url,
+            pdf_url,
+            license_text=license_text,
+            oa_status=oa_status,
+            local_pdf_path=local_pdf_path,
+            now=now,
+        )
+    if pdf_url and (
+        license_allows_redistribution(license_text)
+        or oa_status.lower() in {"gold", "green", "hybrid", "bronze", "open"}
+    ):
+        return pdf_access_decision(
+            True,
+            "open_access_pdf_with_license_or_oa_status",
+            source_url,
+            pdf_url,
+            license_text=license_text,
+            oa_status=oa_status,
+            local_pdf_path=local_pdf_path,
+            now=now,
+        )
     if pdf_url:
-        return pdf_access_decision(False, "pdf_url_present_but_oa_or_license_not_confirmed", source_url, pdf_url)
-    return pdf_access_decision(False, "metadata_only_no_legal_pdf_found", source_url, "")
+        return pdf_access_decision(
+            False,
+            "pdf_url_present_but_oa_or_license_not_confirmed",
+            source_url,
+            pdf_url,
+            license_text=license_text,
+            oa_status=oa_status,
+            local_pdf_path=local_pdf_path,
+            now=now,
+        )
+    return pdf_access_decision(
+        False,
+        "metadata_only_no_legal_pdf_found",
+        source_url,
+        "",
+        license_text=license_text,
+        oa_status=oa_status,
+        local_pdf_path=local_pdf_path,
+        now=now,
+    )
 
 
-def pdf_access_decision(can_download: bool, reason: str, source_url: str, pdf_url: str) -> dict[str, Any]:
+def pdf_access_decision(
+    can_download: bool,
+    reason: str,
+    source_url: str,
+    pdf_url: str,
+    *,
+    license_text: str = "",
+    oa_status: str = "",
+    local_pdf_path: str = "",
+    downloaded: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     return {
         "can_download": can_download,
         "reason": reason,
         "source_url": source_url,
         "pdf_url": pdf_url,
-        "access_date": iso_timestamp(),
+        "license": license_text,
+        "oa_status": oa_status,
+        "local_pdf_path": local_pdf_path,
+        "downloaded": downloaded,
+        "access_date": iso_timestamp(now or datetime.now(timezone.utc)),
     }
 
 
@@ -460,6 +702,277 @@ def recommend_papers(
     )[:limit]
 
 
+def add_local_recommendation_summaries(
+    recommendations: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **recommendation,
+            "summary": build_local_recommendation_summary(recommendation, now=now),
+        }
+        for recommendation in recommendations
+    ]
+
+
+def add_recommendation_novelty(
+    recommendations: list[dict[str, Any]],
+    *,
+    history_by_dedupe_key: dict[str, dict[str, Any]],
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **recommendation,
+            "novelty": build_recommendation_novelty(
+                (recommendation.get("paper") or {}).get("dedupe_key") or "",
+                history_by_dedupe_key.get((recommendation.get("paper") or {}).get("dedupe_key") or ""),
+                now=now,
+            ),
+        }
+        for recommendation in recommendations
+    ]
+
+
+def build_recommendation_novelty(
+    dedupe_key: str,
+    history: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+    if not history:
+        return {
+            "status": "new",
+            "is_new": True,
+            "dedupe_key": dedupe_key,
+            "first_seen_at": timestamp,
+            "previous_latest_seen_at": None,
+            "seen_count_before_run": 0,
+            "source_ids_before_run": [],
+            "previously_imported_item_id": None,
+        }
+    return {
+        "status": "seen_before",
+        "is_new": False,
+        "dedupe_key": dedupe_key,
+        "first_seen_at": history.get("first_seen_at"),
+        "previous_latest_seen_at": history.get("latest_seen_at"),
+        "seen_count_before_run": int(history.get("seen_count") or 0),
+        "source_ids_before_run": list(history.get("source_ids") or []),
+        "previously_imported_item_id": history.get("imported_item_id"),
+    }
+
+
+def add_recommendation_context(
+    recommendations: list[dict[str, Any]],
+    *,
+    context_items: list[dict[str, Any]],
+    interest_terms: list[str] | None = None,
+    limit: int = 3,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **recommendation,
+            "context": build_recommendation_context(
+                recommendation,
+                context_items=context_items,
+                interest_terms=interest_terms or [],
+                limit=limit,
+                now=now,
+            ),
+        }
+        for recommendation in recommendations
+    ]
+
+
+def build_recommendation_context(
+    recommendation: dict[str, Any],
+    *,
+    context_items: list[dict[str, Any]],
+    interest_terms: list[str],
+    limit: int = 3,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    paper = recommendation.get("paper") or {}
+    scoring = recommendation.get("scoring") or {}
+    matched_interest_terms = sorted(
+        {
+            normalize_spaces(term)
+            for term in [
+                *(interest_terms or []),
+                *(scoring.get("matched_positive_keywords") or []),
+            ]
+            if normalize_spaces(term) and keyword_matches(searchable_text(paper), term)
+        }
+    )
+    related_items = sorted(
+        [
+            related_item
+            for item in context_items
+            if (related_item := score_context_item_for_paper(paper, item))
+        ],
+        key=lambda item: (item["score"], item.get("title") or ""),
+        reverse=True,
+    )[: max(0, limit)]
+    return {
+        "matched_interest_terms": matched_interest_terms,
+        "related_items": related_items,
+        "relationship_summary": relationship_to_context(matched_interest_terms, related_items),
+        "source_trace": {
+            "processor": LOCAL_RADAR_CONTEXT_PROCESSOR,
+            "context_item_count": len(context_items),
+            "generated_at": iso_timestamp(now or datetime.now(timezone.utc)),
+        },
+    }
+
+
+def score_context_item_for_paper(paper: dict[str, Any], context_item: dict[str, Any]) -> dict[str, Any] | None:
+    paper_key = paper.get("dedupe_key")
+    item_key = context_item.get("dedupe_key")
+    if paper_key and item_key and paper_key == item_key:
+        return None
+    paper_tags = normalized_tag_set(paper.get("tags") or [])
+    item_tags = normalized_tag_set(context_item.get("tags") or [])
+    matched_tags = sorted(paper_tags & item_tags)
+    paper_text = searchable_text(paper)
+    item_text = normalize_match_text(
+        " ".join(
+            str(value)
+            for value in [
+                context_item.get("title", ""),
+                context_item.get("abstract", ""),
+                context_item.get("venue", ""),
+                " ".join(context_item.get("tags") or []),
+            ]
+        )
+    )
+    matched_terms = sorted(
+        {
+            term
+            for term in context_item.get("interest_terms") or []
+            if keyword_matches(paper_text, term) or keyword_matches(item_text, term)
+        }
+    )
+    title_overlap = sorted(title_token_set(paper.get("title", "")) & title_token_set(context_item.get("title", "")))
+    score = len(matched_tags) * 5 + len(matched_terms) * 3 + min(3, len(title_overlap))
+    if score <= 0:
+        return None
+    return {
+        "id": context_item.get("id") or item_key or context_item.get("title") or "",
+        "title": context_item.get("title") or "Untitled context item",
+        "link": context_item.get("link") or "",
+        "score": score,
+        "matched_tags": matched_tags,
+        "matched_terms": matched_terms,
+        "title_overlap": title_overlap[:5],
+        "relationship": context_relationship_text(matched_tags, matched_terms, title_overlap),
+    }
+
+
+def relationship_to_context(matched_interest_terms: list[str], related_items: list[dict[str, Any]]) -> str:
+    parts = []
+    if matched_interest_terms:
+        parts.append(f"Matches active interests: {', '.join(matched_interest_terms)}.")
+    if related_items:
+        titles = ", ".join(item["title"] for item in related_items[:2])
+        parts.append(f"Related to existing context: {titles}.")
+    if not parts:
+        return "No existing research context matched strongly; review as a possible new direction."
+    return " ".join(parts)
+
+
+def context_relationship_text(matched_tags: list[str], matched_terms: list[str], title_overlap: list[str]) -> str:
+    parts = []
+    if matched_tags:
+        parts.append(f"shared tags: {', '.join(matched_tags)}")
+    if matched_terms:
+        parts.append(f"shared interests: {', '.join(matched_terms)}")
+    if title_overlap:
+        parts.append(f"title overlap: {', '.join(title_overlap[:5])}")
+    return "; ".join(parts) or "related context"
+
+
+def normalized_tag_set(tags: list[Any]) -> set[str]:
+    return {
+        normalize_match_text(str(tag))
+        for tag in tags
+        if normalize_match_text(str(tag))
+    }
+
+
+def title_token_set(value: Any) -> set[str]:
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "for",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "with",
+    }
+    return {
+        token
+        for token in normalize_match_text(str(value)).split()
+        if len(token) > 2 and token not in stop_words
+    }
+
+
+def build_local_recommendation_summary(
+    recommendation: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    paper = recommendation.get("paper") or {}
+    scoring = recommendation.get("scoring") or {}
+    matched_terms = scoring.get("matched_positive_keywords") or scoring.get("matched_terms") or []
+    title = normalize_spaces(paper.get("title") or "Untitled paper")
+    abstract = normalize_spaces(paper.get("abstract") or "")
+    short_summary = first_sentence(abstract) or f"Metadata-only candidate: {title}."
+    why_attention = normalize_spaces(recommendation.get("why_relevant") or "Human review is needed.")
+    return {
+        "short_summary": truncate_text(short_summary, 360),
+        "relationship_to_interests": relationship_to_interests(matched_terms, scoring.get("label")),
+        "why_attention": truncate_text(why_attention, 360),
+        "suggested_next_step": recommendation.get("recommended_action") or "human_review",
+        "confidence": "medium" if abstract else "low",
+        "source_trace": {
+            "processor": LOCAL_RADAR_SUMMARY_PROCESSOR,
+            "input_fields": ["title", "abstract", "scoring", "pdf_access"],
+            "generated_at": iso_timestamp(now or datetime.now(timezone.utc)),
+        },
+    }
+
+
+def relationship_to_interests(matched_terms: list[str], label: str | None) -> str:
+    terms = [normalize_spaces(term) for term in matched_terms if normalize_spaces(term)]
+    if terms:
+        return f"Connects to configured interests through: {', '.join(sorted(set(terms)))}."
+    if label == "needs_review":
+        return "Relationship to configured interests is unclear from the available metadata."
+    return "May relate to configured interests, but no exact keyword match was recorded."
+
+
+def first_sentence(value: str) -> str:
+    text = normalize_spaces(value)
+    if not text:
+        return ""
+    match = re.search(r"(.+?[.!?])(?:\s|$)", text)
+    return normalize_spaces(match.group(1)) if match else text
+
+
+def truncate_text(value: str, limit: int) -> str:
+    text = normalize_spaces(value)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
 def recommended_action(label: str, pdf_access: dict[str, Any]) -> str:
     if label == "highly_relevant" and pdf_access.get("can_download"):
         return "read_and_summarize_open_access_pdf"
@@ -488,13 +1001,39 @@ def build_recommendation_report(
                 f"## {index}. {paper.get('title') or 'Untitled paper'}",
                 "",
                 f"- Relevance: {scoring['label']} ({scoring['score']}/100)",
+                f"- Novelty: {novelty_report_text(recommendation.get('novelty') or {})}",
                 f"- Why: {recommendation['why_relevant']}",
+                f"- Context: {context_report_text(recommendation.get('context') or {})}",
                 f"- Action: {recommendation['recommended_action']}",
                 f"- Link: {(paper.get('links') or {}).get('landing') or (paper.get('links') or {}).get('pdf') or ''}",
-                "",
             ]
         )
+        summary = recommendation.get("summary") or {}
+        if summary:
+            lines.extend(
+                [
+                    f"- Summary: {summary.get('short_summary') or ''}",
+                    f"- Relation: {summary.get('relationship_to_interests') or ''}",
+                ]
+            )
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def novelty_report_text(novelty: dict[str, Any]) -> str:
+    if not novelty:
+        return "not recorded"
+    if novelty.get("is_new"):
+        return "new this run"
+    seen_count = int(novelty.get("seen_count_before_run") or 0)
+    latest = novelty.get("previous_latest_seen_at") or "unknown"
+    return f"seen before ({seen_count} prior run{'s' if seen_count != 1 else ''}; latest {latest})"
+
+
+def context_report_text(context: dict[str, Any]) -> str:
+    if not context:
+        return "not linked"
+    return context.get("relationship_summary") or "not linked"
 
 
 def normalize_spaces(value: str) -> str:

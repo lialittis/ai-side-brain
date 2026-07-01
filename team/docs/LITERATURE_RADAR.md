@@ -22,10 +22,34 @@ into the existing Team Research database:
 This means radar-discovered papers can reuse the current Team UI:
 
 - Latest Papers page for scan/relevance/comments;
+- Radar page for reviewing stored scheduled recommendations before import;
 - tag catalog and tag filtering;
 - Team Interests weighted relevance scoring;
 - soft removal and recovery;
-- OpenRouter summarization later, when a full text or legal OA PDF is available.
+- optional local or OpenRouter summaries based on available metadata and scoring
+  context.
+
+## Web Review Workflow
+
+The web UI exposes stored radar runs at:
+
+```text
+http://127.0.0.1:8790/radar
+```
+
+The page is review-first:
+
+1. scheduled or CLI radar runs collect and score metadata;
+2. the Radar page lists recent runs, source/query context, ranked
+   recommendations, new/seen-before labels, summaries when available, relevance
+   reasons, source tags, legal PDF/OA status, and paper links;
+3. a team member clicks `Add to Library` only for papers worth tracking;
+4. imported papers appear in Latest Papers with the normal tag, relevance,
+   importance, comment, soft-remove, and recovery controls.
+
+This keeps automatic collection broad without filling the team library with
+every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
+pages.
 
 ## CLI Runner
 
@@ -40,11 +64,21 @@ Useful options:
 - `--query-term`: override the default Team Interest keywords; repeatable.
 - `--max-results`: maximum source results per source query.
 - `--limit`: maximum recommendations in the report.
+- `--summarize`: attach recommendation summaries to the stored run, report, and
+  Radar page.
+- `--summary-provider local|openrouter`: use local metadata summaries or
+  OpenRouter structured summaries. OpenRouter requires `OPENROUTER_API_KEY`.
+- `--summary-limit`: cap how many ranked recommendations are summarized.
 - `--import-results`: import high-scoring recommendations into the Team library.
 - `--import-limit`: cap imported recommendations.
 - `--min-score`: minimum score required before import.
 - `--semantic-scholar-api-key`: optional API key for higher Semantic Scholar
   API rate limits; `SEMANTIC_SCHOLAR_API_KEY` is also supported.
+- `--seed-paper-id`: positive Semantic Scholar seed paper ID for related-paper
+  recommendations; repeatable. Passing a seed ID automatically enables the
+  `semantic_scholar_recommendations` source.
+- `--negative-seed-paper-id`: Semantic Scholar seed paper ID to steer related
+  recommendations away from; repeatable.
 - `--openalex-mailto`: optional email for OpenAlex polite-pool requests;
   `OPENALEX_MAILTO` is also supported.
 - `--openreview-invitation`: OpenReview invitation ID to collect, such as a
@@ -58,6 +92,11 @@ Useful options:
   and does not resolve extra OA PDFs.
 - `--conference-year`: accepted-paper page year for USENIX Security and NDSS;
   defaults to the current calendar year.
+- `--venue-profile`: DBLP venue profile or group for the `dblp_venues` source;
+  repeatable. Supported group selectors include `security`, `systems`,
+  `programming_languages_memory_safety`, and `software_engineering`; specific
+  selectors include `acm_ccs`, `ieee_sp`, `pldi`, `icse`, and the other profile
+  IDs documented in the shared source.
 - `--usenix-cycle`: USENIX Security submission cycle to collect; repeatable;
   defaults to cycle 1.
 - `--json`: emit machine-readable output for automation.
@@ -67,6 +106,24 @@ vary. Example:
 
 ```bash
 python team/research_cli.py radar-run --source openreview --openreview-invitation ICLR.cc/2026/Conference/-/Submission
+```
+
+Example seed-paper expansion:
+
+```bash
+python team/research_cli.py radar-run --seed-paper-id 649def34f8be52c8b66281af98ae884c09aef38b
+```
+
+Example OpenRouter summaries:
+
+```bash
+python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
+```
+
+Example top-conference DBLP metadata:
+
+```bash
+python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
 ```
 
 Without `--import-results`, the runner only collects metadata, deduplicates,
@@ -88,13 +145,15 @@ Every `radar-run` creates durable Team-side history in SQLite:
 - `literature_radar_runs` stores source choices, query terms, status, counts,
   errors, and the Markdown report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
-  and latest-seen timestamps, source IDs, and any imported Team item ID.
+  and latest-seen timestamps, source IDs, PDF-access decision metadata, and any
+  imported Team item ID.
 - `literature_radar_recommendations` stores the ranked recommendations for each
-  run, including score, label, imported item ID, and the full recommendation JSON.
+  run, including score, label, novelty, PDF-access decision metadata, summary,
+  imported item ID, and the full recommendation JSON.
 
 This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
-imported, and later support weekly reports or "seen before" UI hints.
+imported, and show whether a candidate is new this run or has appeared before.
 
 ## Scheduling
 
@@ -112,7 +171,13 @@ It reads `.env` first and supports these optional variables:
   `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
+- `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
+  `RADAR_SUMMARY_LIMIT`.
 - `RADAR_CONFERENCE_YEAR`, `RADAR_USENIX_CYCLES`.
+- `RADAR_DBLP_VENUES`: space-separated DBLP venue profile/group selectors for
+  the `dblp_venues` source.
+- `RADAR_SEED_PAPER_IDS`, `RADAR_NEGATIVE_SEED_PAPER_IDS`: space-separated
+  Semantic Scholar paper IDs for related-paper expansion.
 - `RADAR_DB_PATH`, `RADAR_OUTPUT_DIR`.
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`, `OPENALEX_MAILTO`,
   `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
@@ -130,7 +195,9 @@ Current implemented shared collectors:
 
 - arXiv API collector for configured categories and interest terms;
 - DBLP publication search API collector;
+- DBLP venue-profile collector for the required top conference groups;
 - Semantic Scholar Academic Graph paper search collector;
+- Semantic Scholar Recommendations API seed-paper expansion;
 - OpenAlex Works API collector;
 - Crossref Works metadata collector;
 - OpenReview API v2 notes collector for configured invitations;
@@ -140,9 +207,9 @@ Current implemented shared collectors:
 
 Recommended next MVP order:
 
-1. DBLP venue collector presets for security/systems/PL/SE conferences;
-2. Semantic Scholar related-paper and citation expansion;
-3. DBLP venue/cross-source conference presets;
+1. Semantic Scholar citation/reference expansion beyond recommendation seeds;
+2. OpenAlex venue/source-profile expansion for cross-checking DBLP venue runs;
+3. DBLP venue/cross-source conference enrichment;
 4. OpenReview accepted/decision filtering presets for known venues;
 5. IEEE S&P, ACM CCS, RAID, ACSAC, OSDI, SOSP, EuroSys, ATC, ASPLOS, PLDI,
    OOPSLA, POPL, ECOOP, ICSE, FSE, and ASE venue presets.

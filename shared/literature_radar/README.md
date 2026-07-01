@@ -9,6 +9,7 @@ It answers:
 
 - what new papers are worth attention;
 - why they match the configured interests;
+- whether they are new this run or have appeared in prior runs;
 - what links or PDFs may be legally used;
 - how candidates should be deduplicated before storage.
 
@@ -33,9 +34,17 @@ The shared package currently provides source definitions, default security and
 AI topic interests, deduplication, PDF access policy, deterministic scoring, and
 recommendation report generation. It also includes initial arXiv, DBLP,
 Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors that use public
-metadata APIs and return product-neutral radar paper records. Unpaywall
-enrichment adds legal OA status and PDF links for DOI-bearing papers without
-downloading files. Product adapters own scheduling, credentials, storage, and UI.
+metadata APIs and return product-neutral radar paper records. Semantic Scholar
+also supports seed-paper recommendation expansion through the official
+Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
+DOI-bearing papers without downloading files. Product adapters own scheduling,
+credentials, storage, and UI.
+
+The core also provides product-neutral recommendation summaries. The local
+summary path uses only stored metadata, scoring reasons, and PDF-access policy;
+Team adapters can optionally replace that phase with OpenRouter summaries.
+Recommendation reports can include novelty metadata supplied by Personal or
+Team storage, keeping "new this run" separate from relevance score.
 
 ## Primary Sources
 
@@ -60,12 +69,18 @@ Current implemented collectors:
   search terms, then parses Atom metadata into radar papers.
 - `collect_dblp_publications(...)` calls DBLP publication search XML and parses
   bibliographic metadata into radar papers.
+- `collect_dblp_venue_publications(...)` uses DBLP publication search with
+  configured venue profiles for security, systems, PL/memory-safety, and
+  software-engineering conferences, then filters by venue aliases and year.
 - `collect_crossref_works(...)` calls Crossref Works metadata search and
   preserves DOI, publisher, publication status/date, license, and publisher PDF
   link metadata when deposited.
 - `collect_semantic_scholar_search(...)` calls the Semantic Scholar Academic
   Graph paper search API and preserves citation-graph identifiers plus OA PDF
   metadata when available.
+- `collect_semantic_scholar_recommendations(...)` calls the Semantic Scholar
+  Recommendations API with positive and optional negative seed paper IDs, then
+  maps the returned related papers into the same radar paper schema.
 - `collect_openalex_works(...)` calls the OpenAlex Works API and preserves DOI,
   venue, citation count, topic/concept, OA status, and OA PDF metadata when
   available.
@@ -89,3 +104,8 @@ The core always stores metadata and links, but PDF download should happen only
 when the source is clearly open-access or legally downloadable, such as arXiv or
 an OA URL with confirmed license/OA status. Paywalled publisher PDFs and
 unauthorized sources must not be downloaded or redistributed.
+
+`assess_pdf_access(...)` records the download decision separately from metadata
+collection. Its record includes `source_url`, `access_date`, `license`,
+`oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`, and the
+reason why a PDF should or should not be downloaded.

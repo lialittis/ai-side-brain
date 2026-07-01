@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import example_topic_profiles, topic_profile_by_id
+from team.literature_radar import import_radar_recommendation
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -192,6 +193,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     nav = "\n".join(
         [
             f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
+            f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Interests</a>',
         ]
@@ -359,6 +361,77 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       align-items: end;
       margin-top: 14px;
     }}
+    .radar-grid {{
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }}
+    .radar-runs {{
+      display: grid;
+      gap: 6px;
+    }}
+    .radar-run-link {{
+      display: grid;
+      gap: 2px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+    }}
+    .radar-run-link:hover, .radar-run-link.active {{ border-color: #9db7e8; background: #f5f8ff; text-decoration: none; }}
+    .radar-run-title {{ font-weight: 750; overflow-wrap: anywhere; }}
+    .radar-summary {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }}
+    .radar-recommendation {{
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      padding: 13px 0;
+      border-top: 1px solid var(--line);
+    }}
+    .radar-recommendation:first-child {{ border-top: 0; padding-top: 0; }}
+    .radar-rank {{
+      width: 28px;
+      height: 28px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: #eef2f7;
+      color: #344054;
+      font-weight: 800;
+    }}
+    .radar-rec-title {{ font-size: 16px; font-weight: 750; color: var(--text); }}
+    .radar-reasons {{ margin: 8px 0 0; color: #344054; }}
+    .radar-ai-summary {{
+      margin: 8px 0 0;
+      padding: 9px 10px;
+      border-left: 3px solid #9db7e8;
+      background: #f7f9fc;
+      color: #344054;
+    }}
+    .radar-ai-summary p {{ margin: 0 0 5px; }}
+    .radar-ai-summary p:last-child {{ margin-bottom: 0; }}
+    .radar-context {{
+      display: grid;
+      gap: 5px;
+      margin-top: 8px;
+      color: #344054;
+    }}
+    .radar-context-title {{ font-weight: 750; }}
+    .radar-context-items {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .radar-links {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+      margin-top: 10px;
+    }}
     .paper-footer {{
       display: flex;
       justify-content: space-between;
@@ -486,6 +559,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .shell {{ grid-template-columns: 1fr; }}
       .content {{ padding: 18px; }}
       .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
+      .radar-grid, .radar-recommendation {{ grid-template-columns: 1fr; }}
       .paper-footer {{ align-items: flex-start; }}
       .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
       .interest-add {{ grid-template-columns: 1fr; }}
@@ -522,6 +596,277 @@ def render_topline(title: str, subtitle: str, action_href: str | None = None, ac
 
 def render_notice(notice: str) -> str:
     return f'<div class="notice">{html_escape(notice)}</div>' if notice else ""
+
+
+def render_literature_radar_page(
+    database: TeamResearchDatabase,
+    *,
+    run_id: str | None = None,
+    notice: str = "",
+) -> str:
+    runs = database.list_literature_radar_runs(limit=12)
+    selected_run = database.get_literature_radar_run(run_id) if run_id else (runs[0] if runs else None)
+    if selected_run and selected_run["id"] not in {run["id"] for run in runs}:
+        runs = [selected_run, *runs]
+    recommendations = (
+        database.list_literature_radar_recommendations(selected_run["id"])
+        if selected_run
+        else []
+    )
+    body = f"""
+    {render_topline("Literature Radar", "Scheduled recommendations from source-stable academic collectors.", "/", "Latest Papers")}
+    {render_notice(notice)}
+    <div class="radar-grid">
+      <section class="panel">
+        <h2>Runs</h2>
+        {render_radar_run_list(runs, selected_run)}
+      </section>
+      <section class="panel">
+        {render_radar_run_detail(selected_run, recommendations)}
+      </section>
+    </div>
+    """
+    return page("Literature Radar", body, active="radar")
+
+
+def render_radar_run_list(runs: list[dict[str, Any]], selected_run: dict[str, Any] | None) -> str:
+    if not runs:
+        return '<div class="empty">No radar runs yet. Start with the CLI or scheduled runner.</div>'
+    selected_id = selected_run.get("id") if selected_run else ""
+    return '<div class="radar-runs">' + "\n".join(
+        render_radar_run_link(run, active=run.get("id") == selected_id) for run in runs
+    ) + "</div>"
+
+
+def render_radar_run_link(run: dict[str, Any], *, active: bool = False) -> str:
+    started_at = str(run.get("started_at") or "")
+    status = str(run.get("status") or "unknown")
+    rec_count = int(run.get("recommendation_count") or 0)
+    href = f'/radar?run={quote(str(run.get("id") or ""), safe="")}'
+    return f"""
+    <a class="radar-run-link {'active' if active else ''}" href="{href}">
+      <span class="radar-run-title">{html_escape(display_radar_datetime(started_at) or run.get("id"))}</span>
+      <span class="muted">{html_escape(status)} · {rec_count} recommendation{'s' if rec_count != 1 else ''}</span>
+    </a>
+    """
+
+
+def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[dict[str, Any]]) -> str:
+    if not run:
+        return '<div class="empty">No radar recommendations have been stored yet.</div>'
+    return f"""
+    <h2>Recommendations</h2>
+    <div class="radar-summary">
+      {status_pill(str(run.get("status") or "unknown"))}
+      <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
+      <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
+      <span class="pill">Imported: {int(run.get("imported_count") or 0)}</span>
+    </div>
+    <div class="meta">
+      Started {html_escape(display_radar_datetime(str(run.get("started_at") or "")))}
+      {render_completed_at(run)}
+    </div>
+    <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
+    <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
+    {render_radar_error(run)}
+    {render_radar_recommendations(recommendations)}
+    """
+
+
+def render_completed_at(run: dict[str, Any]) -> str:
+    completed_at = str(run.get("completed_at") or "")
+    if not completed_at:
+        return ""
+    return f' · Completed {html_escape(display_radar_datetime(completed_at))}'
+
+
+def render_radar_error(run: dict[str, Any]) -> str:
+    error = str(run.get("error") or "").strip()
+    if not error:
+        return ""
+    return f'<div class="notice">Run error: {html_escape(error)}</div>'
+
+
+def render_radar_terms(label: str, terms: list[str]) -> str:
+    if not terms:
+        return f'<span class="muted">{html_escape(label)}: none</span>'
+    chips = "".join(f'<span class="tag">{html_escape(term)}</span>' for term in terms)
+    return f'<span class="muted">{html_escape(label)}:</span> {chips}'
+
+
+def render_radar_recommendations(recommendations: list[dict[str, Any]]) -> str:
+    if not recommendations:
+        return '<div class="empty">No recommendations for this run.</div>'
+    return "\n".join(render_radar_recommendation(recommendation) for recommendation in recommendations)
+
+
+def render_radar_recommendation(record: dict[str, Any]) -> str:
+    recommendation = record.get("recommendation") or {}
+    paper = recommendation.get("paper") or {}
+    scoring = record.get("scoring") or recommendation.get("scoring") or {}
+    rank = int(record.get("rank") or 0)
+    title = paper.get("title") or record.get("title") or "Untitled paper"
+    authors = ", ".join(paper.get("authors") or [])
+    meta_parts = [
+        str(value)
+        for value in [paper.get("year") or "n.d.", paper.get("venue") or "", authors or "unknown authors"]
+        if value
+    ]
+    why = recommendation.get("why_relevant") or " ".join(scoring.get("reasons") or [])
+    action = recommendation.get("recommended_action") or "human_review"
+    pdf_access = recommendation.get("pdf_access") or {}
+    novelty = record.get("novelty") or recommendation.get("novelty") or {}
+    context = record.get("context") or recommendation.get("context") or {}
+    summary = record.get("summary") or recommendation.get("summary") or {}
+    imported_item_id = record.get("imported_item_id") or (record.get("import_result") or {}).get("item_id")
+    return f"""
+    <article class="radar-recommendation">
+      <div><span class="radar-rank">{rank}</span></div>
+      <div>
+        <div class="radar-rec-title">{html_escape(title)}</div>
+        <div class="meta">{html_escape(" · ".join(meta_parts))}</div>
+        <p class="radar-reasons">{html_escape(why)}</p>
+        {render_radar_context(context)}
+        {render_radar_summary(summary)}
+        <div class="radar-links">
+          {relevance_pill(str(scoring.get("label") or record.get("label") or "needs_review"))}
+          {render_novelty_pill(novelty)}
+          <span class="pill">Score: {html_escape(int(float(scoring.get("score") or record.get("score") or 0)))}</span>
+          {render_pdf_access_pill(pdf_access)}
+          <span class="pill">Action: {html_escape(action)}</span>
+          {render_radar_source_pills(paper)}
+          {render_radar_links(paper)}
+          {render_radar_import_control(record, imported_item_id)}
+        </div>
+      </div>
+    </article>
+    """
+
+
+def render_radar_context(context: dict[str, Any]) -> str:
+    if not context:
+        return ""
+    related_items = context.get("related_items") or []
+    related_html = "".join(render_radar_context_item(item) for item in related_items[:3])
+    return f"""
+    <div class="radar-context">
+      <div><span class="radar-context-title">Context:</span> {html_escape(context.get("relationship_summary") or "")}</div>
+      <div class="radar-context-items">{related_html}</div>
+    </div>
+    """
+
+
+def render_radar_context_item(item: dict[str, Any]) -> str:
+    title = item.get("title") or "Untitled"
+    link = item.get("link") or ""
+    label = f'{title} ({item.get("relationship") or "related"})'
+    if link.startswith("http://") or link.startswith("https://"):
+        return f'<a class="tag" href="{html_escape(link)}" target="_blank" rel="noreferrer">{html_escape(label)}</a>'
+    return f'<span class="tag">{html_escape(label)}</span>'
+
+
+def render_novelty_pill(novelty: dict[str, Any]) -> str:
+    if not novelty:
+        return '<span class="pill">Novelty: unknown</span>'
+    if novelty.get("is_new"):
+        return '<span class="pill good">New</span>'
+    count = int(novelty.get("seen_count_before_run") or 0)
+    return f'<span class="pill">Seen before: {count}</span>'
+
+
+def render_radar_summary(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    source_trace = summary.get("source_trace") if isinstance(summary.get("source_trace"), dict) else {}
+    processor = source_trace.get("processor") or "summary"
+    return f"""
+    <div class="radar-ai-summary">
+      <p><strong>Summary:</strong> {html_escape(summary.get("short_summary") or "")}</p>
+      <p><strong>Relation:</strong> {html_escape(summary.get("relationship_to_interests") or "")}</p>
+      <p class="muted">Confidence: {html_escape(summary.get("confidence") or "unknown")} · {html_escape(processor)}</p>
+    </div>
+    """
+
+
+def render_pdf_access_pill(pdf_access: dict[str, Any]) -> str:
+    if not pdf_access:
+        return '<span class="pill">PDF: unknown</span>'
+    reason = pdf_access.get("reason") or "unknown"
+    css = "good" if pdf_access.get("can_download") else "warn"
+    details = " | ".join(
+        part
+        for part in [
+            f"source: {pdf_access.get('source_url') or 'unknown'}",
+            f"oa: {pdf_access.get('oa_status') or 'unknown'}",
+            f"license: {pdf_access.get('license') or 'unknown'}",
+            f"local: {pdf_access.get('local_pdf_path') or 'none'}",
+            f"accessed: {pdf_access.get('access_date') or 'unknown'}",
+        ]
+        if part
+    )
+    return f'<span class="pill {css}" title="{html_escape(details)}">PDF: {html_escape(reason)}</span>'
+
+
+def render_radar_source_pills(paper: dict[str, Any]) -> str:
+    source_ids = sorted(
+        {
+            str(record.get("source_id"))
+            for record in paper.get("source_records") or []
+            if record.get("source_id")
+        }
+    )
+    if not source_ids and paper.get("source_id"):
+        source_ids = [str(paper["source_id"])]
+    return "".join(f'<span class="tag">{html_escape(source_id)}</span>' for source_id in source_ids)
+
+
+def render_radar_links(paper: dict[str, Any]) -> str:
+    labels = {
+        "landing": "Open",
+        "arxiv": "arXiv",
+        "doi": "DOI",
+        "pdf": "PDF",
+        "oa_pdf": "OA PDF",
+        "arxiv_pdf": "arXiv PDF",
+    }
+    links = paper.get("links") or {}
+    rendered = []
+    seen_urls = set()
+    for key in ("landing", "arxiv", "doi", "pdf", "oa_pdf", "arxiv_pdf"):
+        url = str(links.get(key) or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        rendered.append(
+            f'<a class="button" href="{html_escape(url)}" target="_blank" rel="noreferrer">{html_escape(labels[key])}</a>'
+        )
+    return "".join(rendered)
+
+
+def render_radar_import_control(record: dict[str, Any], imported_item_id: str | None) -> str:
+    if imported_item_id:
+        return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
+    return f"""
+    <form class="inline-form" method="post" action="/radar/import">
+      <input type="hidden" name="run_id" value="{html_escape(record.get("run_id") or "")}">
+      <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
+      <button class="mini-button primary" type="submit">Add to Library</button>
+    </form>
+    """
+
+
+def status_pill(status: str) -> str:
+    css = "good" if status == "succeeded" else "warn" if status in {"running", "pending", "failed"} else ""
+    return f'<span class="pill {css}">Status: {html_escape(status)}</span>'
+
+
+def display_radar_datetime(value: str) -> str:
+    if not value:
+        return ""
+    date_part, _, time_part = value.partition("T")
+    if not time_part:
+        return value
+    return f"{date_part} {time_part[:5]}"
 
 
 def relevance_pill(label: str | None) -> str:
@@ -1135,6 +1480,33 @@ def recover_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> str
     return item_id
 
 
+def import_radar_recommendation_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    run_id = required_field(fields, "run_id")
+    dedupe_key = required_field(fields, "dedupe_key")
+    recommendation_record = next(
+        (
+            recommendation
+            for recommendation in database.list_literature_radar_recommendations(run_id)
+            if recommendation.get("dedupe_key") == dedupe_key
+        ),
+        None,
+    )
+    if recommendation_record is None:
+        raise ValueError("Unknown radar recommendation.")
+    import_result = import_radar_recommendation(
+        database,
+        recommendation_record.get("recommendation") or {},
+        actor=fields.get("actor") or "team-member",
+    )
+    import_result["dedupe_key"] = dedupe_key
+    database.mark_literature_radar_recommendation_imported(
+        run_id,
+        dedupe_key,
+        import_result,
+    )
+    return str(import_result["item_id"])
+
+
 def required_field(fields: dict[str, str], name: str) -> str:
     value = (fields.get(name) or "").strip()
     if not value:
@@ -1231,6 +1603,14 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
+            elif parsed.path == "/radar":
+                self.respond_html(
+                    render_literature_radar_page(
+                        self.database,
+                        run_id=query.get("run", [None])[0] or None,
+                        notice=notice,
+                    )
+                )
             elif parsed.path == "/submit":
                 self.respond_html(render_submit_page(self.database, notice=notice))
             elif parsed.path == "/interests":
@@ -1253,6 +1633,10 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             if parsed.path == "/submit":
                 item_id = submit_research_item(self.database, fields, upload=upload)
                 self.redirect(f"/?notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/radar/import":
+                item_id = import_radar_recommendation_to_library(self.database, fields)
+                run_id = fields.get("run_id") or ""
+                self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
             elif parsed.path == "/interests/save":
                 keyword = save_team_interest(self.database, fields)
                 self.redirect(f"/interests?notice={quote(f'Saved {keyword}.')}")

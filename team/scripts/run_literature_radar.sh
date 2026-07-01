@@ -43,11 +43,38 @@ fi
 if [[ -n "${RADAR_CONFERENCE_YEAR:-}" ]]; then
   ARGS+=("--conference-year" "$RADAR_CONFERENCE_YEAR")
 fi
+if [[ -n "${RADAR_DBLP_VENUES:-}" ]]; then
+  read -r -a DBLP_VENUES <<< "$RADAR_DBLP_VENUES"
+  for venue_profile in "${DBLP_VENUES[@]}"; do
+    ARGS+=("--venue-profile" "$venue_profile")
+  done
+fi
 if [[ -n "${RADAR_USENIX_CYCLES:-}" ]]; then
   read -r -a USENIX_CYCLES <<< "$RADAR_USENIX_CYCLES"
   for cycle in "${USENIX_CYCLES[@]}"; do
     ARGS+=("--usenix-cycle" "$cycle")
   done
+fi
+if [[ -n "${RADAR_SEED_PAPER_IDS:-}" ]]; then
+  read -r -a SEED_PAPER_IDS <<< "$RADAR_SEED_PAPER_IDS"
+  for paper_id in "${SEED_PAPER_IDS[@]}"; do
+    ARGS+=("--seed-paper-id" "$paper_id")
+  done
+fi
+if [[ -n "${RADAR_NEGATIVE_SEED_PAPER_IDS:-}" ]]; then
+  read -r -a NEGATIVE_SEED_PAPER_IDS <<< "$RADAR_NEGATIVE_SEED_PAPER_IDS"
+  for paper_id in "${NEGATIVE_SEED_PAPER_IDS[@]}"; do
+    ARGS+=("--negative-seed-paper-id" "$paper_id")
+  done
+fi
+if [[ "${RADAR_SUMMARIZE:-0}" == "1" ]]; then
+  ARGS+=("--summarize")
+fi
+if [[ -n "${RADAR_SUMMARY_PROVIDER:-}" ]]; then
+  ARGS+=("--summary-provider" "$RADAR_SUMMARY_PROVIDER")
+fi
+if [[ -n "${RADAR_SUMMARY_LIMIT:-}" ]]; then
+  ARGS+=("--summary-limit" "$RADAR_SUMMARY_LIMIT")
 fi
 if [[ "${RADAR_IMPORT_RESULTS:-0}" == "1" ]]; then
   ARGS+=("--import-results")

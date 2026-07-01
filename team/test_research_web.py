@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from shared.literature_radar import create_radar_paper, recommend_papers
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
     add_paper_comment,
@@ -22,6 +23,7 @@ from team.research_web import (
     remove_paper,
     remove_paper_tag,
     remove_team_interest,
+    import_radar_recommendation_to_library,
     save_team_interest,
     submit_research_item,
     update_paper_tag,
@@ -29,6 +31,7 @@ from team.research_web import (
     update_paper_interactions,
     update_paper_relevance,
     update_paper_tags,
+    render_literature_radar_page,
 )
 
 
@@ -43,6 +46,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("No relevant papers yet", latest)
         self.assertIn("Submit To Library", submit)
         self.assertIn("Interests", latest)
+        self.assertIn("Radar", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
         self.assertIn("Direct PDF link", submit)
@@ -88,6 +92,122 @@ class TeamResearchWebTest(unittest.TestCase):
             updated_keywords = [interest["keyword"] for interest in database.list_team_interest_keywords()]
             self.assertIn("exploit mitigation", updated_keywords)
             self.assertNotIn("memory safety", updated_keywords)
+
+    def test_literature_radar_page_lists_stored_recommendations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00006",
+                title="Memory Safety for Agentic Security Workflows",
+                authors=["Ada Lovelace", "Grace Hopper"],
+                abstract="Memory safety, system security, and AI agent security for daily research workflows.",
+                year=2026,
+                venue="arXiv",
+                identifiers={"arxiv_id": "2601.00006"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00006"},
+                discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            recommendations = recommend_papers([paper], limit=1)
+            recommendations[0]["summary"] = {
+                "short_summary": "A local summary for radar review.",
+                "relationship_to_interests": "Connects to memory safety.",
+                "why_attention": "Worth team attention.",
+                "suggested_next_step": "read_metadata_and_open_link",
+                "confidence": "medium",
+                "source_trace": {"processor": "local-radar-summary-v0.1"},
+            }
+            recommendations[0]["context"] = {
+                "matched_interest_terms": ["memory safety"],
+                "relationship_summary": "Matches active interests: memory safety. Related to existing context: Baseline Paper.",
+                "related_items": [
+                    {
+                        "id": "item_1",
+                        "title": "Baseline Paper",
+                        "link": "https://example.org/baseline",
+                        "relationship": "shared interests: memory safety",
+                    }
+                ],
+                "source_trace": {"processor": "local-radar-context-v0.1"},
+            }
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=recommendations,
+                report="# test",
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+
+            html = render_literature_radar_page(database)
+
+            self.assertIn("Literature Radar", html)
+            self.assertIn("Scheduled recommendations", html)
+            self.assertIn("Memory Safety for Agentic Security Workflows", html)
+            self.assertIn("Ada Lovelace, Grace Hopper", html)
+            self.assertIn("Matched interest keywords", html)
+            self.assertIn("A local summary for radar review.", html)
+            self.assertIn("Connects to memory safety.", html)
+            self.assertIn("Related to existing context: Baseline Paper.", html)
+            self.assertIn("Baseline Paper", html)
+            self.assertIn("shared interests: memory safety", html)
+            self.assertIn("local-radar-summary-v0.1", html)
+            self.assertIn(">New<", html)
+            self.assertIn("license: unknown", html)
+            self.assertIn("accessed:", html)
+            self.assertIn("arxiv", html)
+            self.assertIn("Add to Library", html)
+            self.assertIn('action="/radar/import"', html)
+            self.assertIn("https://arxiv.org/abs/2601.00006", html)
+
+    def test_radar_recommendation_import_adds_latest_paper_and_marks_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="paper-1",
+                title="System Security for Memory Safe Agents",
+                abstract="System security, memory safety, and LLM security for agents.",
+                identifiers={"semantic_scholar_id": "paper-1"},
+                links={"landing": "https://www.semanticscholar.org/paper/paper-1"},
+            )
+            recommendations = recommend_papers([paper], limit=1)
+            run = database.create_literature_radar_run(
+                sources=["semantic_scholar"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=recommendations,
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+
+            item_id = import_radar_recommendation_to_library(
+                database,
+                {
+                    "run_id": run["id"],
+                    "dedupe_key": paper["dedupe_key"],
+                    "actor": "alice",
+                },
+            )
+
+            latest = database.list_latest_relevant_papers()
+            self.assertEqual(len(latest), 1)
+            self.assertEqual(latest[0]["item"]["id"], item_id)
+            self.assertEqual(latest[0]["item"]["title"], "System Security for Memory Safe Agents")
+            stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
+            self.assertEqual(stored_recommendation["imported_item_id"], item_id)
+            self.assertEqual(stored_recommendation["import_result"]["status"], "imported")
+            self.assertEqual(database.get_literature_radar_paper(paper["dedupe_key"])["imported_item_id"], item_id)
+            html = render_literature_radar_page(database, run_id=run["id"])
+            self.assertIn("In Library", html)
+            self.assertNotIn("Add to Library", html)
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

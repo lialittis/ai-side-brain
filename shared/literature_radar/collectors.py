@@ -16,7 +16,7 @@ from urllib.parse import quote, quote_plus, urlencode, urljoin
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-from .core import create_radar_paper, normalize_spaces
+from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_spaces
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
@@ -26,6 +26,7 @@ OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENREVIEW_API2_NOTES_URL = "https://api2.openreview.net/notes"
 OPENREVIEW_WEB_URL = "https://openreview.net"
 SEMANTIC_SCHOLAR_PAPER_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 UNPAYWALL_API_URL = "https://api.unpaywall.org/v2"
 USENIX_BASE_URL = "https://www.usenix.org"
 NDSS_BASE_URL = "https://www.ndss-symposium.org"
@@ -68,6 +69,7 @@ DEFAULT_ARXIV_CATEGORIES = ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"
 DEFAULT_TIMEOUT_SECONDS = 30
 
 Fetcher = Callable[[str], bytes]
+PostFetcher = Callable[[str, bytes, dict[str, str]], bytes]
 
 
 def fetch_url(
@@ -79,6 +81,24 @@ def fetch_url(
     request_headers = {"User-Agent": "AI-Side-Brain-Literature-Radar/0.1"}
     request_headers.update(headers or {})
     request = Request(url, headers=request_headers)
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def fetch_json_post(
+    url: str,
+    body: bytes,
+    headers: dict[str, str],
+    *,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> bytes:
+    request_headers = {
+        "User-Agent": "AI-Side-Brain-Literature-Radar/0.1",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    request_headers.update(headers)
+    request = Request(url, data=body, headers=request_headers, method="POST")
     with urlopen(request, timeout=timeout) as response:
         return response.read()
 
@@ -565,6 +585,40 @@ def collect_dblp_publications(
     return parse_dblp_publication_search(content, query_url=url, collected_at=now)
 
 
+def collect_dblp_venue_publications(
+    *,
+    venue_profiles: list[str] | None = None,
+    year: int | None = None,
+    max_results: int = 50,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_profiles = expand_dblp_venue_profiles(venue_profiles)
+    papers = []
+    selected_year = year or (now or datetime.now(timezone.utc)).year
+    seen_keys = set()
+    for profile in selected_profiles:
+        query = dblp_venue_profile_query(profile, selected_year)
+        url = build_dblp_publication_search_url(query=query, max_results=max_results)
+        content = (fetcher or fetch_url)(url)
+        candidates = parse_dblp_publication_search(content, query_url=url, collected_at=now)
+        for paper in candidates:
+            if not dblp_paper_matches_venue_profile(paper, profile, selected_year):
+                continue
+            key = paper.get("dedupe_key")
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            papers.append(annotate_dblp_venue_paper(paper, profile=profile, year=selected_year, query_url=url))
+    return papers
+
+
+def dblp_venue_profile_query(profile: dict[str, Any], year: int) -> str:
+    terms = [str(term) for term in profile.get("query_terms") or [] if str(term).strip()]
+    term = terms[0] if terms else str(profile.get("name") or profile.get("id") or "")
+    return f"{term} {int(year)}"
+
+
 def build_dblp_publication_search_url(*, query: str, max_results: int = 50) -> str:
     params = {"q": query, "format": "xml", "h": str(max(1, max_results))}
     return f"{DBLP_PUBLICATION_SEARCH_URL}?{urlencode(params, quote_via=quote_plus)}"
@@ -617,6 +671,46 @@ def parse_dblp_publication_search(
             )
         )
     return papers
+
+
+def dblp_paper_matches_venue_profile(paper: dict[str, Any], profile: dict[str, Any], year: int) -> bool:
+    if int_or_none(paper.get("year")) != int(year):
+        return False
+    venue = normalize_venue_match_text(paper.get("venue") or "")
+    if not venue:
+        return False
+    aliases = [
+        normalize_venue_match_text(alias)
+        for alias in [profile.get("name"), *(profile.get("dblp_venues") or [])]
+        if normalize_venue_match_text(alias)
+    ]
+    return any(alias == venue or alias in venue or venue in alias for alias in aliases)
+
+
+def annotate_dblp_venue_paper(
+    paper: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    year: int,
+    query_url: str,
+) -> dict[str, Any]:
+    updated = dict(paper)
+    updated["source_records"] = [
+        {
+            **source_record,
+            "venue_profile_id": profile["id"],
+            "venue_profile_name": profile["name"],
+            "venue_group": profile["group"],
+            "venue_year": int(year),
+            "venue_query_url": query_url,
+        }
+        for source_record in paper.get("source_records") or []
+    ]
+    return updated
+
+
+def normalize_venue_match_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
 def collect_openalex_works(
@@ -995,8 +1089,103 @@ def parse_semantic_scholar_search(
     collected_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    return semantic_scholar_records_to_papers(
+        payload.get("data") or [],
+        query_url=query_url,
+        collected_at=collected_at,
+    )
+
+
+def collect_semantic_scholar_recommendations(
+    *,
+    positive_paper_ids: list[str],
+    negative_paper_ids: list[str] | None = None,
+    max_results: int = 50,
+    api_key: str | None = None,
+    fetcher: PostFetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    url = build_semantic_scholar_recommendations_url(max_results=max_results)
+    body = build_semantic_scholar_recommendations_body(
+        positive_paper_ids=positive_paper_ids,
+        negative_paper_ids=negative_paper_ids or [],
+    )
+    headers = {"x-api-key": api_key} if api_key else {}
+    content = fetcher(url, body, headers) if fetcher else fetch_json_post(url, body, headers)
+    return parse_semantic_scholar_recommendations(
+        content,
+        query_url=url,
+        positive_paper_ids=positive_paper_ids,
+        negative_paper_ids=negative_paper_ids or [],
+        collected_at=now,
+    )
+
+
+def build_semantic_scholar_recommendations_url(
+    *,
+    max_results: int = 50,
+    fields: list[str] | None = None,
+) -> str:
+    params = {
+        "limit": str(max(1, min(500, max_results))),
+        "fields": ",".join(fields or SEMANTIC_SCHOLAR_FIELDS),
+    }
+    return f"{SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def build_semantic_scholar_recommendations_body(
+    *,
+    positive_paper_ids: list[str],
+    negative_paper_ids: list[str] | None = None,
+) -> bytes:
+    positive = [paper_id.strip() for paper_id in positive_paper_ids if paper_id.strip()]
+    negative = [paper_id.strip() for paper_id in negative_paper_ids or [] if paper_id.strip()]
+    if not positive:
+        raise ValueError("Semantic Scholar recommendations require at least one positive seed paper ID.")
+    return json.dumps(
+        {
+            "positivePaperIds": positive,
+            "negativePaperIds": negative,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def parse_semantic_scholar_recommendations(
+    content: bytes | str,
+    *,
+    query_url: str = "",
+    positive_paper_ids: list[str] | None = None,
+    negative_paper_ids: list[str] | None = None,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    payload = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+    records = payload.get("recommendedPapers") or payload.get("data") or []
+    if isinstance(payload, list):
+        records = payload
+    return semantic_scholar_records_to_papers(
+        records,
+        query_url=query_url,
+        collected_at=collected_at,
+        source_context={
+            "recommendation_source": "semantic_scholar_recommendations",
+            "positive_paper_ids": [paper_id.strip() for paper_id in positive_paper_ids or [] if paper_id.strip()],
+            "negative_paper_ids": [paper_id.strip() for paper_id in negative_paper_ids or [] if paper_id.strip()],
+        },
+    )
+
+
+def semantic_scholar_records_to_papers(
+    records: list[dict[str, Any]],
+    *,
+    query_url: str = "",
+    collected_at: datetime | None = None,
+    source_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     papers = []
-    for record in payload.get("data") or []:
+    context = source_context or {}
+    for record in records:
         title = normalize_spaces(record.get("title") or "")
         paper_id = normalize_spaces(record.get("paperId") or "")
         if not title or not paper_id:
@@ -1027,6 +1216,7 @@ def parse_semantic_scholar_search(
             "s2_fields_of_study": record.get("s2FieldsOfStudy") or [],
             "is_open_access": bool(record.get("isOpenAccess")),
             "open_access_pdf": open_access_pdf,
+            **context,
         }
         papers.append(
             create_radar_paper(

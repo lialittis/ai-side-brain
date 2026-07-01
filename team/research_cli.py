@@ -90,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "arxiv",
             "dblp",
+            "dblp_venues",
             "semantic_scholar",
+            "semantic_scholar_recommendations",
             "openalex",
             "openreview",
             "crossref",
@@ -102,16 +104,37 @@ def build_parser() -> argparse.ArgumentParser:
     radar.add_argument("--query-term", action="append", default=[], help="interest term override; repeatable")
     radar.add_argument("--max-results", type=int, default=25, help="maximum results per source query")
     radar.add_argument("--limit", type=int, default=10, help="maximum recommendations to report")
+    radar.add_argument("--summarize", action="store_true", help="attach summaries to radar recommendations")
+    radar.add_argument(
+        "--summary-provider",
+        choices=["local", "openrouter"],
+        default="local",
+        help="summary provider; openrouter requires OPENROUTER_API_KEY",
+    )
+    radar.add_argument("--summary-limit", type=int, help="maximum recommendations to summarize")
     radar.add_argument("--import-results", action="store_true", help="import recommended papers into the team library")
     radar.add_argument("--import-limit", type=int, default=5, help="maximum recommendations to import")
     radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
     radar.add_argument("--project", default="team-library", help="team library project id for imported papers")
     radar.add_argument("--semantic-scholar-api-key", help="optional Semantic Scholar API key")
+    radar.add_argument("--seed-paper-id", action="append", default=[], help="positive Semantic Scholar seed paper id; repeatable")
+    radar.add_argument(
+        "--negative-seed-paper-id",
+        action="append",
+        default=[],
+        help="negative Semantic Scholar seed paper id; repeatable",
+    )
     radar.add_argument("--openalex-mailto", help="optional email for OpenAlex polite-pool requests")
     radar.add_argument("--openreview-invitation", action="append", default=[], help="OpenReview invitation id; repeatable")
     radar.add_argument("--crossref-mailto", help="optional email for Crossref polite-pool requests")
     radar.add_argument("--unpaywall-email", help="optional email for legal OA PDF enrichment via Unpaywall")
     radar.add_argument("--conference-year", type=int, help="accepted-paper conference year for venue sources")
+    radar.add_argument(
+        "--venue-profile",
+        action="append",
+        default=[],
+        help="DBLP venue profile or group for dblp_venues; e.g. security, systems, acm_ccs",
+    )
     radar.add_argument("--usenix-cycle", action="append", type=int, default=[], help="USENIX Security cycle; repeatable")
     radar.add_argument("--output", type=Path, help="write Markdown recommendation report")
     radar.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -390,16 +413,22 @@ def main(argv: list[str] | None = None) -> int:
             query_terms=args.query_term or None,
             max_results=args.max_results,
             recommendation_limit=args.limit,
+            summarize=args.summarize or args.summary_provider == "openrouter",
+            summary_provider=args.summary_provider,
+            summary_limit=args.summary_limit,
             import_results=args.import_results,
             import_limit=args.import_limit,
             min_import_score=args.min_score,
             project_id=args.project,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
+            seed_paper_ids=args.seed_paper_id or None,
+            negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
             openreview_invitations=args.openreview_invitation or None,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,
+            dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
         )
         if args.output:
