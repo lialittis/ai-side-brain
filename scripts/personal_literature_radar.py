@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 from personal.literature_radar import (
     DEFAULT_PERSONAL_RADAR_SOURCES,
     ensure_personal_radar_topic_profile,
+    mark_personal_radar_paper_review,
     read_personal_radar_index,
     read_personal_radar_paper_history,
     run_personal_literature_radar,
@@ -70,6 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--include-openreview-unaccepted", action="store_true")
     run.add_argument("--crossref-mailto")
     run.add_argument("--unpaywall-email")
+    run.add_argument("--cache-pdfs", action="store_true", help="cache legally downloadable PDFs for recommended papers only")
+    run.add_argument("--pdf-cache-dir", type=Path, help="local directory for cached Literature Radar PDFs")
+    run.add_argument("--pdf-cache-max-bytes", type=int, default=50 * 1024 * 1024, help="maximum bytes per cached PDF")
     run.add_argument("--conference-year", type=int)
     run.add_argument("--venue-profile", action="append", default=[])
     run.add_argument("--usenix-cycle", action="append", type=int, default=[])
@@ -93,6 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
     papers.add_argument("--root-path", type=Path, default=ROOT)
     papers.add_argument("--limit", type=int, default=20)
     papers.add_argument("--json", action="store_true")
+
+    review = subparsers.add_parser("review", help="mark one personal radar paper as watch, dismissed, or unreviewed")
+    review.add_argument("dedupe_key")
+    review.add_argument("--root-path", type=Path, default=ROOT)
+    review.add_argument("--status", choices=["watch", "dismissed", "unreviewed"], required=True)
+    review.add_argument("--actor", default="personal")
+    review.add_argument("--reason", default="")
+    review.add_argument("--json", action="store_true")
 
     brief = subparsers.add_parser("brief", help="build a weekly or daily personal radar brief")
     brief.add_argument("--root-path", type=Path, default=ROOT)
@@ -159,6 +171,7 @@ def print_paper_history(records: list[dict[str, Any]]) -> None:
     for record in records:
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
+            f"review={record.get('review_status') or 'unreviewed'} | "
             f"latest={record.get('latest_seen_at')} | {record.get('title')}"
         )
 
@@ -195,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
             openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
+            cache_pdfs=args.cache_pdfs,
+            pdf_cache_dir=args.pdf_cache_dir,
+            pdf_cache_max_bytes=args.pdf_cache_max_bytes,
             conference_year=args.conference_year,
             dblp_author_pids=args.dblp_author_pid or None,
             dblp_venue_profiles=args.venue_profile or None,
@@ -238,6 +254,20 @@ def main(argv: list[str] | None = None) -> int:
             print_json(records)
         else:
             print_paper_history(records)
+        return 0
+
+    if args.command == "review":
+        record = mark_personal_radar_paper_review(
+            args.root_path,
+            args.dedupe_key,
+            status=args.status,
+            actor=args.actor,
+            reason=args.reason,
+        )
+        if args.json:
+            print_json(record)
+        else:
+            print(f"{record['dedupe_key']} | review={record.get('review_status') or 'unreviewed'}")
         return 0
 
     if args.command == "brief":

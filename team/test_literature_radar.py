@@ -204,6 +204,89 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(scoring["source_trace"]["processor"], "team-interest-radar-scorer-v0.1")
             self.assertIn("Ranked with editable Team Interest weights.", result["recommendations"][0]["why_relevant"])
 
+    def test_run_team_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00033",
+                title="Memory Safety Cached Team Paper",
+                abstract="Memory safety and system security for low-level software.",
+                identifiers={"arxiv_id": "2601.00033"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00033"},
+            )
+            seen_urls = []
+
+            def fetcher(url: str) -> bytes:
+                seen_urls.append(url)
+                return b"%PDF-1.7\nteam cache"
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    cache_pdfs=True,
+                    pdf_cache_dir=Path(temp_dir) / "pdf-cache",
+                    pdf_fetcher=fetcher,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            pdf_access = result["recommendations"][0]["pdf_access"]
+            self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00033.pdf"])
+            self.assertTrue(pdf_access["downloaded"])
+            self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
+            stored_paper = database.list_literature_radar_papers(limit=1)[0]
+            self.assertTrue(stored_paper["pdf_access"]["downloaded"])
+            self.assertEqual(stored_paper["pdf_access"]["local_pdf_path"], pdf_access["local_pdf_path"])
+            stored_recommendation = database.list_literature_radar_recommendations(result["run_id"])[0]
+            self.assertTrue(stored_recommendation["pdf_access"]["downloaded"])
+
+    def test_run_team_literature_radar_skips_dismissed_radar_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00035",
+                title="Dismissed Memory Safety Radar Paper",
+                abstract="Memory safety and system security for low-level software.",
+                identifiers={"arxiv_id": "2601.00035"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00035"},
+            )
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                first = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+            database.mark_literature_radar_paper_review(
+                paper["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+                now=datetime(2026, 7, 1, 12, 5, tzinfo=timezone.utc),
+            )
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                second = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(first["recommendation_count"], 1)
+            self.assertEqual(second["collected_count"], 1)
+            self.assertEqual(second["recommendation_count"], 0)
+            history = database.get_literature_radar_paper(paper["dedupe_key"])
+            self.assertEqual(history["review_status"], "dismissed")
+            self.assertEqual(history["reviewed_by"], "alice")
+            first_recommendation = database.list_literature_radar_recommendations(first["run_id"])[0]
+            self.assertEqual(first_recommendation["review"]["status"], "dismissed")
+
     def test_run_team_literature_radar_attaches_local_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -921,6 +1004,17 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "local",
                             "--summary-limit",
                             "1",
+                            "--cache-pdfs",
+                            "--pdf-cache-dir",
+                            "team/data/custom-pdf-cache",
+                            "--pdf-cache-max-bytes",
+                            "12345",
+                            "--conference-year",
+                            "2026",
+                            "--usenix-cycle",
+                            "1",
+                            "--usenix-cycle",
+                            "2",
                             "--json",
                         ]
                     )
@@ -934,6 +1028,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(runner.call_args.kwargs["summarize"])
             self.assertEqual(runner.call_args.kwargs["summary_provider"], "local")
             self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
+            self.assertTrue(runner.call_args.kwargs["cache_pdfs"])
+            self.assertEqual(runner.call_args.kwargs["pdf_cache_dir"], Path("team/data/custom-pdf-cache"))
+            self.assertEqual(runner.call_args.kwargs["pdf_cache_max_bytes"], 12345)
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
             self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["65/9612"])
@@ -948,8 +1045,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIsNone(runner.call_args.kwargs["openreview_invitations"])
             self.assertIsNone(runner.call_args.kwargs["crossref_mailto"])
             self.assertIsNone(runner.call_args.kwargs["unpaywall_email"])
-            self.assertIsNone(runner.call_args.kwargs["conference_year"])
-            self.assertIsNone(runner.call_args.kwargs["usenix_security_cycles"])
+            self.assertEqual(runner.call_args.kwargs["conference_year"], 2026)
+            self.assertEqual(runner.call_args.kwargs["usenix_security_cycles"], [1, 2])
             self.assertEqual(json.loads(stdout.getvalue())["recommendation_count"], 1)
 
     def test_cli_radar_run_can_use_saved_defaults(self) -> None:
@@ -964,6 +1061,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "limit": 3,
                     "summarize": True,
                     "summary_provider": "openrouter",
+                    "cache_pdfs": True,
+                    "pdf_cache_dir": "team/data/saved-pdf-cache",
+                    "pdf_cache_max_bytes": 12345,
+                    "conference_year": 2026,
+                    "usenix_security_cycles": [1, 2],
+                    "include_openreview_unaccepted": True,
                     "openalex_author_ids": ["A123456789"],
                     "seed_paper_ids": ["seed-positive"],
                     "venue_profiles": ["security"],
@@ -1000,6 +1103,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 3)
             self.assertTrue(runner.call_args.kwargs["summarize"])
             self.assertEqual(runner.call_args.kwargs["summary_provider"], "openrouter")
+            self.assertTrue(runner.call_args.kwargs["cache_pdfs"])
+            self.assertEqual(runner.call_args.kwargs["pdf_cache_dir"], Path("team/data/saved-pdf-cache"))
+            self.assertEqual(runner.call_args.kwargs["pdf_cache_max_bytes"], 12345)
+            self.assertEqual(runner.call_args.kwargs["conference_year"], 2026)
+            self.assertEqual(runner.call_args.kwargs["usenix_security_cycles"], [1, 2])
+            self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
             self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
             self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
             self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])

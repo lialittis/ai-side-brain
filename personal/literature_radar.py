@@ -20,6 +20,7 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     assess_pdf_access,
     build_recommendation_report,
+    cache_recommendation_pdfs,
     collect_arxiv,
     collect_crossref_works,
     collect_dblp_author_publications,
@@ -42,6 +43,7 @@ from shared.literature_radar import (
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
+from shared.literature_radar.collectors import fetch_url
 from shared.research.core import iso_timestamp, stable_id
 
 
@@ -62,6 +64,8 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
 PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
 PERSONAL_RADAR_PAPER_HISTORY_NAME = "literature-radar-papers.json"
 PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
+PERSONAL_RADAR_PDF_CACHE_DIR = Path("memory") / "06_Logs" / "literature-radar-pdfs"
+PERSONAL_RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
 
 
 def run_personal_literature_radar(
@@ -93,6 +97,10 @@ def run_personal_literature_radar(
     topic_profile: dict[str, Any] | None = None,
     topic_profile_path: Path | None = None,
     write_report: bool = True,
+    cache_pdfs: bool = False,
+    pdf_cache_dir: Path | None = None,
+    pdf_fetcher: Callable[[str], bytes] | None = None,
+    pdf_cache_max_bytes: int = 50 * 1024 * 1024,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_now = now or datetime.now(timezone.utc)
@@ -134,14 +142,23 @@ def run_personal_literature_radar(
     recommendations = recommend_papers(
         collected,
         topic_profile=selected_topic_profile,
-        limit=recommendation_limit,
+        limit=max(recommendation_limit + 20, recommendation_limit * 3),
         now=selected_now,
     )
+    recommendations = apply_personal_radar_review_feedback(root, recommendations)[:recommendation_limit]
     recommendations = annotate_personal_recommendation_novelty(
         root,
         recommendations,
         now=selected_now,
     )
+    if cache_pdfs:
+        recommendations = cache_recommendation_pdfs(
+            recommendations,
+            pdf_cache_dir or root / PERSONAL_RADAR_PDF_CACHE_DIR,
+            fetcher=pdf_fetcher or fetch_url,
+            now=selected_now,
+            max_bytes=pdf_cache_max_bytes,
+        )
     recommendations = add_recommendation_context(
         recommendations,
         context_items=personal_radar_context_items(root),
@@ -232,6 +249,35 @@ def summarize_personal_recommendations(
             now=now,
         )
     raise ValueError("Unsupported personal radar summary provider.")
+
+
+def apply_personal_radar_review_feedback(
+    root: Path,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    histories = read_personal_radar_paper_history(root)
+    reviewed: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        paper = recommendation.get("paper") or {}
+        dedupe_key = personal_radar_paper_key(paper)
+        review = personal_radar_review_record(histories.get(dedupe_key))
+        if review["status"] == "dismissed":
+            continue
+        reviewed.append({**recommendation, "review": review})
+    return reviewed
+
+
+def personal_radar_review_record(history: dict[str, Any] | None) -> dict[str, Any]:
+    source = history or {}
+    status = str(source.get("review_status") or "unreviewed").strip().lower()
+    if status not in PERSONAL_RADAR_REVIEW_STATUSES:
+        status = "unreviewed"
+    return {
+        "status": status,
+        "reviewed_by": source.get("reviewed_by") or "",
+        "reviewed_at": source.get("reviewed_at") or "",
+        "reason": source.get("review_reason") or "",
+    }
 
 
 def annotate_personal_recommendation_novelty(
@@ -790,6 +836,7 @@ def build_personal_radar_run_record(
                 "score": (recommendation.get("scoring") or {}).get("score"),
                 "label": (recommendation.get("scoring") or {}).get("label"),
                 "novelty": recommendation.get("novelty"),
+                "review": recommendation.get("review"),
                 "pdf_access": recommendation.get("pdf_access"),
                 "context": recommendation.get("context"),
                 "summary": recommendation.get("summary"),
@@ -841,6 +888,42 @@ def update_personal_radar_paper_history(
     return histories
 
 
+def mark_personal_radar_paper_review(
+    root: Path,
+    dedupe_key: str,
+    *,
+    status: str,
+    actor: str = "personal",
+    reason: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    histories = read_personal_radar_paper_history(root)
+    selected_key = str(dedupe_key or "").strip()
+    if not selected_key or selected_key not in histories:
+        raise KeyError(f"Unknown personal radar paper: {dedupe_key}")
+    selected_status = normalize_personal_radar_review_status(status)
+    timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+    record = dict(histories[selected_key])
+    record["review_status"] = selected_status
+    record["reviewed_by"] = str(actor or "personal").strip() or "personal"
+    record["reviewed_at"] = timestamp
+    record["review_reason"] = str(reason or "").strip()
+    latest = record.get("latest_recommendation")
+    if isinstance(latest, dict):
+        latest["review"] = personal_radar_review_record(record)
+        record["latest_recommendation"] = latest
+    histories[selected_key] = record
+    write_personal_radar_paper_history(root, histories)
+    return record
+
+
+def normalize_personal_radar_review_status(status: str) -> str:
+    selected = str(status or "").strip().lower()
+    if selected not in PERSONAL_RADAR_REVIEW_STATUSES:
+        raise ValueError("Unsupported personal radar review status.")
+    return selected
+
+
 def build_personal_radar_paper_history_record(
     *,
     existing: dict[str, Any] | None,
@@ -865,6 +948,9 @@ def build_personal_radar_paper_history_record(
         "pdf_access": (recommendation or {}).get("pdf_access") or assess_pdf_access(paper, now=access_time),
         "paper": paper,
     }
+    for key in ("review_status", "reviewed_by", "reviewed_at", "review_reason"):
+        if current.get(key):
+            record[key] = current[key]
     if recommendation:
         scoring = recommendation.get("scoring") or {}
         record["latest_recommendation"] = {
@@ -872,6 +958,7 @@ def build_personal_radar_paper_history_record(
             "score": scoring.get("score"),
             "label": scoring.get("label"),
             "novelty": recommendation.get("novelty"),
+            "review": recommendation.get("review"),
             "context": recommendation.get("context"),
             "summary": recommendation.get("summary"),
             "why_relevant": recommendation.get("why_relevant"),

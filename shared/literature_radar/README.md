@@ -112,8 +112,10 @@ Current implemented collectors:
   configured invitation IDs and preserves submission title, authors, abstract,
   keywords, forum link, PDF link metadata, TL;DR, and decisions when available.
 - `collect_openreview_venue_submissions(...)` expands configured OpenReview
-  venue profiles into known invitation IDs, annotates venue context, and defaults
-  to accepted-only filtering from `venueid` or decision metadata.
+  venue profiles into known invitation IDs for ICLR, NeurIPS, NeurIPS
+  Evaluations/Datasets, NeurIPS Creative AI, ICML, and ICML Position Paper
+  Track presets, annotates venue context, and defaults to accepted-only
+  filtering from `venueid` or decision metadata.
 - `collect_usenix_security_accepted_papers(...)` parses official USENIX
   Security accepted-paper pages by year/cycle and stores title, authors,
   abstract text when available, and paper/source links.
@@ -141,5 +143,9 @@ reason why a PDF should or should not be downloaded.
 product adapters. It only calls its injected fetcher when `assess_pdf_access`
 allows download, verifies the response looks like a PDF, writes the local file,
 and returns an updated PDF-access record with `local_pdf_path`, `sha256`, byte
-count, and download status. Normal collection, reports, and briefs do not enable
-PDF caching by default.
+count, and download status.
+
+`cache_recommendation_pdfs(...)` applies that policy to already-ranked
+recommendations, which lets products cache only papers worth attention instead
+of every collected candidate. Normal collection, reports, and briefs do not
+enable PDF caching by default.

@@ -45,3 +45,8 @@ from the defaults saved in `/radar`. Environment variables in `.env` can still
 override the script behavior. Brief timers write Markdown and JSON roll-ups to
 `team/logs/` and `memory/06_Logs/` by default; they do not call external paper
 sources.
+
+PDF caching is off by default. Set `RADAR_CACHE_PDFS=1` with
+`RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs`, or
+`PERSONAL_RADAR_CACHE_PDFS=1` with `PERSONAL_RADAR_PDF_CACHE_DIR`, to cache only
+legally downloadable PDFs for ranked recommendations.

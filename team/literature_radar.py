@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from shared.literature_radar import (
@@ -12,6 +13,7 @@ from shared.literature_radar import (
     add_recommendation_context,
     assess_pdf_access,
     build_recommendation_report,
+    cache_recommendation_pdfs,
     collect_arxiv,
     collect_crossref_works,
     collect_dblp_author_publications,
@@ -32,6 +34,7 @@ from shared.literature_radar import (
     enrich_paper_with_unpaywall,
     recommend_papers,
 )
+from shared.literature_radar.collectors import fetch_url
 from shared.research.core import iso_timestamp
 from team.research_adapter import TeamResearchRunResult, build_team_research_run
 from team.research_db import DEFAULT_LIBRARY_PROJECT_ID, TeamResearchDatabase
@@ -46,6 +49,9 @@ from team.literature_radar_ai import summarize_radar_recommendations_with_openro
 
 TEAM_RADAR_SCORER_PROCESSOR = "team-interest-radar-scorer-v0.1"
 TEAM_RADAR_SETTINGS_KEY = "literature_radar_defaults"
+TEAM_RADAR_DEFAULT_PDF_CACHE_DIR = (
+    Path(__file__).resolve().parents[1] / "team" / "data" / "literature-radar-pdfs"
+)
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "team-literature-radar",
     "name": "Team Literature Radar",
@@ -116,6 +122,10 @@ def run_team_literature_radar(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    cache_pdfs: bool = False,
+    pdf_cache_dir: Path | None = None,
+    pdf_fetcher: Callable[[str], bytes] | None = None,
+    pdf_cache_max_bytes: int = 50 * 1024 * 1024,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_terms = query_terms or team_radar_query_terms(database)
@@ -160,13 +170,22 @@ def run_team_literature_radar(
         recommendations = recommend_papers(
             collected,
             scorer=build_team_radar_scorer(database.list_team_interest_keywords()),
-            limit=recommendation_limit,
+            limit=max(recommendation_limit + 20, recommendation_limit * 3),
             now=now,
         )
+        recommendations = apply_team_radar_review_feedback(database, recommendations)[:recommendation_limit]
         recommendations = database.annotate_literature_radar_recommendation_novelty(
             recommendations,
             now=now,
         )
+        if cache_pdfs:
+            recommendations = cache_recommendation_pdfs(
+                recommendations,
+                pdf_cache_dir or TEAM_RADAR_DEFAULT_PDF_CACHE_DIR,
+                fetcher=pdf_fetcher or fetch_url,
+                now=now,
+                max_bytes=pdf_cache_max_bytes,
+            )
         recommendations = add_recommendation_context(
             recommendations,
             context_items=team_radar_context_items(database),
@@ -270,6 +289,35 @@ def summarize_team_radar_recommendations(
             now=now,
         )
     raise ValueError("Unsupported radar summary provider.")
+
+
+def apply_team_radar_review_feedback(
+    database: TeamResearchDatabase,
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    reviewed: list[dict[str, Any]] = []
+    for recommendation in recommendations:
+        paper = recommendation.get("paper") or {}
+        dedupe_key = str(paper.get("dedupe_key") or "").strip()
+        history = database.get_literature_radar_paper(dedupe_key) if dedupe_key else None
+        review = team_radar_review_record(history)
+        if review["status"] == "dismissed":
+            continue
+        reviewed.append({**recommendation, "review": review})
+    return reviewed
+
+
+def team_radar_review_record(history: dict[str, Any] | None) -> dict[str, Any]:
+    source = history or {}
+    status = str(source.get("review_status") or "unreviewed").strip().lower()
+    if status not in {"unreviewed", "watch", "dismissed"}:
+        status = "unreviewed"
+    return {
+        "status": status,
+        "reviewed_by": source.get("reviewed_by") or "",
+        "reviewed_at": source.get("reviewed_at") or "",
+        "reason": source.get("review_reason") or "",
+    }
 
 
 def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80) -> list[dict[str, Any]]:

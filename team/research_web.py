@@ -78,6 +78,11 @@ RADAR_WEB_SEED_SOURCES = {
     "semantic_scholar_recommendations",
 }
 RADAR_SETTINGS_KEY = TEAM_RADAR_SETTINGS_KEY
+RADAR_DEFAULT_PDF_CACHE_DIR = "team/data/literature-radar-pdfs"
+RADAR_DEFAULT_PDF_CACHE_MAX_BYTES = 50 * 1024 * 1024
+RADAR_PDF_CACHE_MAX_BYTES_LIMIT = 500 * 1024 * 1024
+RADAR_CONFERENCE_YEAR_MIN = 2000
+RADAR_CONFERENCE_YEAR_MAX = 2100
 RADAR_LIST_SETTING_KEYS = {
     "semantic_scholar_author_ids",
     "dblp_author_pids",
@@ -828,6 +833,32 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
           {render_summary_provider_options(str(settings.get('summary_provider') or 'local'))}
         </select>
       </label>
+      <div class="radar-number-row">
+        <label>
+          <span class="muted">Conference year</span>
+          <input type="number" name="conference_year" min="{RADAR_CONFERENCE_YEAR_MIN}" max="{RADAR_CONFERENCE_YEAR_MAX}" value="{html_escape(str(settings.get('conference_year') or ''))}">
+        </label>
+        <label>
+          <span class="muted">USENIX cycles</span>
+          <input name="usenix_security_cycles" placeholder="1, 2" value="{html_escape(radar_list_form_value(settings, 'usenix_security_cycles'))}">
+        </label>
+      </div>
+      <label class="radar-option-line">
+        <input type="checkbox" name="include_openreview_unaccepted" value="1"{checked_attr(bool(settings.get('include_openreview_unaccepted')))}>
+        <span>Include unaccepted OpenReview submissions</span>
+      </label>
+      <label class="radar-option-line">
+        <input type="checkbox" name="cache_pdfs" value="1"{checked_attr(bool(settings.get('cache_pdfs')))}>
+        <span>Cache legal PDFs</span>
+      </label>
+      <label>
+        <span class="muted">PDF cache dir</span>
+        <input name="pdf_cache_dir" placeholder="{html_escape(RADAR_DEFAULT_PDF_CACHE_DIR)}" value="{html_escape(str(settings.get('pdf_cache_dir') or ''))}">
+      </label>
+      <label>
+        <span class="muted">PDF max bytes</span>
+        <input type="number" name="pdf_cache_max_bytes" min="1024" max="{RADAR_PDF_CACHE_MAX_BYTES_LIMIT}" value="{html_escape(str(settings.get('pdf_cache_max_bytes') or RADAR_DEFAULT_PDF_CACHE_MAX_BYTES))}">
+      </label>
       <label>
         <span class="muted">Author IDs</span>
         <textarea name="semantic_scholar_author_ids" placeholder="Semantic Scholar author IDs">{html_escape(radar_list_form_value(settings, 'semantic_scholar_author_ids'))}</textarea>
@@ -888,6 +919,7 @@ def render_radar_paper_history_item(record: dict[str, Any]) -> str:
     source_ids = record.get("source_ids") or []
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids)
     imported_item_id = str(record.get("imported_item_id") or "")
+    review = radar_review_from_record(record)
     imported = (
         f'<span class="pill good">Imported: {html_escape(imported_item_id)}</span>'
         if imported_item_id
@@ -908,9 +940,10 @@ def render_radar_paper_history_item(record: dict[str, Any]) -> str:
         <div class="tags">
           {source_tags}
           {imported}
+          {render_radar_review_pill(review)}
           {render_pdf_access_pill(record.get("pdf_access") or {})}
         </div>
-        <div class="radar-links">{links}{import_control}</div>
+        <div class="radar-links">{links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review)}</div>
       </div>
     </article>
     """
@@ -953,6 +986,12 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
         "limit": 10,
         "summarize": True,
         "summary_provider": "local",
+        "cache_pdfs": False,
+        "pdf_cache_dir": RADAR_DEFAULT_PDF_CACHE_DIR,
+        "pdf_cache_max_bytes": RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
+        "conference_year": "",
+        "usenix_security_cycles": [],
+        "include_openreview_unaccepted": False,
     }
     for key in RADAR_LIST_SETTING_KEYS:
         settings[key] = []
@@ -979,6 +1018,22 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
         normalized["summarize"] = bool(settings.get("summarize"))
     if "summary_provider" in settings:
         normalized["summary_provider"] = clean_summary_provider(str(settings.get("summary_provider") or "local"))
+    if "cache_pdfs" in settings:
+        normalized["cache_pdfs"] = truthy_setting(settings.get("cache_pdfs"))
+    if "pdf_cache_dir" in settings:
+        normalized["pdf_cache_dir"] = str(settings.get("pdf_cache_dir") or "").strip()
+    if "pdf_cache_max_bytes" in settings:
+        normalized["pdf_cache_max_bytes"] = clean_positive_int(
+            str(settings.get("pdf_cache_max_bytes") or ""),
+            default=RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
+            maximum=RADAR_PDF_CACHE_MAX_BYTES_LIMIT,
+        )
+    if "conference_year" in settings:
+        normalized["conference_year"] = clean_optional_year(settings.get("conference_year"))
+    if "usenix_security_cycles" in settings:
+        normalized["usenix_security_cycles"] = clean_usenix_cycles(settings.get("usenix_security_cycles"))
+    if "include_openreview_unaccepted" in settings:
+        normalized["include_openreview_unaccepted"] = truthy_setting(settings.get("include_openreview_unaccepted"))
     for key in RADAR_LIST_SETTING_KEYS:
         if key in settings:
             value = settings.get(key)
@@ -995,6 +1050,14 @@ def radar_list_form_value(settings: dict[str, Any], key: str) -> str:
 
 def checked_attr(enabled: bool) -> str:
     return " checked" if enabled else ""
+
+
+def truthy_setting(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def render_summary_provider_options(selected: str) -> str:
@@ -1128,6 +1191,7 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
     novelty = record.get("novelty") or recommendation.get("novelty") or {}
     context = record.get("context") or recommendation.get("context") or {}
     summary = record.get("summary") or recommendation.get("summary") or {}
+    review = radar_review_from_record(record)
     imported_item_id = record.get("imported_item_id") or (record.get("import_result") or {}).get("item_id")
     return f"""
     <article class="radar-recommendation">
@@ -1141,12 +1205,14 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
         <div class="radar-links">
           {relevance_pill(str(scoring.get("label") or record.get("label") or "needs_review"))}
           {render_novelty_pill(novelty)}
+          {render_radar_review_pill(review)}
           <span class="pill">Score: {html_escape(int(float(scoring.get("score") or record.get("score") or 0)))}</span>
           {render_pdf_access_pill(pdf_access)}
           <span class="pill">Action: {html_escape(action)}</span>
           {render_radar_source_pills(paper)}
           {render_radar_links(paper)}
           {render_radar_import_control(record, imported_item_id)}
+          {render_radar_review_controls(record.get("dedupe_key") or "", run_id=record.get("run_id") or "", review=review)}
         </div>
       </div>
     </article>
@@ -1182,6 +1248,68 @@ def render_novelty_pill(novelty: dict[str, Any]) -> str:
         return '<span class="pill good">New</span>'
     count = int(novelty.get("seen_count_before_run") or 0)
     return f'<span class="pill">Seen before: {count}</span>'
+
+
+def radar_review_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    status = str(review.get("status") or record.get("review_status") or "unreviewed").strip().lower()
+    if status not in {"unreviewed", "watch", "dismissed"}:
+        status = "unreviewed"
+    return {
+        "status": status,
+        "reviewed_by": review.get("reviewed_by") or record.get("reviewed_by") or "",
+        "reviewed_at": review.get("reviewed_at") or record.get("reviewed_at") or "",
+        "reason": review.get("reason") or record.get("review_reason") or "",
+    }
+
+
+def render_radar_review_pill(review: dict[str, Any]) -> str:
+    status = str(review.get("status") or "unreviewed")
+    if status == "dismissed":
+        return '<span class="pill warn">Dismissed</span>'
+    if status == "watch":
+        return '<span class="pill good">Watch</span>'
+    return '<span class="pill">Unreviewed</span>'
+
+
+def render_radar_review_controls(
+    dedupe_key: str,
+    *,
+    run_id: str = "",
+    return_to: str = "run",
+    review: dict[str, Any],
+) -> str:
+    if not dedupe_key:
+        return ""
+    status = str(review.get("status") or "unreviewed")
+    watch_button = "" if status == "watch" else render_radar_review_button(dedupe_key, "watch", "Watch", run_id, return_to)
+    dismiss_button = (
+        "" if status == "dismissed" else render_radar_review_button(dedupe_key, "dismissed", "Dismiss", run_id, return_to)
+    )
+    clear_button = (
+        render_radar_review_button(dedupe_key, "unreviewed", "Clear", run_id, return_to)
+        if status in {"watch", "dismissed"}
+        else ""
+    )
+    return watch_button + dismiss_button + clear_button
+
+
+def render_radar_review_button(
+    dedupe_key: str,
+    status: str,
+    label: str,
+    run_id: str,
+    return_to: str,
+) -> str:
+    return f"""
+    <form class="inline-form" method="post" action="/radar/review">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <input type="hidden" name="status" value="{html_escape(status)}">
+      <input type="hidden" name="run_id" value="{html_escape(run_id)}">
+      <input type="hidden" name="return_to" value="{html_escape(return_to)}">
+      <button class="mini-button" type="submit">{html_escape(label)}</button>
+    </form>
+    """
 
 
 def render_radar_summary(summary: dict[str, Any]) -> str:
@@ -1955,6 +2083,23 @@ def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[s
     return str(import_result["item_id"])
 
 
+def review_radar_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, str]:
+    dedupe_key = required_field(fields, "dedupe_key")
+    status = required_field(fields, "status")
+    record = database.mark_literature_radar_paper_review(
+        dedupe_key,
+        status=status,
+        actor=fields.get("actor") or "team-member",
+        reason=fields.get("reason") or "",
+    )
+    return {
+        "dedupe_key": dedupe_key,
+        "status": str(record.get("review_status") or status),
+        "run_id": fields.get("run_id") or "",
+        "return_to": fields.get("return_to") or "run",
+    }
+
+
 def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     settings = radar_settings_from_fields(fields)
     if not settings["sources"]:
@@ -1974,7 +2119,13 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         seed_paper_ids=settings["seed_paper_ids"],
         openreview_invitations=settings["openreview_invitations"],
         openreview_venue_profiles=settings["openreview_venue_profiles"],
+        openreview_accepted_only=not settings["include_openreview_unaccepted"],
+        conference_year=settings["conference_year"] or None,
         dblp_venue_profiles=settings["venue_profiles"],
+        usenix_security_cycles=settings["usenix_security_cycles"] or None,
+        cache_pdfs=settings["cache_pdfs"],
+        pdf_cache_dir=Path(settings["pdf_cache_dir"]) if settings.get("pdf_cache_dir") else None,
+        pdf_cache_max_bytes=settings["pdf_cache_max_bytes"],
     )
     return str(result["run_id"])
 
@@ -1986,6 +2137,16 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "limit": clean_positive_int(fields.get("limit", ""), default=10, maximum=50),
         "summarize": checkbox_enabled(fields, "summarize"),
         "summary_provider": clean_summary_provider(fields.get("summary_provider", "")),
+        "conference_year": clean_optional_year(fields.get("conference_year", "")),
+        "usenix_security_cycles": clean_usenix_cycles(fields.get("usenix_security_cycles", "")),
+        "include_openreview_unaccepted": checkbox_enabled(fields, "include_openreview_unaccepted"),
+        "cache_pdfs": checkbox_enabled(fields, "cache_pdfs"),
+        "pdf_cache_dir": (fields.get("pdf_cache_dir") or RADAR_DEFAULT_PDF_CACHE_DIR).strip(),
+        "pdf_cache_max_bytes": clean_positive_int(
+            fields.get("pdf_cache_max_bytes", ""),
+            default=RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
+            maximum=RADAR_PDF_CACHE_MAX_BYTES_LIMIT,
+        ),
         "semantic_scholar_author_ids": split_form_list(fields.get("semantic_scholar_author_ids", "")),
         "dblp_author_pids": split_form_list(fields.get("dblp_author_pids", "")),
         "openalex_author_ids": split_form_list(fields.get("openalex_author_ids", "")),
@@ -2044,6 +2205,40 @@ def clean_positive_int(value: str, *, default: int, maximum: int) -> int:
     except ValueError as error:
         raise ValueError("Expected a positive number.") from error
     return min(maximum, max(1, parsed))
+
+
+def clean_optional_year(value: Any) -> int | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = int(raw_value)
+    except ValueError as error:
+        raise ValueError("Conference year must be a number.") from error
+    if parsed < RADAR_CONFERENCE_YEAR_MIN or parsed > RADAR_CONFERENCE_YEAR_MAX:
+        raise ValueError("Conference year is outside the supported range.")
+    return parsed
+
+
+def clean_usenix_cycles(value: Any) -> list[int]:
+    if isinstance(value, list):
+        raw_parts = [str(item) for item in value]
+    else:
+        raw_parts = re.split(r"[\n, ]+", str(value or ""))
+    cycles = []
+    for raw_part in raw_parts:
+        part = raw_part.strip()
+        if not part:
+            continue
+        try:
+            cycle = int(part)
+        except ValueError as error:
+            raise ValueError("USENIX cycles must be positive numbers.") from error
+        if cycle < 1 or cycle > 20:
+            raise ValueError("USENIX cycles must be between 1 and 20.")
+        if cycle not in cycles:
+            cycles.append(cycle)
+    return cycles
 
 
 def split_form_list(value: str) -> list[str]:
@@ -2204,6 +2399,16 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/radar/papers/import":
                 item_id = import_radar_paper_to_library(self.database, fields)
                 self.redirect(f"/radar/papers?notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/radar/review":
+                result = review_radar_paper(self.database, fields)
+                status = result["status"]
+                if result.get("return_to") == "papers":
+                    self.redirect(f"/radar/papers?notice={quote(f'Marked radar paper as {status}.')}")
+                else:
+                    run_id = result.get("run_id") or ""
+                    suffix = f"?run={quote(run_id, safe='')}" if run_id else ""
+                    separator = "&" if suffix else "?"
+                    self.redirect(f"/radar{suffix}{separator}notice={quote(f'Marked radar paper as {status}.')}")
             elif parsed.path == "/radar/run":
                 run_id = run_literature_radar_from_web(self.database, fields)
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote('Radar run completed.')}")

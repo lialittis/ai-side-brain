@@ -28,6 +28,7 @@ from team.research_interests import (
 
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
+RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
 
 
 def default_db_path() -> Path:
@@ -1371,6 +1372,57 @@ class TeamResearchDatabase:
                 self._upsert_literature_radar_recommendation(connection, recommendation)
         return paper_record
 
+    def mark_literature_radar_paper_review(
+        self,
+        dedupe_key: str,
+        *,
+        status: str,
+        actor: str = "team-member",
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_status = normalize_literature_radar_review_status(status)
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            paper_row = connection.execute(
+                "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if paper_row is None:
+                raise KeyError(f"Unknown literature radar paper: {dedupe_key}")
+            paper_record = loads(paper_row["record_json"])
+            apply_literature_radar_review(
+                paper_record,
+                status=selected_status,
+                actor=actor,
+                reason=reason,
+                timestamp=timestamp,
+            )
+            connection.execute(
+                """
+                UPDATE literature_radar_papers
+                SET record_json = ?
+                WHERE dedupe_key = ?
+                """,
+                (dumps(paper_record), dedupe_key),
+            )
+            review = literature_radar_review_record(paper_record)
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_recommendations
+                WHERE dedupe_key = ?
+                """,
+                (dedupe_key,),
+            ).fetchall()
+            for row in rows:
+                recommendation = loads(row["record_json"])
+                recommendation["review"] = review
+                recommendation["updated_at"] = timestamp
+                self._upsert_literature_radar_recommendation(connection, recommendation)
+        return paper_record
+
     def get_literature_radar_paper(self, dedupe_key: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as connection:
@@ -1778,9 +1830,16 @@ class TeamResearchDatabase:
             "seen_count": int(existing.get("seen_count") or 0) + (1 if count_seen else 0),
             "source_ids": source_ids,
             "imported_item_id": imported_item_id or existing.get("imported_item_id"),
-            "pdf_access": assess_pdf_access(paper, now=access_time),
+            "pdf_access": (
+                paper.get("pdf_access")
+                if isinstance(paper.get("pdf_access"), dict)
+                else assess_pdf_access(paper, now=access_time)
+            ),
             "paper": paper,
         }
+        for key in ("review_status", "reviewed_by", "reviewed_at", "review_reason"):
+            if existing.get(key):
+                record[key] = existing[key]
         connection.execute(
             """
             INSERT OR REPLACE INTO literature_radar_papers
@@ -2125,6 +2184,7 @@ def build_literature_radar_recommendation_record(
         "label": scoring.get("label") or "needs_review",
         "score": float(scoring.get("score") or 0),
         "novelty": recommendation.get("novelty"),
+        "review": recommendation.get("review"),
         "pdf_access": recommendation.get("pdf_access") or assess_pdf_access(paper, now=parse_iso_datetime(timestamp)),
         "context": recommendation.get("context"),
         "summary": recommendation.get("summary"),
@@ -2132,6 +2192,40 @@ def build_literature_radar_recommendation_record(
         "import_result": import_result,
         "recommendation": recommendation,
         "created_at": timestamp,
+    }
+
+
+def normalize_literature_radar_review_status(status: str) -> str:
+    selected = str(status or "").strip().lower()
+    if selected not in RADAR_REVIEW_STATUSES:
+        raise ValueError("Unsupported radar review status.")
+    return selected
+
+
+def apply_literature_radar_review(
+    record: dict[str, Any],
+    *,
+    status: str,
+    actor: str,
+    reason: str,
+    timestamp: str,
+) -> None:
+    record["review_status"] = status
+    record["reviewed_by"] = str(actor or "team-member").strip() or "team-member"
+    record["reviewed_at"] = timestamp
+    record["review_reason"] = str(reason or "").strip()
+
+
+def literature_radar_review_record(record: dict[str, Any] | None) -> dict[str, Any]:
+    source = record or {}
+    status = str(source.get("review_status") or "unreviewed").strip().lower()
+    if status not in RADAR_REVIEW_STATUSES:
+        status = "unreviewed"
+    return {
+        "status": status,
+        "reviewed_by": source.get("reviewed_by") or "",
+        "reviewed_at": source.get("reviewed_at") or "",
+        "reason": source.get("review_reason") or "",
     }
 
 

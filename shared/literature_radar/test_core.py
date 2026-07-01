@@ -15,6 +15,7 @@ from shared.literature_radar import (
     build_recommendation_report,
     build_radar_history_brief,
     cache_open_access_pdf,
+    cache_recommendation_pdfs,
     create_radar_paper,
     default_radar_topic_profile,
     dblp_venue_profiles,
@@ -234,6 +235,53 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             self.assertFalse(pdf_access["downloaded"])
             self.assertEqual(pdf_access["download_error"], "response_is_not_pdf")
             self.assertFalse(list(Path(temp_dir).glob("*.pdf")))
+
+    def test_cache_open_access_pdf_records_fetch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00044",
+                title="Temporarily Unavailable PDF",
+                identifiers={"arxiv_id": "2601.00044"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00044"},
+            )
+
+            def failing_fetcher(_url: str) -> bytes:
+                raise TimeoutError("temporary timeout")
+
+            pdf_access = cache_open_access_pdf(paper, Path(temp_dir), fetcher=failing_fetcher)
+
+            self.assertTrue(pdf_access["can_download"])
+            self.assertTrue(pdf_access["download_attempted"])
+            self.assertFalse(pdf_access["downloaded"])
+            self.assertEqual(pdf_access["download_error"], "fetch_failed:TimeoutError")
+            self.assertIn("temporary timeout", pdf_access["download_error_detail"])
+
+    def test_cache_recommendation_pdfs_updates_recommendation_and_paper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00045",
+                title="Recommendation Cache Paper",
+                abstract="Memory safety for system security.",
+                identifiers={"arxiv_id": "2601.00045"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00045"},
+            )
+            recommendation = recommend_papers([paper], now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))[0]
+
+            cached = cache_recommendation_pdfs(
+                [recommendation],
+                Path(temp_dir),
+                fetcher=lambda _url: b"%PDF-1.7\nrecommendation cache",
+                now=datetime(2026, 7, 1, 12, 5, tzinfo=timezone.utc),
+            )
+
+            pdf_access = cached[0]["pdf_access"]
+            self.assertTrue(pdf_access["downloaded"])
+            self.assertEqual(pdf_access["downloaded_at"], "2026-07-01T12:05:00+00:00")
+            self.assertEqual(cached[0]["paper"]["local_pdf_path"], pdf_access["local_pdf_path"])
+            self.assertEqual(cached[0]["paper"]["pdf_access"], pdf_access)
+            self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
 
     def test_scores_and_reports_recommendations(self) -> None:
         paper = create_radar_paper(

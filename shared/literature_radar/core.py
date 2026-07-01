@@ -614,7 +614,17 @@ def cache_open_access_pdf(
             "download_error": "no_downloadable_pdf_url",
         }
 
-    content = fetcher(pdf_url)
+    try:
+        content = fetcher(pdf_url)
+    except Exception as error:
+        return {
+            **decision,
+            "pdf_url": pdf_url,
+            "download_attempted": True,
+            "downloaded": False,
+            "download_error": f"fetch_failed:{type(error).__name__}",
+            "download_error_detail": str(error),
+        }
     if len(content) > max_bytes:
         return {
             **decision,
@@ -648,6 +658,42 @@ def cache_open_access_pdf(
         "sha256": digest,
         "bytes": len(content),
     }
+
+
+def cache_recommendation_pdfs(
+    recommendations: list[dict[str, Any]],
+    output_dir: Path,
+    *,
+    fetcher: Callable[[str], bytes],
+    now: datetime | None = None,
+    max_bytes: int = 50 * 1024 * 1024,
+) -> list[dict[str, Any]]:
+    cached_recommendations = []
+    for recommendation in recommendations:
+        paper = dict(recommendation.get("paper") or {})
+        pdf_access = cache_open_access_pdf(
+            paper,
+            output_dir,
+            fetcher=fetcher,
+            pdf_access=(
+                recommendation.get("pdf_access")
+                if isinstance(recommendation.get("pdf_access"), dict)
+                else None
+            ),
+            now=now,
+            max_bytes=max_bytes,
+        )
+        if pdf_access.get("local_pdf_path"):
+            paper["local_pdf_path"] = pdf_access["local_pdf_path"]
+        paper["pdf_access"] = pdf_access
+        cached_recommendations.append(
+            {
+                **recommendation,
+                "paper": paper,
+                "pdf_access": pdf_access,
+            }
+        )
+    return cached_recommendations
 
 
 def downloadable_pdf_url(paper: dict[str, Any], pdf_access: dict[str, Any]) -> str:

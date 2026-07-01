@@ -103,6 +103,15 @@ fi
 if [[ -n "${PERSONAL_RADAR_SUMMARY_LIMIT:-}" ]]; then
   ARGS+=("--summary-limit" "$PERSONAL_RADAR_SUMMARY_LIMIT")
 fi
+if [[ "${PERSONAL_RADAR_CACHE_PDFS:-0}" == "1" ]]; then
+  ARGS+=("--cache-pdfs")
+fi
+if [[ -n "${PERSONAL_RADAR_PDF_CACHE_DIR:-}" ]]; then
+  ARGS+=("--pdf-cache-dir" "$PERSONAL_RADAR_PDF_CACHE_DIR")
+fi
+if [[ -n "${PERSONAL_RADAR_PDF_CACHE_MAX_BYTES:-}" ]]; then
+  ARGS+=("--pdf-cache-max-bytes" "$PERSONAL_RADAR_PDF_CACHE_MAX_BYTES")
+fi
 if [[ "${PERSONAL_RADAR_NO_REPORT:-0}" == "1" ]]; then
   ARGS+=("--no-report")
 fi

@@ -120,6 +120,15 @@ fi
 if [[ -n "${RADAR_SUMMARY_LIMIT:-}" ]]; then
   ARGS+=("--summary-limit" "$RADAR_SUMMARY_LIMIT")
 fi
+if [[ "${RADAR_CACHE_PDFS:-0}" == "1" ]]; then
+  ARGS+=("--cache-pdfs")
+fi
+if [[ -n "${RADAR_PDF_CACHE_DIR:-}" ]]; then
+  ARGS+=("--pdf-cache-dir" "$RADAR_PDF_CACHE_DIR")
+fi
+if [[ -n "${RADAR_PDF_CACHE_MAX_BYTES:-}" ]]; then
+  ARGS+=("--pdf-cache-max-bytes" "$RADAR_PDF_CACHE_MAX_BYTES")
+fi
 if [[ "${RADAR_IMPORT_RESULTS:-0}" == "1" ]]; then
   ARGS+=("--import-results")
   ARGS+=("--import-limit" "${RADAR_IMPORT_LIMIT:-5}")

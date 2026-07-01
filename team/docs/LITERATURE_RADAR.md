@@ -49,8 +49,10 @@ The page is review-first:
 3. the Radar Papers page exposes deduplicated collected-paper history, including
    papers that have not been imported, and can promote a stored paper into the
    Team library;
-4. a team member clicks `Add to Library` only for papers worth tracking;
-5. imported papers appear in Latest Papers with the normal tag, relevance,
+4. a team member marks Radar papers as `watch` or `dismissed` without importing
+   them into the main library;
+5. a team member clicks `Add to Library` only for papers worth tracking;
+6. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls.
 
 This keeps automatic collection broad without filling the team library with
@@ -68,11 +70,12 @@ graph expansion. OpenReview invitation IDs, OpenReview venue profiles, Semantic
 Scholar author IDs, and DBLP venue profiles automatically enable their matching
 collectors for that run.
 
-The form can save source choices, limits, summary provider, tracked authors,
-seed papers, and venue profiles as Team defaults. Saved defaults live in the
-existing `team_settings` table under `literature_radar_defaults`, so the team
-can configure daily-use radar settings once and reuse them for later ad hoc
-runs.
+The form can save source choices, limits, summary provider, conference year,
+USENIX Security cycles, OpenReview accepted-only behavior, PDF cache settings,
+tracked authors, seed papers, and venue profiles as Team defaults. Saved
+defaults live in the existing `team_settings` table under
+`literature_radar_defaults`, so the team can configure daily-use radar settings
+once and reuse them for later ad hoc or scheduled runs.
 
 ## CLI Runner
 
@@ -122,7 +125,8 @@ Useful options:
   invitation ID.
 - `--openreview-venue-profile`: OpenReview accepted-paper venue profile or
   group for the `openreview_venues` source; repeatable. Initial selectors are
-  `iclr` and `ai_ml`.
+  `iclr`, `neurips`, `neurips_datasets`, `neurips_creative_ai`, `icml`,
+  `icml_position`, and `ai_ml`.
 - `--include-openreview-unaccepted`: include OpenReview submissions that are not
   marked accepted by the venue profile. By default, `openreview_venues` keeps
   accepted papers only.
@@ -151,7 +155,13 @@ metadata. Examples:
 ```bash
 python team/research_cli.py radar-run --source openreview --openreview-invitation ICLR.cc/2026/Conference/-/Submission
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile neurips --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile icml --conference-year 2026
 ```
+
+Workshop IDs vary by event and topic, so use `--openreview-invitation` for
+specific AI safety, alignment, interpretability, adversarial ML, or workshop
+track pages until a stable preset is added.
 
 Example seed-paper expansion:
 
@@ -225,6 +235,10 @@ Use `radar-papers` to inspect the deduplicated paper history, including papers
 that were collected and stored before any import decision. The same history is
 available in the browser at `/radar/papers`, where a team member can add a
 stored paper to the main library.
+Radar review feedback is also stored on the deduplicated paper history. Mark a
+paper as `watch` to keep it visible as a known candidate, or `dismissed` to stop
+future Team Radar runs from recommending it again while still preserving the
+metadata trail.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, and source errors are shown in
@@ -248,6 +262,21 @@ team/scripts/build_literature_radar_brief.sh
 
 The script writes a Markdown report and matching JSON result into `team/logs/`.
 The brief script writes a stored-run roll-up without collecting again.
+
+PDF caching is disabled by default. To cache only legal open-access PDFs for
+ranked recommendations, use:
+
+```bash
+python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-dir team/data/literature-radar-pdfs
+RADAR_CACHE_PDFS=1 RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs team/scripts/run_literature_radar.sh
+```
+
+The cache path is recorded in each recommendation and deduplicated paper
+history row. If a PDF is paywalled, not clearly open access, too large, not a
+PDF response, or temporarily unavailable, the run records the reason instead of
+downloading or redistributing it.
+The same cache option can be saved from `/radar`; scheduled Team runs use those
+saved defaults when `RADAR_USE_SAVED_DEFAULTS=1`.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
@@ -328,7 +357,9 @@ Current implemented shared collectors:
 Recommended next MVP order:
 
 1. DBLP venue/cross-source conference enrichment;
-2. more OpenReview venue presets beyond the initial ICLR profile;
+2. more OpenReview workshop presets for recurring safety, alignment,
+   interpretability, and adversarial ML workshops when their invitation IDs are
+   stable enough to encode;
 3. IEEE S&P, ACM CCS, RAID, ACSAC, OSDI, SOSP, EuroSys, ATC, ASPLOS, PLDI,
    OOPSLA, POPL, ECOOP, ICSE, FSE, and ASE venue presets.
 

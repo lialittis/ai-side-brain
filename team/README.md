@@ -81,6 +81,8 @@ python team/research_cli.py radar-run --source arxiv --source dblp --source sema
 python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
 python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile neurips --conference-year 2026
+python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile icml --conference-year 2026
 python team/research_cli.py radar-run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source dblp_authors --dblp-author-pid DBLP_PERSON_PID
 python team/research_cli.py radar-run --source openalex_authors --openalex-author-id OPENALEX_AUTHOR_ID
@@ -88,6 +90,7 @@ python team/research_cli.py radar-run --source semantic_scholar_authors --semant
 python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
+python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-dir team/data/literature-radar-pdfs
 python team/research_cli.py radar-history
 python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
@@ -101,7 +104,7 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
-- Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
 - radar-imported library papers keep their radar provenance and PDF-access decision, so the main Latest Relevant Papers list shows whether a legal PDF is available and why;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
@@ -114,7 +117,8 @@ deduplicated collected-paper history and add stored papers to the library. Scan 
 recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
 paper relevance. The Radar form can save source choices, tracked authors, seed
-papers, venue profiles, and run limits as reusable Team defaults.
+papers, venue profiles, conference year, USENIX cycles, PDF cache settings, and
+run limits as reusable Team defaults.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

@@ -1036,7 +1036,10 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         )
 
         self.assertIn("iclr", [profile["id"] for profile in profiles])
-        self.assertEqual([profile["id"] for profile in expanded], ["iclr"])
+        self.assertEqual(
+            [profile["id"] for profile in expanded],
+            ["iclr", "neurips", "neurips_datasets", "neurips_creative_ai", "icml", "icml_position"],
+        )
         self.assertEqual(len(papers), 1)
         self.assertIn("ICLR.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
         paper = papers[0]
@@ -1050,6 +1053,39 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(source_record["openreview_venue_group"], "ai_ml")
         self.assertTrue(source_record["openreview_accepted"])
         self.assertEqual(source_record["openreview_acceptance_status"], "accepted")
+
+    def test_openreview_venue_profiles_include_neurips_and_icml_presets(self) -> None:
+        profiles = {profile["id"]: profile for profile in openreview_venue_profiles()}
+        self.assertEqual(
+            profiles["neurips"]["submission_invitation_templates"],
+            ["NeurIPS.cc/{year}/Conference/-/Submission"],
+        )
+        self.assertEqual(
+            profiles["icml"]["submission_invitation_templates"],
+            ["ICML.cc/{year}/Conference/-/Submission"],
+        )
+        self.assertEqual(
+            [profile["id"] for profile in expand_openreview_venue_profiles(["neurips", "icml"])],
+            ["neurips", "icml"],
+        )
+
+    def test_openreview_venue_collection_uses_selected_preset_invitation(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return OPENREVIEW_VENUE_FIXTURE.replace("ICLR.cc", "NeurIPS.cc").encode("utf-8")
+
+        collect_openreview_venue_submissions(
+            venue_profiles=["neurips"],
+            year=2026,
+            accepted_only=True,
+            max_results=20,
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(seen_urls), 1)
+        self.assertIn("NeurIPS.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
 
     def test_openreview_venue_collection_can_include_unaccepted_submissions(self) -> None:
         def fetcher(url: str) -> bytes:

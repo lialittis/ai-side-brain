@@ -171,6 +171,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar.add_argument("--crossref-mailto", help="optional email for Crossref polite-pool requests")
     radar.add_argument("--unpaywall-email", help="optional email for legal OA PDF enrichment via Unpaywall")
+    radar.add_argument(
+        "--cache-pdfs",
+        action="store_true",
+        help="cache legally downloadable PDFs for recommended papers only",
+    )
+    radar.add_argument("--pdf-cache-dir", type=Path, help="local directory for cached Literature Radar PDFs")
+    radar.add_argument("--pdf-cache-max-bytes", type=int, help="maximum bytes per cached PDF")
     radar.add_argument("--conference-year", type=int, help="accepted-paper conference year for venue sources")
     radar.add_argument(
         "--venue-profile",
@@ -449,6 +456,45 @@ def saved_radar_int(settings: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+def saved_radar_optional_int(settings: dict[str, Any], key: str) -> int | None:
+    value = settings.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def saved_radar_int_list(settings: dict[str, Any], key: str) -> list[int]:
+    values = saved_radar_list(settings, key)
+    selected = []
+    for value in values:
+        try:
+            parsed = int(value)
+        except ValueError:
+            continue
+        if parsed > 0 and parsed not in selected:
+            selected.append(parsed)
+    return selected
+
+
+def saved_radar_bool(settings: dict[str, Any], key: str, default: bool = False) -> bool:
+    if key not in settings:
+        return default
+    value = settings.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def saved_radar_path(settings: dict[str, Any], key: str) -> Path | None:
+    value = str(settings.get(key) or "").strip()
+    return Path(value) if value else None
+
+
 def saved_radar_summary_provider(settings: dict[str, Any]) -> str:
     provider = str(settings.get("summary_provider") or "local").strip().lower()
     return provider if provider in {"local", "openrouter"} else "local"
@@ -549,13 +595,20 @@ def main(argv: list[str] | None = None) -> int:
             openreview_venue_profiles=args.openreview_venue_profile
             or saved_radar_list(saved_defaults, "openreview_venue_profiles")
             or None,
-            openreview_accepted_only=not args.include_openreview_unaccepted,
+            openreview_accepted_only=not (
+                args.include_openreview_unaccepted
+                or saved_radar_bool(saved_defaults, "include_openreview_unaccepted")
+            ),
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
-            conference_year=args.conference_year,
+            cache_pdfs=args.cache_pdfs or saved_radar_bool(saved_defaults, "cache_pdfs"),
+            pdf_cache_dir=args.pdf_cache_dir or saved_radar_path(saved_defaults, "pdf_cache_dir"),
+            pdf_cache_max_bytes=args.pdf_cache_max_bytes
+            or saved_radar_int(saved_defaults, "pdf_cache_max_bytes", 50 * 1024 * 1024),
+            conference_year=args.conference_year or saved_radar_optional_int(saved_defaults, "conference_year"),
             dblp_author_pids=args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids") or None,
             dblp_venue_profiles=args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None,
-            usenix_security_cycles=args.usenix_cycle or None,
+            usenix_security_cycles=args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles") or None,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

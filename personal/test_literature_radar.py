@@ -14,6 +14,7 @@ from personal.literature_radar import (
     read_personal_radar_index,
     read_personal_radar_paper_history,
     read_personal_radar_topic_profile,
+    mark_personal_radar_paper_review,
     run_personal_literature_radar,
 )
 from scripts import personal_literature_radar
@@ -81,6 +82,45 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Summary: Memory safety and LLM security", report_path.read_text(encoding="utf-8"))
             self.assertEqual(arxiv.call_args.kwargs["query_terms"], ["memory safety"])
 
+    def test_run_personal_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00034",
+                title="Memory Safety Cached Personal Paper",
+                abstract="Memory safety and system security for low-level software.",
+                identifiers={"arxiv_id": "2601.00034"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00034"},
+            )
+            seen_urls = []
+
+            def fetcher(url: str) -> bytes:
+                seen_urls.append(url)
+                return b"%PDF-1.7\npersonal cache"
+
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    cache_pdfs=True,
+                    pdf_cache_dir=root / "pdf-cache",
+                    pdf_fetcher=fetcher,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            pdf_access = result["recommendations"][0]["pdf_access"]
+            self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00034.pdf"])
+            self.assertTrue(pdf_access["downloaded"])
+            self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
+            runs = read_personal_radar_index(root)
+            self.assertTrue(runs[0]["recommendations"][0]["pdf_access"]["downloaded"])
+            history = read_personal_radar_paper_history(root)
+            self.assertTrue(history[paper["dedupe_key"]]["pdf_access"]["downloaded"])
+            self.assertEqual(history[paper["dedupe_key"]]["pdf_access"]["local_pdf_path"], pdf_access["local_pdf_path"])
+
     def test_run_personal_literature_radar_tracks_seen_before_paper_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -118,6 +158,52 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(history_record["seen_count"], 2)
             self.assertEqual(history_record["latest_recommendation"]["novelty"]["seen_count_before_run"], 1)
             self.assertIn("Novelty: seen before", second["report"])
+
+    def test_run_personal_literature_radar_skips_dismissed_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00037",
+                title="Dismissed Personal Memory Safety Paper",
+                abstract="Memory safety and system security for low-level software.",
+                identifiers={"arxiv_id": "2601.00037"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00037"},
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                first = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+            mark_personal_radar_paper_review(
+                root,
+                paper["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+                now=datetime(2026, 7, 1, 12, 5, tzinfo=timezone.utc),
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                second = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(first["recommendation_count"], 1)
+            self.assertEqual(second["collected_count"], 1)
+            self.assertEqual(second["recommendation_count"], 0)
+            history_record = read_personal_radar_paper_history(root)[paper["dedupe_key"]]
+            self.assertEqual(history_record["review_status"], "dismissed")
+            self.assertEqual(history_record["reviewed_by"], "alice")
+            self.assertEqual(history_record["seen_count"], 2)
+            runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["recommendation_count"], 0)
+            self.assertEqual(runs[1]["recommendations"][0]["review"]["status"], "unreviewed")
 
     def test_run_personal_literature_radar_records_partial_source_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -331,6 +417,29 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             papers = json.loads(papers_stdout.getvalue())
             self.assertEqual(papers[0]["title"], "Agentic Security for Memory Safety")
             self.assertEqual(papers[0]["seen_count"], 1)
+
+            review_stdout = io.StringIO()
+            with contextlib.redirect_stdout(review_stdout):
+                review_code = personal_literature_radar.main(
+                    [
+                        "review",
+                        papers[0]["dedupe_key"],
+                        "--root-path",
+                        str(root),
+                        "--status",
+                        "watch",
+                        "--actor",
+                        "alice",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(review_code, 0)
+            reviewed = json.loads(review_stdout.getvalue())
+            self.assertEqual(reviewed["review_status"], "watch")
+            self.assertEqual(reviewed["reviewed_by"], "alice")
+            updated_history = read_personal_radar_paper_history(root)
+            self.assertEqual(updated_history[papers[0]["dedupe_key"]]["review_status"], "watch")
 
             brief_stdout = io.StringIO()
             with contextlib.redirect_stdout(brief_stdout):
@@ -672,6 +781,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "openrouter",
                         "--summary-limit",
                         "1",
+                        "--cache-pdfs",
+                        "--pdf-cache-dir",
+                        "memory/06_Logs/custom-pdf-cache",
+                        "--pdf-cache-max-bytes",
+                        "12345",
                         "--json",
                     ]
                 )
@@ -690,6 +804,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertTrue(runner.call_args.kwargs["summarize"])
         self.assertEqual(runner.call_args.kwargs["summary_provider"], "openrouter")
         self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
+        self.assertTrue(runner.call_args.kwargs["cache_pdfs"])
+        self.assertEqual(runner.call_args.kwargs["pdf_cache_dir"], Path("memory/06_Logs/custom-pdf-cache"))
+        self.assertEqual(runner.call_args.kwargs["pdf_cache_max_bytes"], 12345)
         self.assertEqual(json.loads(stdout.getvalue())["run_id"], "personalradar_example")
 
 
