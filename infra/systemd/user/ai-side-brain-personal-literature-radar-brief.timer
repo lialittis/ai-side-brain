@@ -1,0 +1,11 @@
+[Unit]
+Description=Build AI Side-Brain Personal Literature Radar brief weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 08:45:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=ai-side-brain-personal-literature-radar-brief.service
+
+[Install]
+WantedBy=timers.target

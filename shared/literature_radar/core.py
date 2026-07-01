@@ -7,7 +7,9 @@ Personal or Team Side-Brain adapters decide where accepted candidates live.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+from pathlib import Path
 import re
 from typing import Any, Callable
 
@@ -583,6 +585,97 @@ def pdf_access_decision(
     }
 
 
+def cache_open_access_pdf(
+    paper: dict[str, Any],
+    output_dir: Path,
+    *,
+    fetcher: Callable[[str], bytes],
+    pdf_access: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    max_bytes: int = 50 * 1024 * 1024,
+) -> dict[str, Any]:
+    decision = dict(pdf_access or assess_pdf_access(paper, now=now))
+    if decision.get("downloaded") and decision.get("local_pdf_path"):
+        return decision
+    if not decision.get("can_download"):
+        return {
+            **decision,
+            "download_attempted": False,
+            "downloaded": False,
+            "download_error": "",
+        }
+
+    pdf_url = downloadable_pdf_url(paper, decision)
+    if not pdf_url:
+        return {
+            **decision,
+            "download_attempted": False,
+            "downloaded": False,
+            "download_error": "no_downloadable_pdf_url",
+        }
+
+    content = fetcher(pdf_url)
+    if len(content) > max_bytes:
+        return {
+            **decision,
+            "pdf_url": pdf_url,
+            "download_attempted": True,
+            "downloaded": False,
+            "download_error": "pdf_exceeds_max_bytes",
+            "max_bytes": max_bytes,
+        }
+    if not looks_like_pdf(content):
+        return {
+            **decision,
+            "pdf_url": pdf_url,
+            "download_attempted": True,
+            "downloaded": False,
+            "download_error": "response_is_not_pdf",
+        }
+
+    digest = hashlib.sha256(content).hexdigest()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / radar_pdf_cache_filename(paper, digest=digest)
+    path.write_bytes(content)
+    return {
+        **decision,
+        "pdf_url": pdf_url,
+        "local_pdf_path": str(path),
+        "download_attempted": True,
+        "downloaded": True,
+        "download_error": "",
+        "downloaded_at": iso_timestamp(now or datetime.now(timezone.utc)),
+        "sha256": digest,
+        "bytes": len(content),
+    }
+
+
+def downloadable_pdf_url(paper: dict[str, Any], pdf_access: dict[str, Any]) -> str:
+    url = str(pdf_access.get("pdf_url") or "").strip()
+    if url:
+        return url
+    identifiers = paper.get("identifiers") or {}
+    arxiv_id = str(identifiers.get("arxiv_id") or "").strip()
+    if arxiv_id:
+        return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+    links = paper.get("links") or {}
+    arxiv_url = str(links.get("arxiv") or "").strip()
+    match = re.search(r"arxiv\.org/(?:abs|pdf)/([^/?#]+)", arxiv_url, flags=re.IGNORECASE)
+    if match:
+        return f"https://arxiv.org/pdf/{match.group(1).removesuffix('.pdf')}.pdf"
+    return ""
+
+
+def radar_pdf_cache_filename(paper: dict[str, Any], *, digest: str) -> str:
+    key = paper.get("dedupe_key") or dedupe_key(paper)
+    prefix = re.sub(r"[^a-z0-9]+", "-", str(key).lower()).strip("-")[:80] or "radar-paper"
+    return f"{prefix}-{digest[:12]}.pdf"
+
+
+def looks_like_pdf(content: bytes) -> bool:
+    return content.lstrip().startswith(b"%PDF-")
+
+
 def license_allows_redistribution(license_text: str) -> bool:
     if not license_text:
         return False
@@ -681,6 +774,7 @@ def recommend_papers(
     topic_profile: dict[str, Any] | None = None,
     scorer: RadarScorer | None = None,
     limit: int = 10,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     recommendations = []
     selected_scorer = scorer or (lambda paper: score_paper_against_profile(paper, topic_profile))
@@ -688,7 +782,7 @@ def recommend_papers(
         scoring = selected_scorer(paper)
         if scoring["label"] == "low_relevance":
             continue
-        pdf_access = assess_pdf_access(paper)
+        pdf_access = assess_pdf_access(paper, now=now)
         recommendations.append(
             {
                 "paper": paper,
@@ -1008,6 +1102,7 @@ def build_recommendation_report(
                 f"- Why: {recommendation['why_relevant']}",
                 f"- Context: {context_report_text(recommendation.get('context') or {})}",
                 f"- Action: {recommendation['recommended_action']}",
+                f"- PDF policy: {pdf_access_report_text(recommendation.get('pdf_access') or {})}",
                 f"- Link: {(paper.get('links') or {}).get('landing') or (paper.get('links') or {}).get('pdf') or ''}",
             ]
         )
@@ -1021,6 +1116,230 @@ def build_recommendation_report(
             )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_radar_history_brief(
+    run_records: list[dict[str, Any]],
+    *,
+    title: str = "Literature Radar Brief",
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+    recommendation_limit: int = 20,
+) -> str:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    bundles = [
+        bundle
+        for record in run_records
+        if (bundle := normalize_radar_brief_bundle(record))
+        and radar_brief_run_time(bundle["run"]) is not None
+        and (cutoff is None or radar_brief_run_time(bundle["run"]) >= cutoff)
+    ]
+    bundles.sort(key=lambda bundle: str(bundle["run"].get("started_at") or ""), reverse=True)
+    lines = [f"# {title}", "", f"Generated: {iso_timestamp(selected_now)}"]
+    if selected_days:
+        lines.append(f"Window: last {selected_days} day{'s' if selected_days != 1 else ''}")
+    lines.append("")
+    if not bundles:
+        lines.append("No Literature Radar runs were stored in this window.")
+        return "\n".join(lines).rstrip() + "\n"
+
+    status_counts = radar_brief_status_counts([bundle["run"] for bundle in bundles])
+    total_collected = sum(int((bundle["run"]).get("collected_count") or 0) for bundle in bundles)
+    total_recommended = sum(int((bundle["run"]).get("recommendation_count") or 0) for bundle in bundles)
+    total_imported = sum(int((bundle["run"]).get("imported_count") or 0) for bundle in bundles)
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Runs: {len(bundles)} ({format_status_counts(status_counts)})",
+            f"- Collected candidates: {total_collected}",
+            f"- Recommendations: {total_recommended}",
+            f"- Imported to library: {total_imported}",
+            "",
+        ]
+    )
+
+    source_lines = radar_brief_source_stat_lines([bundle["run"] for bundle in bundles])
+    if source_lines:
+        lines.extend(["## Source Stats", "", *source_lines, ""])
+    error_lines = radar_brief_source_error_lines([bundle["run"] for bundle in bundles])
+    if error_lines:
+        lines.extend(["## Source Errors", "", *error_lines, ""])
+
+    recommendations = radar_brief_top_recommendations(bundles, limit=recommendation_limit)
+    if not recommendations:
+        lines.extend(["## Top Recommendations", "", "No recommendations were stored in this window.", ""])
+        return "\n".join(lines).rstrip() + "\n"
+    lines.extend(["## Top Recommendations", ""])
+    for index, entry in enumerate(recommendations, start=1):
+        recommendation = entry["recommendation"]
+        run = entry["run"]
+        title_text = radar_brief_recommendation_title(recommendation)
+        lines.extend(
+            [
+                f"### {index}. {title_text}",
+                "",
+                f"- Relevance: {radar_brief_recommendation_label(recommendation)} "
+                f"({radar_brief_recommendation_score(recommendation)}/100)",
+                f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
+                f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
+                f"- Context: {context_report_text(radar_brief_recommendation_context(recommendation))}",
+                f"- PDF policy: {pdf_access_report_text(radar_brief_recommendation_pdf_access(recommendation))}",
+                f"- Link: {radar_brief_recommendation_link(recommendation)}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def normalize_radar_brief_bundle(record: dict[str, Any]) -> dict[str, Any] | None:
+    run = record.get("run") if isinstance(record.get("run"), dict) else record
+    if not isinstance(run, dict):
+        return None
+    recommendations = record.get("recommendations")
+    if recommendations is None:
+        recommendations = run.get("recommendations") or []
+    return {
+        "run": run,
+        "recommendations": list(recommendations or []),
+    }
+
+
+def radar_brief_run_time(run: dict[str, Any]) -> datetime | None:
+    for key in ("started_at", "completed_at"):
+        timestamp = parse_radar_brief_timestamp(str(run.get(key) or ""))
+        if timestamp:
+            return timestamp
+    return None
+
+
+def parse_radar_brief_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp
+
+
+def radar_brief_status_counts(runs: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for run in runs:
+        status = str(run.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def format_status_counts(counts: dict[str, int]) -> str:
+    return ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+
+
+def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:
+    totals: dict[str, dict[str, int]] = {}
+    for run in runs:
+        for stat in run.get("source_stats") or []:
+            source_id = str(stat.get("source_id") or "source")
+            record = totals.setdefault(source_id, {"collected": 0, "failed": 0, "runs": 0})
+            record["collected"] += int(stat.get("collected_count") or 0)
+            record["runs"] += 1
+            if stat.get("status") == "failed":
+                record["failed"] += 1
+    return [
+        f"- `{source_id}`: {record['collected']} candidate(s), {record['runs']} run(s), "
+        f"{record['failed']} failure(s)"
+        for source_id, record in sorted(totals.items())
+    ]
+
+
+def radar_brief_source_error_lines(runs: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    for run in runs:
+        for error in run.get("source_errors") or []:
+            lines.append(
+                f"- {run.get('started_at') or 'unknown'} `{error.get('source_id') or 'source'}`: "
+                f"{error.get('error_type') or 'Error'}: {error.get('error') or ''}"
+            )
+    return lines
+
+
+def radar_brief_top_recommendations(
+    bundles: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    entries = [
+        {"run": bundle["run"], "recommendation": recommendation}
+        for bundle in bundles
+        for recommendation in bundle["recommendations"]
+    ]
+    entries.sort(
+        key=lambda entry: (
+            radar_brief_recommendation_score(entry["recommendation"]),
+            str(entry["run"].get("started_at") or ""),
+        ),
+        reverse=True,
+    )
+    return entries[: max(0, int(limit))]
+
+
+def radar_brief_recommendation_title(recommendation: dict[str, Any]) -> str:
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    return normalize_spaces(
+        recommendation.get("title")
+        or paper.get("title")
+        or nested_paper.get("title")
+        or recommendation.get("dedupe_key")
+        or "Untitled paper"
+    )
+
+
+def radar_brief_recommendation_score(recommendation: dict[str, Any]) -> int:
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    score = recommendation.get("score", scoring.get("score", 0))
+    try:
+        return int(float(score or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def radar_brief_recommendation_label(recommendation: dict[str, Any]) -> str:
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    return str(recommendation.get("label") or scoring.get("label") or "needs_review")
+
+
+def radar_brief_recommendation_novelty(recommendation: dict[str, Any]) -> dict[str, Any]:
+    return recommendation.get("novelty") if isinstance(recommendation.get("novelty"), dict) else {}
+
+
+def radar_brief_recommendation_context(recommendation: dict[str, Any]) -> dict[str, Any]:
+    return recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+
+
+def radar_brief_recommendation_pdf_access(recommendation: dict[str, Any]) -> dict[str, Any]:
+    return recommendation.get("pdf_access") if isinstance(recommendation.get("pdf_access"), dict) else {}
+
+
+def radar_brief_recommendation_link(recommendation: dict[str, Any]) -> str:
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
+    nested_links = nested_paper.get("links") if isinstance(nested_paper.get("links"), dict) else {}
+    return str(
+        recommendation.get("link")
+        or links.get("landing")
+        or links.get("pdf")
+        or nested_links.get("landing")
+        or nested_links.get("pdf")
+        or ""
+    )
 
 
 def novelty_report_text(novelty: dict[str, Any]) -> str:
@@ -1037,6 +1356,24 @@ def context_report_text(context: dict[str, Any]) -> str:
     if not context:
         return "not linked"
     return context.get("relationship_summary") or "not linked"
+
+
+def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:
+    if not pdf_access:
+        return "not recorded"
+    allowed = "download allowed" if pdf_access.get("can_download") else "metadata/link only"
+    parts = [
+        allowed,
+        f"reason={pdf_access.get('reason') or 'unknown'}",
+        f"oa={pdf_access.get('oa_status') or 'unknown'}",
+        f"license={pdf_access.get('license') or 'unknown'}",
+        f"accessed={pdf_access.get('access_date') or 'unknown'}",
+    ]
+    if pdf_access.get("local_pdf_path"):
+        parts.append(f"local_pdf={pdf_access.get('local_pdf_path')}")
+    if pdf_access.get("source_url"):
+        parts.append(f"source={pdf_access.get('source_url')}")
+    return "; ".join(parts)
 
 
 def normalize_spaces(value: str) -> str:

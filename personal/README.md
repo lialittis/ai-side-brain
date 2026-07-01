@@ -49,6 +49,7 @@ python scripts/personal_literature_radar.py run --source semantic_scholar_author
 python scripts/personal_literature_radar.py run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py papers
+python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Logs/personal-literature-radar-weekly.md
 ```
 
 For periodic personal reports, run the one-shot script from cron or a systemd
@@ -56,6 +57,7 @@ timer:
 
 ```bash
 scripts/run_personal_literature_radar.sh
+scripts/build_personal_literature_radar_brief.sh
 ```
 
 User-level systemd timer templates live under `infra/systemd/user/`; see
@@ -63,13 +65,17 @@ User-level systemd timer templates live under `infra/systemd/user/`; see
 
 The script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
-set. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
+set. The brief script writes a Markdown and JSON roll-up over stored runs
+without collecting again. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
 `PERSONAL_RADAR_DBLP_AUTHOR_PIDS`, `PERSONAL_RADAR_OPENALEX_AUTHOR_IDS`,
 `PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_SEED_PAPER_IDS`, and
-`PERSONAL_RADAR_AUTHOR_IDS`. OpenRouter summaries require `OPENROUTER_API_KEY`.
+`PERSONAL_RADAR_AUTHOR_IDS`. Brief variables include
+`PERSONAL_RADAR_BRIEF_DAYS`, `PERSONAL_RADAR_BRIEF_RECOMMENDATION_LIMIT`,
+`PERSONAL_RADAR_BRIEF_RUN_LIMIT`, and `PERSONAL_RADAR_BRIEF_OUTPUT_DIR`.
+OpenRouter summaries require `OPENROUTER_API_KEY`.
 
 Semantic Scholar runs can use recommendations, references, citations, or tracked
 authors to expand around papers and researchers you already care about. Personal
@@ -78,9 +84,13 @@ move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
 `indexes/literature-radar-papers.json` history.
 That paper history stores the PDF-access decision metadata for each deduplicated
-paper without downloading or redistributing PDFs.
+paper without downloading or redistributing PDFs. Recommendation reports also
+include the source URL, access timestamp, OA status, license, local PDF path when
+present, and the reason a PDF can or cannot be downloaded.
 If one source fails during a multi-source run, Personal Radar records the run as
-`partial`, keeps recommendations from successful sources, and appends source
-errors to the report.
+`partial`, keeps recommendations from successful sources, records per-source
+candidate counts, and appends source errors to the report.
+Use `brief` to aggregate stored daily runs into a weekly or daily review without
+collecting again.
 
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

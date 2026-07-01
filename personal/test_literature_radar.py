@@ -143,13 +143,28 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(result["run"]["status"], "partial")
             self.assertEqual(result["collected_count"], 1)
             self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(
+                result["recommendations"][0]["pdf_access"]["access_date"],
+                "2026-07-01T12:00:00+00:00",
+            )
             self.assertEqual(result["source_errors"][0]["source_id"], "dblp")
             self.assertEqual(result["source_errors"][0]["error_type"], "RuntimeError")
             self.assertIn("DBLP unavailable", result["source_errors"][0]["error"])
+            self.assertEqual(
+                [(stat["source_id"], stat["status"], stat["collected_count"]) for stat in result["source_stats"]],
+                [("arxiv", "succeeded", 1), ("dblp", "failed", 0)],
+            )
+            self.assertIn("## Source Stats", result["report"])
+            self.assertIn("`arxiv`: 1 candidate(s) (succeeded)", result["report"])
+            self.assertIn("`dblp`: 0 candidate(s) (failed)", result["report"])
+            self.assertIn("PDF policy: download allowed", result["report"])
+            self.assertIn("accessed=2026-07-01T12:00:00+00:00", result["report"])
             self.assertIn("## Source Errors", result["report"])
             runs = read_personal_radar_index(root)
             self.assertEqual(runs[0]["status"], "partial")
             self.assertEqual(runs[0]["source_errors"][0]["source_id"], "dblp")
+            self.assertEqual(runs[0]["source_stats"][0]["source_id"], "arxiv")
+            self.assertEqual(runs[0]["source_stats"][1]["status"], "failed")
 
     def test_run_personal_literature_radar_marks_seen_before_and_links_prior_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -281,6 +296,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
     def test_personal_literature_radar_cli_reads_history_from_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            brief_path = root / "brief.md"
             paper = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.00007",
@@ -315,6 +331,28 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             papers = json.loads(papers_stdout.getvalue())
             self.assertEqual(papers[0]["title"], "Agentic Security for Memory Safety")
             self.assertEqual(papers[0]["seen_count"], 1)
+
+            brief_stdout = io.StringIO()
+            with contextlib.redirect_stdout(brief_stdout):
+                brief_code = personal_literature_radar.main(
+                    [
+                        "brief",
+                        "--root-path",
+                        str(root),
+                        "--days",
+                        "7",
+                        "--output",
+                        str(brief_path),
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(brief_code, 0)
+            brief = json.loads(brief_stdout.getvalue())
+            self.assertEqual(brief["run_count"], 1)
+            self.assertIn("Personal Literature Radar Brief", brief["brief"])
+            self.assertIn("Agentic Security for Memory Safety", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
 
     def test_personal_literature_radar_profile_init_writes_default_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

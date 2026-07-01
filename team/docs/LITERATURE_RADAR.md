@@ -36,6 +36,8 @@ The web UI exposes stored radar runs at:
 
 ```text
 http://127.0.0.1:8790/radar
+http://127.0.0.1:8790/radar/brief?days=7
+http://127.0.0.1:8790/radar/papers
 ```
 
 The page is review-first:
@@ -44,8 +46,11 @@ The page is review-first:
 2. the Radar page lists recent runs, source/query context, ranked
    recommendations, new/seen-before labels, summaries when available, relevance
    reasons, source tags, legal PDF/OA status, and paper links;
-3. a team member clicks `Add to Library` only for papers worth tracking;
-4. imported papers appear in Latest Papers with the normal tag, relevance,
+3. the Radar Papers page exposes deduplicated collected-paper history, including
+   papers that have not been imported, and can promote a stored paper into the
+   Team library;
+4. a team member clicks `Add to Library` only for papers worth tracking;
+5. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls.
 
 This keeps automatic collection broad without filling the team library with
@@ -179,23 +184,27 @@ python team/research_cli.py radar-run --source openreview_venues --openreview-ve
 ```
 
 Without `--import-results`, the runner only collects metadata, deduplicates,
-scores, and writes/reports recommendations. This is the safer default for early
-daily or weekly scheduled runs.
+scores, and writes/reports recommendations. Each report item includes the PDF
+policy decision with source URL, access timestamp, OA status, license, local PDF
+path when present, and the reason a PDF can or cannot be downloaded. This is the
+safer default for early daily or weekly scheduled runs.
 
 Stored runs can be inspected later:
 
 ```bash
 python team/research_cli.py radar-history
+python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
+python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
 ```
 
 ## Stored Run History
 
 Every `radar-run` creates durable Team-side history in SQLite:
 
-- `literature_radar_runs` stores source choices, query terms, status, counts,
-  errors, and the Markdown report.
+- `literature_radar_runs` stores source choices, query terms, status, total
+  counts, per-source collection stats, errors, and the Markdown report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
   and latest-seen timestamps, source IDs, PDF-access decision metadata, and any
   imported Team item ID.
@@ -212,9 +221,20 @@ paper.
 This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
 imported, and show whether a candidate is new this run or has appeared before.
+Use `radar-papers` to inspect the deduplicated paper history, including papers
+that were collected and stored before any import decision. The same history is
+available in the browser at `/radar/papers`, where a team member can add a
+stored paper to the main library.
 If one source fails during a multi-source run, the run is stored as `partial`;
-successful source results are still ranked and reported, and source errors are
-shown in the Radar page and report.
+successful source results are still ranked and reported. Per-source collection
+stats show which sources contributed candidates, and source errors are shown in
+the Radar page and report.
+
+Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
+without collecting again. It aggregates run status, per-source counts and
+failures, and the top stored recommendations with context and PDF policy.
+The same stored-run brief is available from the Radar page through `Weekly
+Brief`, so team members can review it without using the CLI.
 
 ## Scheduling
 
@@ -223,9 +243,11 @@ timer:
 
 ```bash
 team/scripts/run_literature_radar.sh
+team/scripts/build_literature_radar_brief.sh
 ```
 
 The script writes a Markdown report and matching JSON result into `team/logs/`.
+The brief script writes a stored-run roll-up without collecting again.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
@@ -257,6 +279,11 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_AUTHOR_IDS`: space-separated Semantic Scholar author IDs for the
   `semantic_scholar_authors` source.
 - `RADAR_DB_PATH`, `RADAR_OUTPUT_DIR`.
+- `RADAR_BRIEF_DAYS`: brief history window; default `7`.
+- `RADAR_BRIEF_RECOMMENDATION_LIMIT`: maximum recommendations in the brief;
+  default `20`.
+- `RADAR_BRIEF_RUN_LIMIT`: maximum stored runs to inspect; default `50`.
+- `RADAR_BRIEF_OUTPUT_DIR`: brief output directory; default `team/logs`.
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`, `OPENALEX_MAILTO`,
   `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
 
@@ -270,6 +297,8 @@ User-level systemd timer templates are also available under
 `infra/systemd/user/`; see `infra/systemd/README.md`. The Team timer runs
 `team/scripts/run_literature_radar.sh` with `RADAR_USE_SAVED_DEFAULTS=1`, so it
 can reuse the source/author/seed defaults saved from the `/radar` page.
+The Team brief timer runs `team/scripts/build_literature_radar_brief.sh` weekly
+and reads stored runs only.
 
 ## Next Collector Work
 

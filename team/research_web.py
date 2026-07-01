@@ -23,10 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from shared.literature_radar import assess_pdf_access, build_radar_history_brief
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    build_team_radar_scorer,
     import_radar_recommendation,
     run_team_literature_radar,
 )
@@ -445,6 +447,29 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       min-height: 52px;
       resize: vertical;
     }}
+    .radar-brief-link {{
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }}
+    .radar-brief-form {{
+      display: flex;
+      gap: 10px;
+      align-items: end;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }}
+    .radar-brief-form label {{ min-width: 130px; }}
+    .radar-brief-output {{
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      margin: 0;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #1f2937;
+    }}
     .radar-number-row {{
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -688,6 +713,7 @@ def render_literature_radar_page(
       <section class="panel">
         <h2>Runs</h2>
         {render_radar_run_list(runs, selected_run)}
+        {render_radar_history_actions()}
         {render_radar_run_form(database)}
       </section>
       <section class="panel">
@@ -696,6 +722,80 @@ def render_literature_radar_page(
     </div>
     """
     return page("Literature Radar", body, active="radar")
+
+
+def render_literature_radar_brief_page(
+    database: TeamResearchDatabase,
+    *,
+    days: int = 7,
+    limit: int = 20,
+    run_limit: int = 50,
+) -> str:
+    runs = database.list_literature_radar_runs(limit=run_limit)
+    run_bundles = [
+        {
+            "run": run,
+            "recommendations": database.list_literature_radar_recommendations(run["id"]),
+        }
+        for run in runs
+    ]
+    brief = build_radar_history_brief(
+        run_bundles,
+        title="Team Literature Radar Brief",
+        days=days,
+        recommendation_limit=limit,
+    )
+    body = f"""
+    {render_topline("Radar Brief", "Weekly or daily roll-up from stored Literature Radar runs.", "/radar", "Radar")}
+    <section class="panel">
+      {render_radar_brief_form(days=days, limit=limit)}
+      <pre class="radar-brief-output">{html_escape(brief)}</pre>
+    </section>
+    """
+    return page("Radar Brief", body, active="radar")
+
+
+def render_literature_radar_papers_page(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 50,
+    notice: str = "",
+) -> str:
+    papers = database.list_literature_radar_papers(limit=limit)
+    body = f"""
+    {render_topline("Radar Papers", "Deduplicated paper history from stored Literature Radar runs.", "/radar", "Radar")}
+    {render_notice(notice)}
+    <section class="panel">
+      {render_radar_papers_form(limit=limit)}
+      {render_radar_paper_history(papers)}
+    </section>
+    """
+    return page("Radar Papers", body, active="radar")
+
+
+def render_radar_history_actions() -> str:
+    return """
+    <div class="radar-brief-link">
+      <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
+      <a class="button" href="/radar/papers?limit=50">Paper History</a>
+    </div>
+    """
+
+
+def render_radar_brief_form(*, days: int, limit: int) -> str:
+    return f"""
+    <form class="radar-brief-form" method="get" action="/radar/brief">
+      <label>
+        <span class="muted">Days</span>
+        <input type="number" name="days" min="1" max="365" value="{days}">
+      </label>
+      <label>
+        <span class="muted">Recommendations</span>
+        <input type="number" name="limit" min="1" max="100" value="{limit}">
+      </label>
+      <button class="button primary" type="submit">Build Brief</button>
+    </form>
+    """
 
 
 def render_radar_run_form(database: TeamResearchDatabase) -> str:
@@ -761,6 +861,69 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
         <span>Save as defaults</span>
       </label>
       <button class="button primary" type="submit">Run Radar</button>
+    </form>
+    """
+
+
+def render_radar_papers_form(*, limit: int) -> str:
+    return f"""
+    <form class="radar-brief-form" method="get" action="/radar/papers">
+      <label>
+        <span class="muted">Papers</span>
+        <input type="number" name="limit" min="1" max="500" value="{limit}">
+      </label>
+      <button class="button primary" type="submit">Show History</button>
+    </form>
+    """
+
+
+def render_radar_paper_history(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return '<div class="empty">No Literature Radar papers have been stored yet.</div>'
+    return "\n".join(render_radar_paper_history_item(record) for record in records)
+
+
+def render_radar_paper_history_item(record: dict[str, Any]) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    source_ids = record.get("source_ids") or []
+    source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids)
+    imported_item_id = str(record.get("imported_item_id") or "")
+    imported = (
+        f'<span class="pill good">Imported: {html_escape(imported_item_id)}</span>'
+        if imported_item_id
+        else '<span class="pill">Not imported</span>'
+    )
+    links = render_radar_links(paper)
+    import_control = render_radar_paper_import_control(record)
+    return f"""
+    <article class="paper">
+      <div>
+        <div class="paper-title">{html_escape(record.get("title") or record.get("dedupe_key") or "Untitled paper")}</div>
+        <div class="meta">
+          Seen {int(record.get("seen_count") or 0)} time{'s' if int(record.get("seen_count") or 0) != 1 else ''}
+          · first {html_escape(display_radar_datetime(str(record.get("first_seen_at") or "")) or "unknown")}
+          · latest {html_escape(display_radar_datetime(str(record.get("latest_seen_at") or "")) or "unknown")}
+        </div>
+        <div class="meta">{html_escape(record.get("dedupe_key") or "")}</div>
+        <div class="tags">
+          {source_tags}
+          {imported}
+          {render_pdf_access_pill(record.get("pdf_access") or {})}
+        </div>
+        <div class="radar-links">{links}{import_control}</div>
+      </div>
+    </article>
+    """
+
+
+def render_radar_paper_import_control(record: dict[str, Any]) -> str:
+    imported_item_id = str(record.get("imported_item_id") or "")
+    if imported_item_id:
+        return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
+    return f"""
+    <form class="inline-form" method="post" action="/radar/papers/import">
+      <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
+      <button class="mini-button primary" type="submit">Add to Library</button>
     </form>
     """
 
@@ -880,6 +1043,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     </div>
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
+    {render_radar_source_stats(run)}
     {render_radar_error(run)}
     {render_radar_source_errors(run)}
     {render_radar_recommendations(recommendations)}
@@ -910,6 +1074,27 @@ def render_radar_source_errors(run: dict[str, Any]) -> str:
         for error in source_errors
     )
     return f'<div class="notice"><strong>Source errors</strong><ul>{items}</ul></div>'
+
+
+def render_radar_source_stats(run: dict[str, Any]) -> str:
+    source_stats = run.get("source_stats") or []
+    if not source_stats:
+        return ""
+    chips = "".join(render_radar_source_stat(stat) for stat in source_stats)
+    return f'<div class="tags"><span class="muted">Source stats:</span> {chips}</div>'
+
+
+def render_radar_source_stat(stat: dict[str, Any]) -> str:
+    source_id = str(stat.get("source_id") or "source")
+    status = str(stat.get("status") or "unknown")
+    collected_count = int(stat.get("collected_count") or 0)
+    title = ""
+    if status == "failed":
+        error = str(stat.get("error") or "").strip()
+        error_type = str(stat.get("error_type") or "Error").strip()
+        title = f' title="{html_escape(error_type + (": " + error if error else ""))}"'
+    class_name = "tag warn" if status == "failed" else "tag"
+    return f'<span class="{class_name}"{title}>{html_escape(source_id)}: {collected_count}</span>'
 
 
 def render_radar_terms(label: str, terms: list[str]) -> str:
@@ -1742,6 +1927,34 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
     return str(import_result["item_id"])
 
 
+def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    paper_record = database.get_literature_radar_paper(dedupe_key)
+    if paper_record is None:
+        raise ValueError("Unknown radar paper.")
+    if paper_record.get("imported_item_id"):
+        return str(paper_record["imported_item_id"])
+    paper = paper_record.get("paper") if isinstance(paper_record.get("paper"), dict) else {}
+    if not paper:
+        raise ValueError("Radar paper has no stored metadata.")
+    scoring = build_team_radar_scorer(database.list_team_interest_keywords())(paper)
+    recommendation = {
+        "paper": paper,
+        "scoring": scoring,
+        "pdf_access": paper_record.get("pdf_access") or assess_pdf_access(paper),
+        "why_relevant": " ".join(scoring.get("reasons") or []),
+        "recommended_action": "import_from_radar_paper_history",
+    }
+    import_result = import_radar_recommendation(
+        database,
+        recommendation,
+        actor=fields.get("actor") or "team-member",
+    )
+    import_result["dedupe_key"] = dedupe_key
+    database.mark_literature_radar_paper_imported(dedupe_key, import_result)
+    return str(import_result["item_id"])
+
+
 def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     settings = radar_settings_from_fields(fields)
     if not settings["sources"]:
@@ -1945,6 +2158,23 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
+            elif parsed.path == "/radar/brief":
+                self.respond_html(
+                    render_literature_radar_brief_page(
+                        self.database,
+                        days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                    )
+                )
+            elif parsed.path == "/radar/papers":
+                self.respond_html(
+                    render_literature_radar_papers_page(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=50, maximum=500),
+                        notice=notice,
+                    )
+                )
             elif parsed.path == "/submit":
                 self.respond_html(render_submit_page(self.database, notice=notice))
             elif parsed.path == "/interests":
@@ -1971,6 +2201,9 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 item_id = import_radar_recommendation_to_library(self.database, fields)
                 run_id = fields.get("run_id") or ""
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/radar/papers/import":
+                item_id = import_radar_paper_to_library(self.database, fields)
+                self.redirect(f"/radar/papers?notice={quote(f'Added {item_id} to the library.')}")
             elif parsed.path == "/radar/run":
                 run_id = run_literature_radar_from_web(self.database, fields)
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote('Radar run completed.')}")

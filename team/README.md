@@ -89,7 +89,9 @@ python team/research_cli.py radar-run --source semantic_scholar_references --see
 python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
 python team/research_cli.py radar-history
+python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
+python team/research_cli.py radar-brief --days 7
 python team/research_cli.py show ITEM_ID
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
@@ -99,15 +101,17 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
-- Literature Radar page with ad hoc `Run Radar`, stored run history, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
 - radar-imported library papers keep their radar provenance and PDF-access decision, so the main Latest Relevant Papers list shows whether a legal PDF is available and why;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 For daily radar usage, run `team/scripts/run_literature_radar.sh` from cron, or
-open `/radar` and use `Run Radar` for an ad hoc check. Scan the latest
-recommendations and import only the papers the team wants to track in the main
-library. Radar ranking follows the editable Team Interests weights from
+open `/radar` and use `Run Radar` for an ad hoc check. Use `/radar/brief` or
+`team/scripts/build_literature_radar_brief.sh` for a weekly or daily roll-up
+over stored runs without collecting again. Use `/radar/papers` to inspect
+deduplicated collected-paper history and add stored papers to the library. Scan the latest
+recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
 paper relevance. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, and run limits as reusable Team defaults.

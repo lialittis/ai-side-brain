@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from shared.literature_radar import build_radar_history_brief
 from shared.research import topic_profile_by_id
 from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
@@ -186,11 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
     radar_history.add_argument("--limit", type=int, default=10)
     radar_history.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    radar_papers = subparsers.add_parser("radar-papers", help="list deduplicated Literature Radar paper history")
+    add_db_args(radar_papers)
+    radar_papers.add_argument("--limit", type=int, default=20)
+    radar_papers.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     radar_report = subparsers.add_parser("radar-report", help="show a stored Literature Radar report")
     add_db_args(radar_report)
     radar_report.add_argument("run_id", nargs="?", help="run id; defaults to the latest run")
     radar_report.add_argument("--output", type=Path, help="write stored Markdown report")
     radar_report.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_brief = subparsers.add_parser("radar-brief", help="build a weekly or daily Literature Radar brief")
+    add_db_args(radar_brief)
+    radar_brief.add_argument("--days", type=int, default=7, help="history window in days")
+    radar_brief.add_argument("--limit", type=int, default=20, help="maximum recommendations in the brief")
+    radar_brief.add_argument("--run-limit", type=int, default=50, help="maximum stored runs to inspect")
+    radar_brief.add_argument("--output", type=Path, help="write Markdown brief")
+    radar_brief.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     return parser
 
@@ -353,6 +367,8 @@ def print_radar_run(result: dict[str, Any]) -> None:
     print(f"Collected: {result['collected_count']}")
     print(f"Recommendations: {result['recommendation_count']}")
     print(f"Imported: {result['imported_count']}")
+    if result.get("source_stats"):
+        print(f"Source stats: {format_radar_source_stats(result['source_stats'])}")
     report_path = result.get("report_path")
     if report_path:
         print(f"Report: {report_path}")
@@ -377,8 +393,31 @@ def print_radar_history(runs: list[dict[str, Any]]) -> None:
             f"collected={run.get('collected_count', 0)} "
             f"recommended={run.get('recommendation_count', 0)} "
             f"imported={run.get('imported_count', 0)} | "
-            f"{', '.join(run.get('sources') or [])}"
+            f"{format_radar_source_stats(run.get('source_stats') or []) or ', '.join(run.get('sources') or [])}"
         )
+
+
+def print_radar_papers(records: list[dict[str, Any]]) -> None:
+    if not records:
+        print("No Literature Radar papers yet.")
+        return
+    for record in records:
+        pdf_access = record.get("pdf_access") or {}
+        access = "download" if pdf_access.get("can_download") else "metadata"
+        imported = record.get("imported_item_id") or "not imported"
+        print(
+            f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
+            f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
+            f"{access} | {imported} | {record.get('title')}"
+        )
+
+
+def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"{stat.get('source_id')}: {int(stat.get('collected_count') or 0)}"
+        + (" failed" if stat.get("status") == "failed" else "")
+        for stat in source_stats
+    )
 
 
 def print_radar_report(run: dict[str, Any], recommendations: list[dict[str, Any]]) -> None:
@@ -536,6 +575,14 @@ def main(argv: list[str] | None = None) -> int:
             print_radar_history(runs)
         return 0
 
+    if args.command == "radar-papers":
+        papers = database.list_literature_radar_papers(limit=args.limit)
+        if args.json:
+            print_json(papers)
+        else:
+            print_radar_papers(papers)
+        return 0
+
     if args.command == "radar-report":
         run = database.get_literature_radar_run(args.run_id)
         if not run:
@@ -551,6 +598,37 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_radar_report(run, recommendations)
+        return 0
+
+    if args.command == "radar-brief":
+        runs = database.list_literature_radar_runs(limit=args.run_limit)
+        run_bundles = [
+            {
+                "run": run,
+                "recommendations": database.list_literature_radar_recommendations(run["id"]),
+            }
+            for run in runs
+        ]
+        brief = build_radar_history_brief(
+            run_bundles,
+            title="Team Literature Radar Brief",
+            days=args.days,
+            recommendation_limit=args.limit,
+        )
+        result = {
+            "brief": brief,
+            "run_count": len(run_bundles),
+            "days": args.days,
+            "recommendation_limit": args.limit,
+        }
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(brief, encoding="utf-8")
+            result["brief_path"] = str(args.output)
+        if args.json:
+            print_json(result)
+        else:
+            print(brief, end="")
         return 0
 
     parser.error(f"unsupported command: {args.command}")

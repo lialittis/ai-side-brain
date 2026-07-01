@@ -140,13 +140,28 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(result["run"]["status"], "partial")
             self.assertEqual(result["collected_count"], 1)
             self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(
+                result["recommendations"][0]["pdf_access"]["access_date"],
+                "2026-07-01T12:00:00+00:00",
+            )
             self.assertEqual(result["source_errors"][0]["source_id"], "dblp")
             self.assertEqual(result["source_errors"][0]["error_type"], "RuntimeError")
             self.assertIn("DBLP unavailable", result["source_errors"][0]["error"])
+            self.assertEqual(
+                [(stat["source_id"], stat["status"], stat["collected_count"]) for stat in result["source_stats"]],
+                [("arxiv", "succeeded", 1), ("dblp", "failed", 0)],
+            )
+            self.assertIn("## Source Stats", result["report"])
+            self.assertIn("`arxiv`: 1 candidate(s) (succeeded)", result["report"])
+            self.assertIn("`dblp`: 0 candidate(s) (failed)", result["report"])
+            self.assertIn("PDF policy: download allowed", result["report"])
+            self.assertIn("accessed=2026-07-01T12:00:00+00:00", result["report"])
             self.assertIn("## Source Errors", result["report"])
             stored_run = database.get_literature_radar_run(result["run_id"])
             self.assertEqual(stored_run["status"], "partial")
             self.assertEqual(stored_run["source_errors"][0]["source_id"], "dblp")
+            self.assertEqual(stored_run["source_stats"][0]["source_id"], "arxiv")
+            self.assertEqual(stored_run["source_stats"][1]["status"], "failed")
 
     def test_run_team_literature_radar_scores_with_team_interest_weights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -775,6 +790,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "research.sqlite3"
             report_path = Path(temp_dir) / "stored-report.md"
+            brief_path = Path(temp_dir) / "stored-brief.md"
             database = TeamResearchDatabase(db_path)
             paper = create_radar_paper(
                 source_id="arxiv",
@@ -796,6 +812,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             history_stdout = io.StringIO()
             with contextlib.redirect_stdout(history_stdout):
                 history_code = research_cli.main(["radar-history", "--db-path", str(db_path), "--json"])
+            papers_stdout = io.StringIO()
+            with contextlib.redirect_stdout(papers_stdout):
+                papers_code = research_cli.main(["radar-papers", "--db-path", str(db_path), "--json"])
 
             report_stdout = io.StringIO()
             with contextlib.redirect_stdout(report_stdout):
@@ -810,16 +829,42 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                         "--json",
                     ]
                 )
+            brief_stdout = io.StringIO()
+            with contextlib.redirect_stdout(brief_stdout):
+                brief_code = research_cli.main(
+                    [
+                        "radar-brief",
+                        "--db-path",
+                        str(db_path),
+                        "--days",
+                        "7",
+                        "--output",
+                        str(brief_path),
+                        "--json",
+                    ]
+                )
 
             self.assertEqual(history_code, 0)
             history = json.loads(history_stdout.getvalue())
             self.assertEqual(history[0]["id"], result["run_id"])
             self.assertEqual(history[0]["recommendation_count"], 1)
+            self.assertEqual(papers_code, 0)
+            papers = json.loads(papers_stdout.getvalue())
+            self.assertEqual(papers[0]["title"], "Memory Safety for Agentic Security")
+            self.assertEqual(papers[0]["seen_count"], 1)
+            self.assertEqual(papers[0]["source_ids"], ["arxiv"])
+            self.assertTrue(papers[0]["pdf_access"]["can_download"])
             self.assertEqual(report_code, 0)
             report = json.loads(report_stdout.getvalue())
             self.assertEqual(report["run"]["id"], result["run_id"])
             self.assertEqual(report["recommendations"][0]["title"], "Memory Safety for Agentic Security")
             self.assertIn("Memory Safety for Agentic Security", report_path.read_text(encoding="utf-8"))
+            self.assertEqual(brief_code, 0)
+            brief = json.loads(brief_stdout.getvalue())
+            self.assertEqual(brief["run_count"], 1)
+            self.assertIn("Team Literature Radar Brief", brief["brief"])
+            self.assertIn("Memory Safety for Agentic Security", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
 
     def test_cli_radar_run_dispatches_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

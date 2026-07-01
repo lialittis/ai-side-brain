@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import tempfile
 import unittest
 
 from shared.literature_radar import (
@@ -11,12 +13,15 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     assess_pdf_access,
     build_recommendation_report,
+    build_radar_history_brief,
+    cache_open_access_pdf,
     create_radar_paper,
     default_radar_topic_profile,
     dblp_venue_profiles,
     expand_dblp_venue_profiles,
     merge_duplicate_papers,
     mvp_source_ids,
+    pdf_access_report_text,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
@@ -134,7 +139,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
         local_paper["local_pdf_path"] = "team/uploads/research/local.pdf"
 
-        arxiv_decision = assess_pdf_access(arxiv_paper)
+        arxiv_decision = assess_pdf_access(arxiv_paper, now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))
         self.assertTrue(arxiv_decision["can_download"])
         self.assertEqual(arxiv_decision["license"], "")
         self.assertEqual(arxiv_decision["oa_status"], "")
@@ -153,6 +158,82 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertFalse(local_decision["can_download"])
         self.assertTrue(local_decision["downloaded"])
         self.assertEqual(local_decision["local_pdf_path"], "team/uploads/research/local.pdf")
+        self.assertEqual(arxiv_decision["access_date"], "2026-07-01T12:00:00+00:00")
+        self.assertIn("download allowed", pdf_access_report_text(arxiv_decision))
+        self.assertIn("source=https://arxiv.org/pdf/2601.00001.pdf", pdf_access_report_text(arxiv_decision))
+
+    def test_caches_only_policy_allowed_open_access_pdfs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            arxiv_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00033",
+                title="Cacheable arXiv Paper",
+                identifiers={"arxiv_id": "2601.00033"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00033"},
+            )
+            seen_urls = []
+
+            def fetcher(url: str) -> bytes:
+                seen_urls.append(url)
+                return b"%PDF-1.7\ncacheable"
+
+            pdf_access = cache_open_access_pdf(
+                arxiv_paper,
+                output_dir,
+                fetcher=fetcher,
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00033.pdf"])
+            self.assertTrue(pdf_access["downloaded"])
+            self.assertTrue(pdf_access["download_attempted"])
+            self.assertEqual(pdf_access["downloaded_at"], "2026-07-01T12:00:00+00:00")
+            self.assertEqual(pdf_access["bytes"], len(b"%PDF-1.7\ncacheable"))
+            self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
+            self.assertEqual(Path(pdf_access["local_pdf_path"]).read_bytes(), b"%PDF-1.7\ncacheable")
+
+            paywalled = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.5555/paywalled",
+                title="Paywalled Publisher PDF",
+                identifiers={"doi": "10.5555/paywalled"},
+                links={"pdf": "https://publisher.example/paywalled.pdf"},
+            )
+
+            def blocked_fetcher(url: str) -> bytes:
+                raise AssertionError(f"fetcher should not be called for blocked PDF: {url}")
+
+            blocked_access = cache_open_access_pdf(paywalled, output_dir, fetcher=blocked_fetcher)
+            self.assertFalse(blocked_access["can_download"])
+            self.assertFalse(blocked_access["download_attempted"])
+            self.assertFalse(blocked_access["downloaded"])
+
+    def test_cache_open_access_pdf_rejects_non_pdf_response(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paper = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.5555/open",
+                title="Open Non PDF Response",
+                identifiers={"doi": "10.5555/open"},
+                links={
+                    "pdf": "https://repository.example/open.pdf",
+                    "license": "cc-by",
+                    "oa_status": "green",
+                },
+            )
+
+            pdf_access = cache_open_access_pdf(
+                paper,
+                Path(temp_dir),
+                fetcher=lambda _url: b"<html>not a pdf</html>",
+            )
+
+            self.assertTrue(pdf_access["can_download"])
+            self.assertTrue(pdf_access["download_attempted"])
+            self.assertFalse(pdf_access["downloaded"])
+            self.assertEqual(pdf_access["download_error"], "response_is_not_pdf")
+            self.assertFalse(list(Path(temp_dir).glob("*.pdf")))
 
     def test_scores_and_reports_recommendations(self) -> None:
         paper = create_radar_paper(
@@ -168,14 +249,17 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
 
         scoring = score_paper_against_profile(paper)
-        recommendations = recommend_papers([paper])
+        recommendations = recommend_papers([paper], now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc))
         report = build_recommendation_report(recommendations, generated_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
 
         self.assertEqual(scoring["label"], "highly_relevant")
         self.assertIn("memory safety", scoring["matched_positive_keywords"])
         self.assertEqual(len(recommendations), 1)
+        self.assertEqual(recommendations[0]["pdf_access"]["access_date"], "2026-07-01T12:30:00+00:00")
         self.assertIn("Memory Safety for Agentic Security", report)
         self.assertIn("Relevance: highly_relevant", report)
+        self.assertIn("PDF policy: metadata/link only", report)
+        self.assertIn("accessed=2026-07-01T12:30:00+00:00", report)
 
     def test_recommend_papers_accepts_custom_scorer(self) -> None:
         paper = create_radar_paper(
@@ -320,6 +404,62 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("agentic security", context["related_items"][0]["matched_terms"])
         self.assertIn("Related to existing context", context["relationship_summary"])
         self.assertIn("Context: Matches active interests", report)
+
+    def test_builds_radar_history_brief_from_run_records(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00031",
+            title="Weekly Memory Safety Radar",
+            abstract="Memory safety and system security for weekly radar review.",
+            identifiers={"arxiv_id": "2601.00031"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00031"},
+        )
+        recommendation = recommend_papers(
+            [paper],
+            now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        )[0]
+        brief = build_radar_history_brief(
+            [
+                {
+                    "id": "run_recent",
+                    "status": "partial",
+                    "started_at": "2026-07-01T09:00:00+00:00",
+                    "collected_count": 1,
+                    "recommendation_count": 1,
+                    "imported_count": 0,
+                    "source_stats": [
+                        {"source_id": "arxiv", "status": "succeeded", "collected_count": 1},
+                        {"source_id": "dblp", "status": "failed", "collected_count": 0},
+                    ],
+                    "source_errors": [
+                        {"source_id": "dblp", "error_type": "RuntimeError", "error": "DBLP unavailable"}
+                    ],
+                    "recommendations": [recommendation],
+                },
+                {
+                    "id": "run_old",
+                    "status": "succeeded",
+                    "started_at": "2026-06-01T09:00:00+00:00",
+                    "collected_count": 10,
+                    "recommendation_count": 10,
+                    "recommendations": [],
+                },
+            ],
+            title="Test Radar Brief",
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+            recommendation_limit=5,
+        )
+
+        self.assertIn("# Test Radar Brief", brief)
+        self.assertIn("Window: last 7 days", brief)
+        self.assertIn("Runs: 1 (partial=1)", brief)
+        self.assertIn("`arxiv`: 1 candidate(s)", brief)
+        self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)
+        self.assertIn("DBLP unavailable", brief)
+        self.assertIn("Weekly Memory Safety Radar", brief)
+        self.assertIn("PDF policy: download allowed", brief)
+        self.assertNotIn("run_old", brief)
 
 
 if __name__ == "__main__":

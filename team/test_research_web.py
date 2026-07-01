@@ -25,6 +25,7 @@ from team.research_web import (
     remove_paper_tag,
     remove_team_interest,
     import_radar_recommendation_to_library,
+    import_radar_paper_to_library,
     run_literature_radar_from_web,
     save_team_interest,
     submit_research_item,
@@ -34,6 +35,8 @@ from team.research_web import (
     update_paper_relevance,
     update_paper_tags,
     render_literature_radar_page,
+    render_literature_radar_brief_page,
+    render_literature_radar_papers_page,
 )
 
 
@@ -143,6 +146,22 @@ class TeamResearchWebTest(unittest.TestCase):
                 recommendations=recommendations,
                 report="# test",
                 status="partial",
+                source_stats=[
+                    {
+                        "source_id": "arxiv",
+                        "status": "succeeded",
+                        "collected_count": 1,
+                        "recorded_at": "2026-07-01T10:01:00+00:00",
+                    },
+                    {
+                        "source_id": "dblp",
+                        "status": "failed",
+                        "collected_count": 0,
+                        "error_type": "RuntimeError",
+                        "error": "DBLP unavailable",
+                        "recorded_at": "2026-07-01T10:01:00+00:00",
+                    },
+                ],
                 source_errors=[
                     {
                         "source_id": "dblp",
@@ -160,6 +179,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Scheduled recommendations", html)
             self.assertIn('action="/radar/run"', html)
             self.assertIn("Run Radar", html)
+            self.assertIn("/radar/brief?days=7&amp;limit=20", html)
+            self.assertIn("Weekly Brief", html)
+            self.assertIn("/radar/papers?limit=50", html)
+            self.assertIn("Paper History", html)
             self.assertIn("DBLP Authors", html)
             self.assertIn("S2 Authors", html)
             self.assertIn("OpenAlex Authors", html)
@@ -177,6 +200,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("shared interests: memory safety", html)
             self.assertIn("local-radar-summary-v0.1", html)
             self.assertIn("Status: partial", html)
+            self.assertIn("Source stats", html)
+            self.assertIn("arxiv: 1", html)
+            self.assertIn("dblp: 0", html)
             self.assertIn("Source errors", html)
             self.assertIn("DBLP unavailable", html)
             self.assertIn(">New<", html)
@@ -186,6 +212,45 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Add to Library", html)
             self.assertIn('action="/radar/import"', html)
             self.assertIn("https://arxiv.org/abs/2601.00006", html)
+
+            brief_html = render_literature_radar_brief_page(database, days=7, limit=20)
+
+            self.assertIn("Radar Brief", brief_html)
+            self.assertIn("Team Literature Radar Brief", brief_html)
+            self.assertIn("Memory Safety for Agentic Security Workflows", brief_html)
+            self.assertIn("Source Errors", brief_html)
+            self.assertIn("DBLP unavailable", brief_html)
+            self.assertIn("PDF policy:", brief_html)
+            self.assertIn('action="/radar/brief"', brief_html)
+
+            papers_html = render_literature_radar_papers_page(database, limit=50)
+
+            self.assertIn("Radar Papers", papers_html)
+            self.assertIn("Memory Safety for Agentic Security Workflows", papers_html)
+            self.assertIn("Seen 1 time", papers_html)
+            self.assertIn("arxiv_id:2601.00006", papers_html)
+            self.assertIn("Not imported", papers_html)
+            self.assertIn("PDF: arxiv_or_open_repository", papers_html)
+            self.assertIn('action="/radar/papers"', papers_html)
+            self.assertIn('action="/radar/papers/import"', papers_html)
+
+            item_id = import_radar_paper_to_library(
+                database,
+                {
+                    "dedupe_key": paper["dedupe_key"],
+                    "actor": "alice",
+                },
+            )
+
+            latest = database.list_latest_relevant_papers()
+            self.assertEqual(latest[0]["item"]["id"], item_id)
+            stored_paper = database.get_literature_radar_paper(paper["dedupe_key"])
+            self.assertEqual(stored_paper["imported_item_id"], item_id)
+            stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
+            self.assertEqual(stored_recommendation["imported_item_id"], item_id)
+            imported_html = render_literature_radar_papers_page(database, limit=50)
+            self.assertIn(f"Imported: {item_id}", imported_html)
+            self.assertIn("In Library", imported_html)
 
     def test_literature_radar_web_run_uses_team_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

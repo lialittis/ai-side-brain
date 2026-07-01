@@ -107,6 +107,7 @@ def run_personal_literature_radar(
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     run_id = personal_radar_run_id(selected_sources, selected_terms, selected_now)
     source_errors: list[dict[str, Any]] = []
+    source_stats: list[dict[str, Any]] = []
     collected = collect_personal_radar_candidates(
         sources=selected_sources,
         query_terms=selected_terms,
@@ -127,12 +128,14 @@ def run_personal_literature_radar(
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=usenix_security_cycles,
         source_errors=source_errors,
+        source_stats=source_stats,
         now=selected_now,
     )
     recommendations = recommend_papers(
         collected,
         topic_profile=selected_topic_profile,
         limit=recommendation_limit,
+        now=selected_now,
     )
     recommendations = annotate_personal_recommendation_novelty(
         root,
@@ -159,6 +162,7 @@ def run_personal_literature_radar(
         title="Personal Literature Radar Report",
         generated_at=selected_now,
     )
+    report = append_radar_source_stats_to_report(report, source_stats)
     report = append_radar_source_errors_to_report(report, source_errors)
     report_path = None
     if write_report:
@@ -171,6 +175,7 @@ def run_personal_literature_radar(
         collected_count=len(collected),
         recommendations=recommendations,
         source_errors=source_errors,
+        source_stats=source_stats,
         report_path=report_path,
         now=selected_now,
     )
@@ -189,6 +194,7 @@ def run_personal_literature_radar(
         "collected_count": len(collected),
         "recommendation_count": len(recommendations),
         "source_errors": source_errors,
+        "source_stats": source_stats,
         "recommendations": recommendations,
         "report": report,
         "report_path": str(report_path) if report_path else None,
@@ -308,14 +314,36 @@ def collect_radar_source(
     source_errors: list[dict[str, Any]] | None,
     now: datetime | None,
     collector: Callable[[], list[dict[str, Any]]],
+    source_stats: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     try:
-        return collector()
+        papers = collector()
     except Exception as error:
         if source_errors is None:
             raise
-        source_errors.append(radar_source_error(source_id, error, now=now))
+        error_record = radar_source_error(source_id, error, now=now)
+        source_errors.append(error_record)
+        if source_stats is not None:
+            source_stats.append(
+                radar_source_stat(
+                    source_id,
+                    status="failed",
+                    collected_count=0,
+                    now=now,
+                    error_record=error_record,
+                )
+            )
         return []
+    if source_stats is not None:
+        source_stats.append(
+            radar_source_stat(
+                source_id,
+                status="succeeded",
+                collected_count=len(papers),
+                now=now,
+            )
+        )
+    return papers
 
 
 def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
@@ -325,6 +353,41 @@ def radar_source_error(source_id: str, error: Exception, *, now: datetime | None
         "error": str(error),
         "occurred_at": iso_timestamp(now or datetime.now(timezone.utc)),
     }
+
+
+def radar_source_stat(
+    source_id: str,
+    *,
+    status: str,
+    collected_count: int,
+    now: datetime | None = None,
+    error_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stat = {
+        "source_id": source_id,
+        "status": status,
+        "collected_count": int(collected_count),
+        "recorded_at": iso_timestamp(now or datetime.now(timezone.utc)),
+    }
+    if error_record:
+        stat["error_type"] = error_record.get("error_type") or "Error"
+        stat["error"] = error_record.get("error") or ""
+    return stat
+
+
+def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str, Any]]) -> str:
+    if not source_stats:
+        return report
+    lines = [report.rstrip(), "", "## Source Stats", ""]
+    for stat in source_stats:
+        status = stat.get("status") or "unknown"
+        collected_count = int(stat.get("collected_count") or 0)
+        line = f"- `{stat.get('source_id')}`: {collected_count} candidate(s) ({status})"
+        if status == "failed" and stat.get("error_type"):
+            line += f" - {stat.get('error_type')}"
+        lines.append(line)
+    lines.append("")
+    return "\n".join(lines)
 
 
 def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
@@ -358,6 +421,7 @@ def collect_personal_radar_candidates(
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
     source_errors: list[dict[str, Any]] | None = None,
+    source_stats: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     supported_sources = {
@@ -392,6 +456,7 @@ def collect_personal_radar_candidates(
                 source_errors=source_errors,
                 now=now,
                 collector=collector,
+                source_stats=source_stats,
             )
         )
 
@@ -698,6 +763,7 @@ def build_personal_radar_run_record(
     collected_count: int,
     recommendations: list[dict[str, Any]],
     source_errors: list[dict[str, Any]] | None = None,
+    source_stats: list[dict[str, Any]] | None = None,
     report_path: Path | None,
     now: datetime,
 ) -> dict[str, Any]:
@@ -714,6 +780,7 @@ def build_personal_radar_run_record(
         "collected_count": collected_count,
         "recommendation_count": len(recommendations),
         "source_errors": errors,
+        "source_stats": source_stats or [],
         "report_path": str(report_path) if report_path else None,
         "recommendations": [
             {

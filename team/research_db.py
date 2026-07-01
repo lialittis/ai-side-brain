@@ -1097,6 +1097,8 @@ class TeamResearchDatabase:
             "imported_count": 0,
             "report": "",
             "error": "",
+            "source_stats": [],
+            "source_errors": [],
         }
         with self.connect() as connection:
             self._upsert_literature_radar_run(connection, run)
@@ -1113,6 +1115,7 @@ class TeamResearchDatabase:
         status: str = "succeeded",
         error: str = "",
         source_errors: list[dict[str, Any]] | None = None,
+        source_stats: list[dict[str, Any]] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
@@ -1187,6 +1190,7 @@ class TeamResearchDatabase:
                     "report": report,
                     "error": error,
                     "source_errors": source_errors or [],
+                    "source_stats": source_stats or [],
                 }
             )
             self._upsert_literature_radar_run(connection, run)
@@ -1318,6 +1322,55 @@ class TeamResearchDatabase:
                     )
         return recommendation
 
+    def mark_literature_radar_paper_imported(
+        self,
+        dedupe_key: str,
+        import_result: dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        item_id = str(import_result.get("item_id") or "").strip()
+        if not item_id:
+            raise ValueError("Radar import result must include an item_id.")
+        with self.connect() as connection:
+            paper_row = connection.execute(
+                "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if paper_row is None:
+                raise KeyError(f"Unknown literature radar paper: {dedupe_key}")
+            paper_record = loads(paper_row["record_json"])
+            paper_record["imported_item_id"] = item_id
+            connection.execute(
+                """
+                UPDATE literature_radar_papers
+                SET imported_item_id = ?, record_json = ?
+                WHERE dedupe_key = ?
+                """,
+                (item_id, dumps(paper_record), dedupe_key),
+            )
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_recommendations
+                WHERE dedupe_key = ?
+                """,
+                (dedupe_key,),
+            ).fetchall()
+            for row in rows:
+                recommendation = loads(row["record_json"])
+                recommendation.update(
+                    {
+                        "imported_item_id": item_id,
+                        "import_result": import_result,
+                        "updated_at": timestamp,
+                    }
+                )
+                self._upsert_literature_radar_recommendation(connection, recommendation)
+        return paper_record
+
     def get_literature_radar_paper(self, dedupe_key: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as connection:
@@ -1326,6 +1379,20 @@ class TeamResearchDatabase:
                 (dedupe_key,),
             ).fetchone()
         return loads(row["record_json"]) if row else None
+
+    def list_literature_radar_papers(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_papers
+                ORDER BY latest_seen_at DESC, first_seen_at DESC, title ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
 
     def list_latest_relevant_papers(
         self,

@@ -20,6 +20,7 @@ from personal.literature_radar import (
     read_personal_radar_paper_history,
     run_personal_literature_radar,
 )
+from shared.literature_radar import build_radar_history_brief
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     papers.add_argument("--limit", type=int, default=20)
     papers.add_argument("--json", action="store_true")
 
+    brief = subparsers.add_parser("brief", help="build a weekly or daily personal radar brief")
+    brief.add_argument("--root-path", type=Path, default=ROOT)
+    brief.add_argument("--days", type=int, default=7, help="history window in days")
+    brief.add_argument("--limit", type=int, default=20, help="maximum recommendations in the brief")
+    brief.add_argument("--run-limit", type=int, default=50, help="maximum stored runs to inspect")
+    brief.add_argument("--output", type=Path, help="write Markdown brief")
+    brief.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -107,6 +116,8 @@ def print_run(result: dict[str, Any]) -> None:
     print(f"Query terms: {', '.join(result['query_terms'])}")
     print(f"Collected: {result['collected_count']}")
     print(f"Recommendations: {result['recommendation_count']}")
+    if result.get("source_stats"):
+        print(f"Source stats: {format_radar_source_stats(result['source_stats'])}")
     if result.get("report_path"):
         print(f"Report: {result['report_path']}")
     for recommendation in result.get("recommendations", [])[:5]:
@@ -129,8 +140,16 @@ def print_history(runs: list[dict[str, Any]]) -> None:
             f"{run['id']} | {run['status']} | {run.get('started_at')} | "
             f"collected={run.get('collected_count', 0)} "
             f"recommended={run.get('recommendation_count', 0)} | "
-            f"{run.get('report_path') or 'no report'}"
+            f"{format_radar_source_stats(run.get('source_stats') or []) or run.get('report_path') or 'no report'}"
         )
+
+
+def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
+    return ", ".join(
+        f"{stat.get('source_id')}: {int(stat.get('collected_count') or 0)}"
+        + (" failed" if stat.get("status") == "failed" else "")
+        for stat in source_stats
+    )
 
 
 def print_paper_history(records: list[dict[str, Any]]) -> None:
@@ -219,6 +238,30 @@ def main(argv: list[str] | None = None) -> int:
             print_json(records)
         else:
             print_paper_history(records)
+        return 0
+
+    if args.command == "brief":
+        runs = read_personal_radar_index(args.root_path)[: args.run_limit]
+        brief = build_radar_history_brief(
+            runs,
+            title="Personal Literature Radar Brief",
+            days=args.days,
+            recommendation_limit=args.limit,
+        )
+        result = {
+            "brief": brief,
+            "run_count": len(runs),
+            "days": args.days,
+            "recommendation_limit": args.limit,
+        }
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(brief, encoding="utf-8")
+            result["brief_path"] = str(args.output)
+        if args.json:
+            print_json(result)
+        else:
+            print(brief, end="")
         return 0
 
     parser.error(f"unsupported command: {args.command}")

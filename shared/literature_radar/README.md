@@ -46,6 +46,8 @@ Personal and Team adapters can optionally replace that phase with shared
 OpenRouter structured summaries.
 Recommendation reports can include novelty metadata supplied by Personal or
 Team storage, keeping "new this run" separate from relevance score.
+The shared brief builder can also aggregate stored daily runs into a weekly or
+daily review brief without recollecting metadata or calling external APIs.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.
@@ -134,3 +136,10 @@ unauthorized sources must not be downloaded or redistributed.
 collection. Its record includes `source_url`, `access_date`, `license`,
 `oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`, and the
 reason why a PDF should or should not be downloaded.
+
+`cache_open_access_pdf(...)` is an optional, policy-gated cache helper for
+product adapters. It only calls its injected fetcher when `assess_pdf_access`
+allows download, verifies the response looks like a PDF, writes the local file,
+and returns an updated PDF-access record with `local_pdf_path`, `sha256`, byte
+count, and download status. Normal collection, reports, and briefs do not enable
+PDF caching by default.

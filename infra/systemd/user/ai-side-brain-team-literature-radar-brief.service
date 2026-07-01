@@ -1,0 +1,8 @@
+[Unit]
+Description=AI Side-Brain Team Literature Radar Brief
+Documentation=file:%h/workspace/ai-side-brain/team/docs/LITERATURE_RADAR.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/ai-side-brain
+ExecStart=%h/workspace/ai-side-brain/team/scripts/build_literature_radar_brief.sh
