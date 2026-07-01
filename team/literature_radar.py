@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from shared.literature_radar import (
+    DEFAULT_ARXIV_CATEGORIES,
     add_local_recommendation_summaries,
+    add_recommendation_attention_summaries,
     add_recommendation_context,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
@@ -321,6 +323,7 @@ def run_team_literature_radar(
                 query_terms=selected_terms,
                 now=now,
             )
+        recommendations = add_recommendation_attention_summaries(recommendations, now=now)
         if import_results:
             for recommendation in recommendations[:import_limit]:
                 if int(recommendation["scoring"]["score"]) < min_import_score:
@@ -797,6 +800,7 @@ def team_radar_collection_config(
         import_limit=import_limit if import_results else None,
         min_import_score=min_import_score if import_results else None,
         project_id=project_id if import_results else None,
+        arxiv_categories=list(DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
         conference_year=conference_year or radar_year(now),
         dblp_venue_profiles=resolved_source_list(
             selected_sources,
@@ -1384,6 +1388,7 @@ def build_radar_import_metadata(
             "novelty": selected_recommendation.get("novelty") or {},
             "context": selected_recommendation.get("context") or {},
             "summary": selected_recommendation.get("summary") or {},
+            "attention_summary": selected_recommendation.get("attention_summary") or {},
         },
     }
 

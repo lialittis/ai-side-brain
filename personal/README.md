@@ -62,10 +62,11 @@ python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Lo
 python scripts/personal_literature_radar.py brief --days 7 --json
 ```
 
-`settings` is a read-only preflight command. It prints selected sources, source
-policy, and source readiness without collecting metadata, downloading PDFs, or
-calling AI. Use it before enabling a cron/systemd job or after changing source,
-seed, author, venue, or contact-email environment variables.
+`settings` is a read-only preflight command. It prints selected sources, active
+topic-profile scoring summary, expanded venue profile summary, source policy,
+and source readiness without collecting metadata, downloading PDFs, or calling
+AI. Use it before enabling a cron/systemd job or after changing source,
+topic-profile, seed, author, venue, or contact-email environment variables.
 
 For periodic personal reports, run the one-shot script from cron or a systemd
 timer:
@@ -86,7 +87,10 @@ The run script writes a JSON run result into `memory/06_Logs/`; the Radar adapte
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
 set. Before collection, it writes a read-only
 `personal-literature-radar-settings-*` preflight JSON snapshot unless
-`PERSONAL_RADAR_WRITE_SETTINGS=0`. It also writes a text and JSON
+`PERSONAL_RADAR_WRITE_SETTINGS=0`. That snapshot includes source readiness and
+the active topic-profile scoring summary plus expanded DBLP/OpenAlex and
+OpenReview venue profile summaries, so you can confirm the relevance and venue
+coverage before scheduled collection starts. It also writes a text and JSON
 `personal-literature-radar-queue-*` snapshot
 for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
 brief script writes a Markdown and JSON roll-up over stored runs
@@ -165,7 +169,8 @@ Use `papers --review unreviewed`, `papers --review watch`, or
 That paper history stores the PDF-access decision metadata for each deduplicated
 paper without downloading or redistributing PDFs. Recommendation reports also
 include the access kind, source URL, access timestamp, OA status, license, local
-PDF path when present, and the reason a PDF can or cannot be downloaded. Access
+PDF path when present, the legal-access reason, and `download_reason` explaining
+whether the file was cached, skipped, or not legally downloadable. Access
 kind distinguishes arXiv/open repository PDFs, arXiv-only links, confirmed OA PDFs, restricted
 publisher PDFs, DOI-only links, publisher-only links, local PDFs, and
 metadata-only records.
@@ -175,19 +180,23 @@ candidate counts, appends source coverage to reports and briefs, and appends
 source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
-lines, context, source policy, venue coverage, and PDF policy for the top stored
-recommendations. `brief --json` returns the same Markdown plus latest-run
+lines, attention summaries, context, source policy, venue coverage, and PDF
+policy for the top stored recommendations. `brief --json` returns the same Markdown plus latest-run
 health/freshness, review counts, active queue preview with PDF access summary,
 structured `source_policy` and `source_coverage` for every run in the brief
 window, and paths to the local run index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
-deduplication, scoring, context linking, summarization, storage, and reporting,
+deduplication, scoring, context linking, summarization, attention summaries,
+storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief
 ranking is review-aware: `watch` papers are listed before unreviewed papers, and
 `dismissed` papers are pushed behind active candidates. Stored run history also
 keeps non-secret collection settings such as limits, conference year, venue
-profiles, per-venue candidate/recommendation counts, seed counts, and whether
-summaries or PDF caching were enabled.
+profiles, arXiv category scope, per-venue candidate/recommendation counts, seed
+counts, and whether summaries or PDF caching were enabled.
+Queue JSON promotes each queued paper's latest `attention_summary` to the paper
+record itself, so local dashboards can show why a paper deserves attention
+without unpacking `latest_recommendation`.
 
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

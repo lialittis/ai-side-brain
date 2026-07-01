@@ -619,6 +619,16 @@ def print_radar_settings(result: dict[str, Any]) -> None:
     print(f"Recommendations: {settings.get('limit') or 'n/a'}")
     print(f"Summaries: {'yes' if settings.get('summarize') else 'no'}")
     print(f"Provider: {settings.get('summary_provider') or 'local'}")
+    scoring_profile_summary = (
+        result.get("scoring_profile_summary") if isinstance(result.get("scoring_profile_summary"), dict) else {}
+    )
+    if scoring_profile_summary:
+        print(f"Scoring: {scoring_profile_summary.get('description') or scoring_profile_summary.get('name')}")
+    venue_profile_summary = (
+        result.get("venue_profile_summary") if isinstance(result.get("venue_profile_summary"), dict) else {}
+    )
+    if venue_profile_summary:
+        print(format_radar_settings_venue_profiles(venue_profile_summary))
     source_policy = result.get("source_policy") if isinstance(result.get("source_policy"), dict) else {}
     if source_policy:
         print(format_radar_source_policy(source_policy))
@@ -640,6 +650,24 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print(f"Web: {links.get('html') or '/radar'}")
         print(f"Queue JSON: {links.get('queue_json') or '/radar/queue.json?limit=20'}")
         print(f"Brief JSON: {links.get('brief_json') or '/radar/brief.json?days=7&limit=20'}")
+
+
+def format_radar_settings_venue_profiles(summary: dict[str, Any]) -> str:
+    parts = []
+    for key, label in (("dblp_openalex", "DBLP/OpenAlex"), ("openreview", "OpenReview")):
+        section = summary.get(key) if isinstance(summary.get(key), dict) else {}
+        profile_count = int(section.get("profile_count") or 0)
+        names = [
+            str(profile.get("name") or profile.get("id") or "").strip()
+            for profile in section.get("profiles") or []
+            if isinstance(profile, dict) and str(profile.get("name") or profile.get("id") or "").strip()
+        ]
+        if profile_count:
+            suffix = f"; +{profile_count - 4} more" if profile_count > 4 else ""
+            parts.append(f"{label}: {', '.join(names[:4])}{suffix}")
+        elif section.get("status") == "invalid":
+            parts.append(f"{label}: invalid ({section.get('error')})")
+    return "Venue profiles: " + " | ".join(parts) if parts else "Venue profiles: none"
 
 
 def print_radar_review(record: dict[str, Any]) -> None:

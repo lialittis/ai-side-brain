@@ -68,10 +68,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(runs[0]["recommendations"][0]["pdf_access"]["can_download"])
             self.assertEqual(runs[0]["recommendations"][0]["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(runs[0]["recommendations"][0]["pdf_access"]["reason"], "arxiv_or_open_repository")
+            self.assertEqual(runs[0]["recommendations"][0]["pdf_access"]["download_reason"], "download_not_requested")
             self.assertEqual(
                 runs[0]["recommendations"][0]["summary"]["source_trace"]["processor"],
                 "local-radar-summary-v0.1",
             )
+            self.assertIn("attention_summary", runs[0]["recommendations"][0])
+            self.assertIn("memory safety", runs[0]["recommendations"][0]["attention_summary"]["why_attention"])
             self.assertIn(
                 "Signal: Memory safety and LLM security",
                 runs[0]["recommendations"][0]["signal_lines"][0],
@@ -86,11 +89,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(history_record["pdf_access"]["can_download"])
             self.assertEqual(history_record["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(history_record["latest_recommendation"]["rank"], 1)
+            self.assertIn("attention_summary", history_record["latest_recommendation"])
             self.assertIn(
                 "Signal: Memory safety and LLM security",
                 history_record["latest_recommendation"]["signal_lines"][0],
             )
             self.assertIn("Novelty: new this run", report_text)
+            self.assertIn("Attention:", report_text)
             self.assertIn("Signal: Memory safety and LLM security", report_text)
             self.assertIn("Matched: LLM security", report_text)
             self.assertIn("## Source Readiness", report_text)
@@ -129,6 +134,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             pdf_access = result["recommendations"][0]["pdf_access"]
             self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00034.pdf"])
             self.assertTrue(pdf_access["downloaded"])
+            self.assertEqual(pdf_access["download_reason"], "downloaded_to_cache")
             self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
             runs = read_personal_radar_index(root)
             self.assertTrue(runs[0]["recommendations"][0]["pdf_access"]["downloaded"])
@@ -499,6 +505,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             runs = read_personal_radar_index(root)
             self.assertEqual(runs[0]["collection_config"]["max_results"], 1)
             self.assertEqual(runs[0]["collection_config"]["recommendation_limit"], 10)
+            self.assertEqual(
+                runs[0]["collection_config"]["arxiv_categories"],
+                ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
+            )
             self.assertEqual(runs[0]["collection_config"]["conference_year"], 2026)
             self.assertTrue(runs[0]["collection_config"]["write_report"])
             self.assertNotIn("semantic_scholar_api_key", runs[0]["collection_config"])
@@ -517,6 +527,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
             self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["context_record_count"], 1)
+            self.assertEqual(pipeline_by_phase["attention_summary"]["status"], "succeeded")
 
     def test_run_personal_literature_radar_uses_openrouter_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -645,6 +656,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(direct_queue["latest_run"]["health_action"]["severity"], "good")
             self.assertIn("literature-radar-runs.json", queue_result["paths"]["run_index"])
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertIn("attention_summary", queue_result["papers"][0])
+            self.assertIn("why_attention", queue_result["papers"][0]["attention_summary"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             queue_text_stdout = io.StringIO()
@@ -820,6 +833,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "openalex",
                         "--source-contact-email",
                         "radar@example.org",
+                        "--venue-profile",
+                        "security",
+                        "--openreview-venue-profile",
+                        "iclr",
                         "--json",
                     ]
                 )
@@ -839,6 +856,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "openalex",
                         "--source-contact-email",
                         "radar@example.org",
+                        "--venue-profile",
+                        "security",
+                        "--openreview-venue-profile",
+                        "iclr",
                     ]
                 )
 
@@ -850,11 +871,23 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
         self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertEqual(payload["scoring_profile"]["type"], "topic_profile")
+        self.assertEqual(payload["scoring_profile_summary"]["topic_count"], 4)
+        self.assertIn(
+            "system_security",
+            [topic["id"] for topic in payload["scoring_profile"]["topics"]],
+        )
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["openreview"]["profiles"][0]["name"], "ICLR")
         self.assertNotIn("run_id", payload)
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
         self.assertIn("Personal Literature Radar Settings", text)
         self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Scoring: Security, memory safety, and agentic security radar", text)
+        self.assertIn("Venue profiles:", text)
+        self.assertIn("DBLP/OpenAlex: USENIX Security, IEEE Symposium on Security and Privacy", text)
+        self.assertIn("OpenReview: ICLR", text)
         self.assertIn("Source policy:", text)
         self.assertIn("Source readiness:", text)
         self.assertIn("status=blocked", text)

@@ -49,7 +49,10 @@ Collection timers also write read-only settings/readiness snapshots and active
 queue snapshots by default: `literature-radar-settings-*` and
 `literature-radar-queue-*` under `team/logs/`, plus
 `personal-literature-radar-settings-*` and `personal-literature-radar-queue-*`
-under `memory/06_Logs/`. Set `RADAR_WRITE_SETTINGS=0` or
+under `memory/06_Logs/`. Settings snapshots include the active relevance
+scoring profile summary, expanded venue profile summary, and source
+policy/readiness. Set
+`RADAR_WRITE_SETTINGS=0` or
 `PERSONAL_RADAR_WRITE_SETTINGS=0` to skip settings snapshots; set
 `RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable queue files;
 set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size.

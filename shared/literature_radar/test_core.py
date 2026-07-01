@@ -9,6 +9,7 @@ from shared.literature_radar import (
     LOCAL_RADAR_SUMMARY_PROCESSOR,
     RADAR_PIPELINE_PHASES,
     add_local_recommendation_summaries,
+    add_recommendation_attention_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
     append_radar_source_policy_to_report,
@@ -37,6 +38,7 @@ from shared.literature_radar import (
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_dblp_venue_profile_selection_summary,
     radar_source_policy_summary,
     radar_source_blocked_readiness,
     radar_source_preset,
@@ -57,6 +59,7 @@ from shared.literature_radar import (
     radar_source_option_metadata,
     radar_source_options,
     radar_supported_source_ids,
+    openreview_venue_profile_selection_summary,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
@@ -121,6 +124,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "relevance_scoring",
                 "context_linking",
                 "ai_summarization",
+                "attention_summary",
                 "long_term_storage",
                 "recommendation_report",
             ],
@@ -154,6 +158,16 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             settings={"source_preset": "custom", "sources": ["semantic_scholar_recommendations", "openalex"]},
             sources=["semantic_scholar_recommendations", "openalex"],
             collection_config={"seed_paper_ids": ["seed-1"], "openalex_mailto_configured": True},
+            scoring_profile={
+                "type": "team_interests",
+                "id": "team-interests",
+                "name": "Team Interests",
+                "interests": [
+                    {"keyword": "memory safety", "weight": 80},
+                    {"keyword": "agentic security", "weight": 100},
+                ],
+            },
+            venue_profile_summary={"dblp_openalex": radar_dblp_venue_profile_selection_summary(["security"])},
             source_preset_label="Custom",
             links={"html": "/radar"},
             paths={"root": "/tmp/radar"},
@@ -165,6 +179,16 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
         self.assertEqual(payload["source_readiness"]["status"], "ready_with_warnings")
         self.assertEqual(payload["source_readiness"]["warning_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
+        self.assertEqual(payload["scoring_profile_summary"]["interest_count"], 2)
+        self.assertEqual(
+            payload["scoring_profile_summary"]["top_interests"],
+            [
+                {"keyword": "agentic security", "weight": 100},
+                {"keyword": "memory safety", "weight": 80},
+            ],
+        )
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
         self.assertEqual(payload["links"]["html"], "/radar")
@@ -348,6 +372,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "related_items": [{"id": "item_1", "title": "Baseline Paper"}],
         }
         recommendation["summary"] = {"short_summary": "A useful memory safety paper."}
+        recommendation = add_recommendation_attention_summaries(
+            [recommendation],
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )[0]
 
         trace = build_radar_pipeline_trace(
             status="partial",
@@ -368,6 +396,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
         self.assertEqual(by_phase["context_linking"]["metrics"]["related_item_count"], 1)
         self.assertEqual(by_phase["ai_summarization"]["status"], "succeeded")
+        self.assertEqual(by_phase["attention_summary"]["status"], "succeeded")
+        self.assertEqual(by_phase["attention_summary"]["metrics"]["attention_summary_count"], 1)
         self.assertEqual(by_phase["long_term_storage"]["metrics"]["storage_target"], "test_index")
         self.assertEqual(by_phase["recommendation_report"]["status"], "succeeded")
 
@@ -379,13 +409,33 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("IEEE Symposium on Security and Privacy", names)
         self.assertIn("ACM CCS", names)
         self.assertIn("OSDI", names)
+        self.assertIn("EuroSys", names)
         self.assertIn("PLDI", names)
+        self.assertIn("OOPSLA", names)
+        self.assertIn("ECOOP", names)
         self.assertIn("ICSE", names)
         self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["security"])],
             ["usenix_security", "ieee_sp", "acm_ccs", "ndss", "raid", "acsac"],
         )
+        self.assertEqual(
+            [profile["id"] for profile in expand_dblp_venue_profiles(["systems"])],
+            ["osdi", "sosp", "eurosys", "usenix_atc", "asplos"],
+        )
+        self.assertEqual(
+            [profile["id"] for profile in expand_dblp_venue_profiles(["programming_languages_memory_safety"])],
+            ["pldi", "oopsla", "popl", "ecoop"],
+        )
         self.assertEqual([profile["id"] for profile in expand_dblp_venue_profiles(["acm_ccs"])], ["acm_ccs"])
+        dblp_summary = radar_dblp_venue_profile_selection_summary(["security", "pldi"])
+        self.assertEqual(dblp_summary["status"], "ready")
+        self.assertEqual(dblp_summary["profile_count"], 7)
+        self.assertEqual(dblp_summary["groups"]["security"], 6)
+        self.assertIn("USENIX Security", [profile["name"] for profile in dblp_summary["profiles"]])
+        openreview_summary = openreview_venue_profile_selection_summary(["iclr", "ai_ml"])
+        self.assertEqual(openreview_summary["status"], "ready")
+        self.assertGreaterEqual(openreview_summary["profile_count"], 3)
+        self.assertIn("ICLR", [profile["name"] for profile in openreview_summary["profiles"]])
 
     def test_builds_venue_coverage_summary_from_profile_source_records(self) -> None:
         ccs_paper = create_radar_paper(
@@ -456,6 +506,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                     "summary": {"short_summary": "High priority radar candidate."},
                     "why_relevant": "Matches memory safety.",
                     "matched_positive_keywords": ["memory safety"],
+                    "attention_summary": {
+                        "why_attention": "Prioritize for memory-safety review.",
+                        "relationship_to_interests": "Matches memory safety.",
+                        "relationship_to_existing_work": "No existing research context matched strongly.",
+                        "why_now": "new this run",
+                    },
                 },
             },
             {
@@ -486,10 +542,16 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [
                 "Signal: High priority radar candidate.",
                 "Why: Matches memory safety.",
+                "Attention: Prioritize for memory-safety review. Matches memory safety. No existing research context matched strongly. Now: new this run",
                 "Matched: memory safety",
             ],
         )
+        self.assertEqual(
+            queue["papers"][0]["attention_summary"]["why_attention"],
+            "Prioritize for memory-safety review.",
+        )
         self.assertNotIn("signal_lines", records[2])
+        self.assertNotIn("attention_summary", records[2])
 
         watch_queue = build_radar_review_queue([records[0], records[3]], limit=3)
         self.assertEqual(watch_queue["review"], "watch")
@@ -697,21 +759,25 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(arxiv_decision["oa_status"], "")
         self.assertEqual(arxiv_decision["local_pdf_path"], "")
         self.assertFalse(arxiv_decision["downloaded"])
+        self.assertEqual(arxiv_decision["download_reason"], "download_not_requested")
         decision = assess_pdf_access(publisher_paper)
         self.assertFalse(decision["can_download"])
         self.assertEqual(decision["access_kind"], "restricted_pdf")
         self.assertEqual(decision["reason"], "pdf_url_present_but_oa_or_license_not_confirmed")
+        self.assertEqual(decision["download_reason"], "not_legally_downloadable")
         self.assertEqual(decision["source_url"], "https://publisher.example/paywalled.pdf")
         oa_decision = assess_pdf_access(oa_paper)
         self.assertTrue(oa_decision["can_download"])
         self.assertEqual(oa_decision["access_kind"], "open_access_pdf")
         self.assertEqual(oa_decision["reason"], "open_access_pdf_with_license_or_oa_status")
+        self.assertEqual(oa_decision["download_reason"], "download_not_requested")
         self.assertEqual(oa_decision["license"], "cc-by")
         self.assertEqual(oa_decision["oa_status"], "green")
         local_decision = assess_pdf_access(local_paper)
         self.assertFalse(local_decision["can_download"])
         self.assertEqual(local_decision["access_kind"], "local_pdf")
         self.assertTrue(local_decision["downloaded"])
+        self.assertEqual(local_decision["download_reason"], "local_pdf_available")
         self.assertEqual(local_decision["local_pdf_path"], "team/uploads/research/local.pdf")
         arxiv_link_decision = assess_pdf_access(arxiv_link_only_paper)
         self.assertFalse(arxiv_link_decision["can_download"])
@@ -728,6 +794,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(arxiv_decision["access_date"], "2026-07-01T12:00:00+00:00")
         self.assertIn("download allowed", pdf_access_report_text(arxiv_decision))
         self.assertIn("kind=arxiv_pdf", pdf_access_report_text(arxiv_decision))
+        self.assertIn("download=download_not_requested", pdf_access_report_text(arxiv_decision))
         self.assertIn("source=https://arxiv.org/pdf/2601.00001.pdf", pdf_access_report_text(arxiv_decision))
 
     def test_enriches_radar_papers_with_unpaywall_and_records_source_health(self) -> None:
@@ -934,6 +1001,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00033.pdf"])
             self.assertTrue(pdf_access["downloaded"])
             self.assertTrue(pdf_access["download_attempted"])
+            self.assertEqual(pdf_access["download_reason"], "downloaded_to_cache")
             self.assertEqual(pdf_access["downloaded_at"], "2026-07-01T12:00:00+00:00")
             self.assertEqual(pdf_access["bytes"], len(b"%PDF-1.7\ncacheable"))
             self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
@@ -954,6 +1022,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             self.assertFalse(blocked_access["can_download"])
             self.assertFalse(blocked_access["download_attempted"])
             self.assertFalse(blocked_access["downloaded"])
+            self.assertEqual(blocked_access["download_reason"], "not_legally_downloadable")
 
     def test_cache_open_access_pdf_rejects_non_pdf_response(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -979,6 +1048,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             self.assertTrue(pdf_access["download_attempted"])
             self.assertFalse(pdf_access["downloaded"])
             self.assertEqual(pdf_access["download_error"], "response_is_not_pdf")
+            self.assertEqual(pdf_access["download_reason"], "download_failed")
             self.assertFalse(list(Path(temp_dir).glob("*.pdf")))
 
     def test_cache_open_access_pdf_records_fetch_failure(self) -> None:
@@ -1000,6 +1070,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             self.assertTrue(pdf_access["download_attempted"])
             self.assertFalse(pdf_access["downloaded"])
             self.assertEqual(pdf_access["download_error"], "fetch_failed:TimeoutError")
+            self.assertEqual(pdf_access["download_reason"], "download_failed")
             self.assertIn("temporary timeout", pdf_access["download_error_detail"])
 
     def test_cache_recommendation_pdfs_updates_recommendation_and_paper(self) -> None:
@@ -1043,14 +1114,21 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
 
         scoring = score_paper_against_profile(paper)
         recommendations = recommend_papers([paper], now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc))
+        recommendations = add_recommendation_attention_summaries(
+            recommendations,
+            now=datetime(2026, 7, 1, 12, 45, tzinfo=timezone.utc),
+        )
         report = build_recommendation_report(recommendations, generated_at=datetime(2026, 7, 1, tzinfo=timezone.utc))
 
         self.assertEqual(scoring["label"], "highly_relevant")
         self.assertIn("memory safety", scoring["matched_positive_keywords"])
         self.assertEqual(len(recommendations), 1)
+        self.assertIn("attention_summary", recommendations[0])
+        self.assertIn("memory safety", recommendations[0]["attention_summary"]["relationship_to_interests"])
         self.assertEqual(recommendations[0]["pdf_access"]["access_date"], "2026-07-01T12:30:00+00:00")
         self.assertIn("Memory Safety for Agentic Security", report)
         self.assertIn("Relevance: highly_relevant", report)
+        self.assertIn("Attention: Matched interest keywords", report)
         self.assertIn("Why: Matched interest keywords", report)
         self.assertIn("Matched: LLM security", report)
         self.assertIn("PDF policy: metadata/link only", report)
@@ -1220,6 +1298,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                             }
                         ],
                     },
+                    "attention_summary": {
+                        "why_attention": "Worth reading for memory-safety agent hardening.",
+                        "relationship_to_interests": "Connects to configured interests through: memory safety.",
+                        "relationship_to_existing_work": "Related to existing context: Agentic baseline.",
+                        "why_now": "new this run",
+                    },
                     "why_relevant": "Strong match for memory safety.",
                     "matched_positive_keywords": ["memory safety", "agentic security", "memory safety"],
                 }
@@ -1232,6 +1316,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "Signal: This paper studies memory safety for agents.",
                 "Why: Strong match for memory safety.",
                 "Context: Related to existing context: Agentic baseline. Related details: Agentic baseline: shared interests: agentic security.",
+                "Attention: Worth reading for memory-safety agent hardening. Connects to configured interests through: memory safety. Related to existing context: Agentic baseline. Now: new this run",
                 "Matched: memory safety, agentic security",
             ],
         )

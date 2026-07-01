@@ -341,6 +341,12 @@ class TeamResearchWebTest(unittest.TestCase):
                 ],
                 "source_trace": {"processor": "local-radar-context-v0.1"},
             }
+            recommendations[0]["attention_summary"] = {
+                "why_attention": "Worth team attention.",
+                "relationship_to_interests": "Connects to memory safety.",
+                "relationship_to_existing_work": "Related to existing context: Baseline Paper.",
+                "why_now": "new this run",
+            }
             run = database.create_literature_radar_run(
                 sources=["arxiv"],
                 query_terms=["memory safety"],
@@ -428,6 +434,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Ada Lovelace, Grace Hopper", html)
             self.assertIn("A local summary for radar review.", html)
             self.assertIn("Connects to memory safety.", html)
+            self.assertIn("<strong>Attention:</strong> Worth team attention.", html)
+            self.assertIn("<strong>Interests:</strong> Connects to memory safety.", html)
+            self.assertIn("<strong>Now:</strong> new this run", html)
             self.assertIn("<strong>Signal:</strong> A local summary for radar review.", html)
             self.assertIn("<strong>Why:</strong> Connects to memory safety.", html)
             self.assertIn("<strong>Matched:</strong> AI agent security", html)
@@ -703,9 +712,12 @@ class TeamResearchWebTest(unittest.TestCase):
                     "limit": 3,
                 },
             )
+            database.upsert_team_interest_keyword(keyword="agentic security", weight=95)
             html = render_literature_radar_page(database)
 
         self.assertIn("Pre-run readiness:", html)
+        self.assertIn("scoring", html)
+        self.assertIn("agentic security=95", html)
         self.assertIn("status: blocked", html)
         self.assertIn("blocked sources: semantic_scholar_recommendations, openreview", html)
         self.assertIn("missing: semantic_scholar_recommendations needs Semantic Scholar positive seed paper ID", html)
@@ -723,8 +735,11 @@ class TeamResearchWebTest(unittest.TestCase):
                     "source_contact_email": "radar@example.org",
                     "max_results": 5,
                     "limit": 3,
+                    "venue_profiles": ["security"],
+                    "openreview_venue_profiles": ["iclr"],
                 },
             )
+            database.upsert_team_interest_keyword(keyword="memory safety", weight=85)
 
             with mock.patch.dict("os.environ", {"SEMANTIC_SCHOLAR_API_KEY": "secret-s2-key"}, clear=False):
                 payload = build_literature_radar_settings_payload(database)
@@ -737,6 +752,18 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["collection_config"]["semantic_scholar_api_key_configured"], True)
         self.assertEqual(payload["source_readiness"]["status"], "ready")
         self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
+        self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
+        self.assertGreaterEqual(payload["scoring_profile_summary"]["interest_count"], 1)
+        self.assertIn(
+            {"keyword": "memory safety", "weight": 85},
+            payload["scoring_profile_summary"]["top_interests"],
+        )
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
+        self.assertIn(
+            "USENIX Security",
+            [profile["name"] for profile in payload["venue_profile_summary"]["dblp_openalex"]["profiles"]],
+        )
+        self.assertEqual(payload["venue_profile_summary"]["openreview"]["profiles"][0]["name"], "ICLR")
         self.assertEqual(payload["supported_source_ids"], radar_supported_source_ids())
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
@@ -871,6 +898,12 @@ class TeamResearchWebTest(unittest.TestCase):
                 "relationship_summary": "Related to existing context: Agentic baseline.",
                 "related_items": [],
             }
+            recommendations[0]["attention_summary"] = {
+                "why_attention": "Prioritize for memory-safe agent workflow review.",
+                "relationship_to_interests": "Strong match for agentic security and memory safety.",
+                "relationship_to_existing_work": "Related to existing context: Agentic baseline.",
+                "why_now": "new this run",
+            }
             recommendations[0]["scoring"]["matched_positive_keywords"] = ["agentic security"]
             run = database.create_literature_radar_run(
                 sources=["semantic_scholar"],
@@ -913,6 +946,8 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar insight", latest_html)
             self.assertIn("This paper links memory safety to agentic systems.", latest_html)
+            self.assertIn("<strong>Attention:</strong> Prioritize for memory-safe agent workflow review.", latest_html)
+            self.assertIn("<strong>Now:</strong> new this run", latest_html)
             self.assertIn("Strong match for agentic security and memory safety.", latest_html)
             self.assertIn("Related to existing context: Agentic baseline.", latest_html)
             self.assertIn("Matched:", latest_html)
@@ -1004,6 +1039,12 @@ class TeamResearchWebTest(unittest.TestCase):
                         "relationship_summary": "Related to existing context: Security baseline.",
                         "related_items": [],
                     },
+                    "attention_summary": {
+                        "why_attention": "Review first for system-security planning.",
+                        "relationship_to_interests": "Strong match for system security.",
+                        "relationship_to_existing_work": "Related to existing context: Security baseline.",
+                        "why_now": "new this run",
+                    },
                 }
             ]
             database.complete_literature_radar_run(
@@ -1032,6 +1073,7 @@ class TeamResearchWebTest(unittest.TestCase):
             unreviewed_history_html = render_literature_radar_papers_page(database, review_status="unreviewed")
             self.assertIn("Unreviewed Radar History Paper", unreviewed_history_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", unreviewed_history_html)
+            self.assertIn("<strong>Attention:</strong> Review first for system-security planning.", unreviewed_history_html)
             self.assertIn("<strong>Why:</strong>", unreviewed_history_html)
             self.assertIn("<strong>Matched:</strong>", unreviewed_history_html)
             latest_html = render_latest_papers_page(database)
@@ -1046,6 +1088,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("PDF access:", latest_html)
             self.assertIn("1 downloadable, 0 cached, 0 metadata/link-only", latest_html)
             self.assertIn("arxiv_pdf: 1", latest_html)
+            self.assertIn("<strong>Attention:</strong> Review first for system-security planning.", latest_html)
+            self.assertIn("<strong>Now:</strong> new this run", latest_html)
             self.assertIn("<strong>Why:</strong>", latest_html)
             self.assertIn("<strong>Matched:</strong>", latest_html)
             self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)

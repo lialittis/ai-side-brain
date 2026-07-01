@@ -1911,6 +1911,7 @@ class TeamResearchDatabase:
                 "review": recommendation.get("review"),
                 "context": recommendation.get("context"),
                 "summary": recommendation.get("summary"),
+                "attention_summary": recommendation.get("attention_summary"),
                 "why_relevant": recommendation.get("why_relevant"),
                 "recommended_action": recommendation.get("recommended_action"),
             }
@@ -2264,6 +2265,7 @@ def build_literature_radar_recommendation_record(
         "pdf_access": recommendation.get("pdf_access") or assess_pdf_access(paper, now=parse_iso_datetime(timestamp)),
         "context": recommendation.get("context"),
         "summary": recommendation.get("summary"),
+        "attention_summary": recommendation.get("attention_summary"),
         "signal_lines": radar_latest_signal_lines(recommendation),
         "imported_item_id": (import_result or {}).get("item_id"),
         "import_result": import_result,

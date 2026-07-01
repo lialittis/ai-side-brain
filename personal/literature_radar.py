@@ -15,8 +15,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from shared.literature_radar import (
+    DEFAULT_ARXIV_CATEGORIES,
     add_local_recommendation_summaries,
     add_recommendation_context,
+    add_recommendation_attention_summaries,
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
@@ -247,6 +249,7 @@ def run_personal_literature_radar(
             query_terms=selected_terms,
             now=selected_now,
         )
+    recommendations = add_recommendation_attention_summaries(recommendations, now=selected_now)
     report = build_recommendation_report(
         recommendations,
         title="Personal Literature Radar Report",
@@ -1094,6 +1097,7 @@ def build_personal_radar_run_record(
                 "pdf_access": recommendation.get("pdf_access"),
                 "context": recommendation.get("context"),
                 "summary": recommendation.get("summary"),
+                "attention_summary": recommendation.get("attention_summary"),
                 "signal_lines": radar_latest_signal_lines(recommendation),
                 "link": ((recommendation.get("paper") or {}).get("links") or {}).get("landing"),
             }
@@ -1170,6 +1174,7 @@ def personal_radar_collection_config(
         summary_limit=summary_limit,
         topic_profile_path=topic_profile_path,
         write_report=write_report,
+        arxiv_categories=list(DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
         conference_year=conference_year or radar_year(now),
         dblp_venue_profiles=personal_resolved_source_list(
             selected_sources,
@@ -1407,6 +1412,7 @@ def build_personal_radar_paper_history_record(
             "review": recommendation.get("review"),
             "context": recommendation.get("context"),
             "summary": recommendation.get("summary"),
+            "attention_summary": recommendation.get("attention_summary"),
             "why_relevant": recommendation.get("why_relevant"),
             "recommended_action": recommendation.get("recommended_action"),
         }

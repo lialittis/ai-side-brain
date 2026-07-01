@@ -21,8 +21,10 @@ from personal.literature_radar import (
     ensure_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
     personal_radar_collection_config,
+    personal_radar_scoring_profile,
     read_personal_radar_index,
     read_personal_radar_paper_history,
+    read_personal_radar_topic_profile,
     run_personal_literature_radar,
 )
 from shared.literature_radar import (
@@ -32,6 +34,8 @@ from shared.literature_radar import (
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
+    openreview_venue_profile_selection_summary,
+    radar_dblp_venue_profile_selection_summary,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
@@ -247,17 +251,36 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         "openreview_venue_profiles": selected_openreview_venue_profiles or [],
         "venue_profiles": selected_dblp_venue_profiles or [],
     }
+    topic_profile = read_personal_radar_topic_profile(
+        args.root_path,
+        topic_profile_path=args.topic_profile,
+    )
     return build_radar_preflight_payload(
         kind="personal_literature_radar_settings",
         settings=settings,
         sources=selected_sources,
         collection_config=collection_config,
+        scoring_profile=personal_radar_scoring_profile(topic_profile),
+        venue_profile_summary=personal_radar_settings_venue_profile_summary(
+            selected_dblp_venue_profiles,
+            selected_openreview_venue_profiles,
+        ),
         source_preset_label=(preset or {}).get("name") or "Custom",
         paths={
             "root": str(args.root_path),
             "topic_profile": str(args.topic_profile) if args.topic_profile else "indexes/literature-radar-topic-profile.json",
         },
     )
+
+
+def personal_radar_settings_venue_profile_summary(
+    dblp_venue_profiles: list[str] | None,
+    openreview_venue_profiles: list[str] | None,
+) -> dict[str, Any]:
+    return {
+        "dblp_openalex": radar_dblp_venue_profile_selection_summary(dblp_venue_profiles or []),
+        "openreview": openreview_venue_profile_selection_summary(openreview_venue_profiles or []),
+    }
 
 
 def print_settings(result: dict[str, Any]) -> None:
@@ -269,6 +292,16 @@ def print_settings(result: dict[str, Any]) -> None:
     print(f"Recommendations: {settings.get('limit') or 'n/a'}")
     print(f"Summaries: {'yes' if settings.get('summarize') else 'no'}")
     print(f"Provider: {settings.get('summary_provider') or 'local'}")
+    scoring_profile_summary = (
+        result.get("scoring_profile_summary") if isinstance(result.get("scoring_profile_summary"), dict) else {}
+    )
+    if scoring_profile_summary:
+        print(f"Scoring: {scoring_profile_summary.get('description') or scoring_profile_summary.get('name')}")
+    venue_profile_summary = (
+        result.get("venue_profile_summary") if isinstance(result.get("venue_profile_summary"), dict) else {}
+    )
+    if venue_profile_summary:
+        print(format_settings_venue_profiles(venue_profile_summary))
     source_policy = result.get("source_policy") if isinstance(result.get("source_policy"), dict) else {}
     if source_policy:
         print(format_radar_source_policy(source_policy))
@@ -285,6 +318,24 @@ def print_settings(result: dict[str, Any]) -> None:
                 f"! recommended for {entry.get('source_id')}: "
                 f"{entry.get('label') or entry.get('key')}"
             )
+
+
+def format_settings_venue_profiles(summary: dict[str, Any]) -> str:
+    parts = []
+    for key, label in (("dblp_openalex", "DBLP/OpenAlex"), ("openreview", "OpenReview")):
+        section = summary.get(key) if isinstance(summary.get(key), dict) else {}
+        profile_count = int(section.get("profile_count") or 0)
+        names = [
+            str(profile.get("name") or profile.get("id") or "").strip()
+            for profile in section.get("profiles") or []
+            if isinstance(profile, dict) and str(profile.get("name") or profile.get("id") or "").strip()
+        ]
+        if profile_count:
+            suffix = f"; +{profile_count - 4} more" if profile_count > 4 else ""
+            parts.append(f"{label}: {', '.join(names[:4])}{suffix}")
+        elif section.get("status") == "invalid":
+            parts.append(f"{label}: invalid ({section.get('error')})")
+    return "Venue profiles: " + " | ".join(parts) if parts else "Venue profiles: none"
 
 
 def print_run(result: dict[str, Any]) -> None:

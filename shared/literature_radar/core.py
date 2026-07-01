@@ -24,6 +24,7 @@ RADAR_PIPELINE_PHASES = [
     "relevance_scoring",
     "context_linking",
     "ai_summarization",
+    "attention_summary",
     "long_term_storage",
     "recommendation_report",
 ]
@@ -575,6 +576,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
 
 LOCAL_RADAR_SUMMARY_PROCESSOR = "local-radar-summary-v0.1"
 LOCAL_RADAR_CONTEXT_PROCESSOR = "local-radar-context-v0.1"
+LOCAL_RADAR_ATTENTION_PROCESSOR = "local-radar-attention-v0.1"
 RadarScorer = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -723,6 +725,8 @@ def build_radar_preflight_payload(
     settings: dict[str, Any],
     sources: list[str] | tuple[str, ...] | None,
     collection_config: dict[str, Any] | None,
+    scoring_profile: dict[str, Any] | None = None,
+    venue_profile_summary: dict[str, Any] | None = None,
     source_preset_label: str | None = None,
     links: dict[str, Any] | None = None,
     paths: dict[str, Any] | None = None,
@@ -741,11 +745,118 @@ def build_radar_preflight_payload(
         "source_policy": radar_source_policy_summary(selected_sources),
         "source_readiness": radar_source_readiness_summary(selected_sources, selected_config),
     }
+    if scoring_profile is not None:
+        payload["scoring_profile"] = dict(scoring_profile)
+        payload["scoring_profile_summary"] = radar_scoring_profile_summary(scoring_profile)
+    if venue_profile_summary is not None:
+        payload["venue_profile_summary"] = dict(venue_profile_summary)
     if links is not None:
         payload["links"] = dict(links)
     if paths is not None:
         payload["paths"] = dict(paths)
     return payload
+
+
+def radar_scoring_profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
+    selected_profile = profile if isinstance(profile, dict) else {}
+    summary: dict[str, Any] = {
+        "type": str(selected_profile.get("type") or "unknown"),
+        "id": str(selected_profile.get("id") or ""),
+        "name": str(selected_profile.get("name") or selected_profile.get("id") or "Scoring profile"),
+        "description": radar_brief_scoring_profile_text(selected_profile) if selected_profile else "",
+    }
+    if selected_profile.get("type") == "team_interests":
+        interests = [
+            interest
+            for interest in selected_profile.get("interests") or []
+            if isinstance(interest, dict) and str(interest.get("keyword") or "").strip()
+        ]
+        top_interests = sorted(
+            [
+                {
+                    "keyword": str(interest.get("keyword") or "").strip(),
+                    "weight": radar_profile_weight_value(interest.get("weight")),
+                }
+                for interest in interests
+            ],
+            key=lambda item: (-item["weight"], item["keyword"]),
+        )
+        summary.update(
+            {
+                "interest_count": len(interests),
+                "top_interests": top_interests[:8],
+            }
+        )
+        return summary
+    if selected_profile.get("type") == "topic_profile":
+        topics = [
+            topic
+            for topic in selected_profile.get("topics") or []
+            if isinstance(topic, dict) and str(topic.get("id") or "").strip()
+        ]
+        summary.update(
+            {
+                "topic_count": len(topics),
+                "topics": [
+                    {
+                        "id": str(topic.get("id") or "").strip(),
+                        "positive_keyword_count": len(topic.get("positive_keywords") or []),
+                        "negative_keyword_count": len(topic.get("negative_keywords") or []),
+                        "sample_positive_keywords": [
+                            str(keyword)
+                            for keyword in (topic.get("positive_keywords") or [])[:4]
+                            if str(keyword).strip()
+                        ],
+                    }
+                    for topic in topics[:8]
+                ],
+            }
+        )
+        return summary
+    return summary
+
+
+def radar_profile_weight_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
+    selected_selectors = [str(selector).strip() for selector in selectors or [] if str(selector).strip()]
+    try:
+        profiles = expand_dblp_venue_profiles(selected_selectors or None)
+    except ValueError as error:
+        return {
+            "status": "invalid",
+            "selectors": selected_selectors,
+            "profile_count": 0,
+            "groups": {},
+            "profiles": [],
+            "error": str(error),
+        }
+    groups: dict[str, int] = {}
+    profile_records = []
+    for profile in profiles:
+        group = str(profile.get("group") or "unknown")
+        groups[group] = groups.get(group, 0) + 1
+        profile_records.append(
+            {
+                "id": profile.get("id"),
+                "name": profile.get("name"),
+                "group": group,
+                "dblp_venues": list(profile.get("dblp_venues") or []),
+                "query_terms": list(profile.get("query_terms") or []),
+            }
+        )
+    return {
+        "status": "ready",
+        "selectors": selected_selectors,
+        "profile_count": len(profile_records),
+        "groups": groups,
+        "profiles": profile_records,
+    }
 
 
 def radar_source_presets() -> list[dict[str, Any]]:
@@ -1028,8 +1139,14 @@ def pdf_access_decision(
     oa_status: str = "",
     local_pdf_path: str = "",
     downloaded: bool = False,
+    download_reason: str = "",
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    selected_download_reason = download_reason or default_download_reason(
+        can_download=can_download,
+        downloaded=downloaded,
+        access_kind=access_kind,
+    )
     return {
         "can_download": can_download,
         "access_kind": access_kind,
@@ -1040,8 +1157,17 @@ def pdf_access_decision(
         "oa_status": oa_status,
         "local_pdf_path": local_pdf_path,
         "downloaded": downloaded,
+        "download_reason": selected_download_reason,
         "access_date": iso_timestamp(now or datetime.now(timezone.utc)),
     }
+
+
+def default_download_reason(*, can_download: bool, downloaded: bool, access_kind: str) -> str:
+    if downloaded:
+        return "local_pdf_available" if access_kind == "local_pdf" else "downloaded"
+    if can_download:
+        return "download_not_requested"
+    return "not_legally_downloadable"
 
 
 def metadata_only_access_kind(links: dict[str, Any], source_url: str) -> str:
@@ -1816,6 +1942,7 @@ def cache_open_access_pdf(
             "download_attempted": False,
             "downloaded": False,
             "download_error": "",
+            "download_reason": "not_legally_downloadable",
         }
 
     pdf_url = downloadable_pdf_url(paper, decision)
@@ -1825,6 +1952,7 @@ def cache_open_access_pdf(
             "download_attempted": False,
             "downloaded": False,
             "download_error": "no_downloadable_pdf_url",
+            "download_reason": "no_downloadable_pdf_url",
         }
 
     try:
@@ -1837,6 +1965,7 @@ def cache_open_access_pdf(
             "downloaded": False,
             "download_error": f"fetch_failed:{type(error).__name__}",
             "download_error_detail": str(error),
+            "download_reason": "download_failed",
         }
     if len(content) > max_bytes:
         return {
@@ -1846,6 +1975,7 @@ def cache_open_access_pdf(
             "downloaded": False,
             "download_error": "pdf_exceeds_max_bytes",
             "max_bytes": max_bytes,
+            "download_reason": "download_failed",
         }
     if not looks_like_pdf(content):
         return {
@@ -1854,6 +1984,7 @@ def cache_open_access_pdf(
             "download_attempted": True,
             "downloaded": False,
             "download_error": "response_is_not_pdf",
+            "download_reason": "download_failed",
         }
 
     digest = hashlib.sha256(content).hexdigest()
@@ -1867,6 +1998,7 @@ def cache_open_access_pdf(
         "download_attempted": True,
         "downloaded": True,
         "download_error": "",
+        "download_reason": "downloaded_to_cache",
         "downloaded_at": iso_timestamp(now or datetime.now(timezone.utc)),
         "sha256": digest,
         "bytes": len(content),
@@ -2144,6 +2276,81 @@ def add_recommendation_context(
     ]
 
 
+def add_recommendation_attention_summaries(
+    recommendations: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **recommendation,
+            "attention_summary": build_recommendation_attention_summary(recommendation, now=now),
+        }
+        for recommendation in recommendations
+    ]
+
+
+def build_recommendation_attention_summary(
+    recommendation: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
+    context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+    novelty = recommendation.get("novelty") if isinstance(recommendation.get("novelty"), dict) else {}
+    pdf_access = recommendation.get("pdf_access") if isinstance(recommendation.get("pdf_access"), dict) else {}
+    matched_terms = unique_normalized_terms(
+        scoring.get("matched_positive_keywords") or scoring.get("matched_terms") or []
+    )
+    title = normalize_spaces(paper.get("title") or "Untitled paper")
+    label = normalize_spaces(scoring.get("label") or "needs_review")
+    relationship_to_interests = normalize_spaces(
+        summary.get("relationship_to_interests") or relationship_to_interests_text(matched_terms, label)
+    )
+    context_relationship = normalize_spaces(context.get("relationship_summary") or "")
+    related_items = context.get("related_items") if isinstance(context.get("related_items"), list) else []
+    why_attention = normalize_spaces(
+        summary.get("why_attention")
+        or recommendation.get("why_relevant")
+        or "Human review is needed because the available metadata did not clearly explain relevance."
+    )
+    why_now_parts = []
+    novelty_text = novelty_report_text(novelty)
+    if novelty_text and novelty_text != "unknown":
+        why_now_parts.append(novelty_text)
+    if pdf_access:
+        why_now_parts.append(pdf_access_report_text(pdf_access))
+    if related_items:
+        why_now_parts.append(f"linked_context={len(related_items)}")
+    why_now = "; ".join(why_now_parts) or "Newly collected candidate from selected Literature Radar sources."
+    return {
+        "headline": truncate_text(f"{label}: {title}", 180),
+        "why_attention": truncate_text(why_attention, 420),
+        "relationship_to_interests": truncate_text(relationship_to_interests, 360),
+        "relationship_to_existing_work": truncate_text(
+            context_relationship or "No existing research context matched strongly.",
+            360,
+        ),
+        "why_now": truncate_text(why_now, 360),
+        "recommended_action": recommendation.get("recommended_action") or "human_review",
+        "pdf_policy": pdf_access_report_text(pdf_access) if pdf_access else "",
+        "confidence": summary.get("confidence") or ("medium" if matched_terms else "low"),
+        "matched_terms": matched_terms,
+        "related_item_count": len(related_items),
+        "source_trace": {
+            "processor": LOCAL_RADAR_ATTENTION_PROCESSOR,
+            "input_fields": ["scoring", "summary", "context", "novelty", "pdf_access"],
+            "generated_at": iso_timestamp(now or datetime.now(timezone.utc)),
+        },
+    }
+
+
+def relationship_to_interests_text(matched_terms: list[str], label: str | None) -> str:
+    return relationship_to_interests(matched_terms, label)
+
+
 def build_recommendation_context(
     recommendation: dict[str, Any],
     *,
@@ -2373,6 +2580,7 @@ def build_recommendation_report(
         paper = recommendation["paper"]
         scoring = recommendation["scoring"]
         signal_lines = [f"- {line}" for line in radar_latest_signal_lines(recommendation)]
+        attention = recommendation.get("attention_summary") if isinstance(recommendation.get("attention_summary"), dict) else {}
         context_line = (
             []
             if any(line.startswith("- Context:") for line in signal_lines)
@@ -2385,6 +2593,7 @@ def build_recommendation_report(
                 f"- Relevance: {scoring['label']} ({scoring['score']}/100)",
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Novelty: {novelty_report_text(recommendation.get('novelty') or {})}",
+                f"- Attention: {attention_report_text(attention)}",
                 *signal_lines,
                 *context_line,
                 f"- Action: {recommendation['recommended_action']}",
@@ -2544,6 +2753,9 @@ def build_radar_pipeline_trace(
     )
     pdf_records = pipeline_pdf_access_records(collected, selected_recommendations)
     summarized_count = sum(1 for recommendation in selected_recommendations if recommendation.get("summary"))
+    attention_summary_count = sum(
+        1 for recommendation in selected_recommendations if recommendation.get("attention_summary")
+    )
     context_records = pipeline_context_records(selected_recommendations)
     linked_context_count = sum(1 for context in context_records if context.get("related_items"))
     related_item_count = sum(len(context.get("related_items") or []) for context in context_records)
@@ -2587,6 +2799,11 @@ def build_radar_pipeline_trace(
             "ai_summarization",
             summarization_phase_status(recommendation_count, summarized_count),
             summarized_count=summarized_count,
+        ),
+        pipeline_phase(
+            "attention_summary",
+            attention_summary_phase_status(recommendation_count, attention_summary_count),
+            attention_summary_count=attention_summary_count,
         ),
         pipeline_phase(
             "long_term_storage",
@@ -2697,6 +2914,16 @@ def summarization_phase_status(recommendation_count: int, summarized_count: int)
     return "succeeded"
 
 
+def attention_summary_phase_status(recommendation_count: int, attention_summary_count: int) -> str:
+    if recommendation_count <= 0:
+        return "skipped"
+    if attention_summary_count <= 0:
+        return "skipped"
+    if attention_summary_count < recommendation_count:
+        return "partial"
+    return "succeeded"
+
+
 def build_radar_history_brief(
     run_records: list[dict[str, Any]],
     *,
@@ -2777,6 +3004,11 @@ def build_radar_history_brief(
         run = entry["run"]
         title_text = radar_brief_recommendation_title(recommendation)
         signal_lines = [f"- {line}" for line in radar_latest_signal_lines(recommendation)]
+        attention = (
+            recommendation.get("attention_summary")
+            if isinstance(recommendation.get("attention_summary"), dict)
+            else {}
+        )
         context_line = (
             []
             if any(line.startswith("- Context:") for line in signal_lines)
@@ -2791,6 +3023,7 @@ def build_radar_history_brief(
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
                 f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
+                f"- Attention: {attention_report_text(attention)}",
                 *signal_lines,
                 *context_line,
                 f"- PDF policy: {pdf_access_report_text(radar_brief_recommendation_pdf_access(recommendation))}",
@@ -3481,6 +3714,10 @@ def build_radar_review_queue(
 def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(record)
     enriched["signal_lines"] = radar_latest_signal_lines(record)
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    if attention:
+        enriched["attention_summary"] = dict(attention)
     return enriched
 
 
@@ -3524,6 +3761,7 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
         return stored_lines
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
     context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
     lines: list[str] = []
     seen: set[str] = set()
 
@@ -3537,6 +3775,7 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
     add_line("Signal", summary.get("short_summary"))
     add_line("Why", summary.get("relationship_to_interests") or latest.get("why_relevant"))
     add_line("Context", context_report_text(context) if context else "")
+    add_line("Attention", attention_report_text(attention) if attention else "")
 
     scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
     matched_terms = unique_normalized_terms(
@@ -3645,6 +3884,25 @@ def context_report_text(context: dict[str, Any]) -> str:
     return summary or "not linked"
 
 
+def attention_report_text(attention: dict[str, Any]) -> str:
+    if not attention:
+        return "not recorded"
+    parts = []
+    why = normalize_spaces(attention.get("why_attention") or "")
+    relationship = normalize_spaces(attention.get("relationship_to_interests") or "")
+    existing = normalize_spaces(attention.get("relationship_to_existing_work") or "")
+    why_now = normalize_spaces(attention.get("why_now") or "")
+    if why:
+        parts.append(why)
+    if relationship and relationship != why:
+        parts.append(relationship)
+    if existing and existing != relationship:
+        parts.append(existing)
+    if why_now:
+        parts.append(f"Now: {why_now}")
+    return truncate_text(" ".join(parts), 900) if parts else "not recorded"
+
+
 def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:
     if not pdf_access:
         return "not recorded"
@@ -3653,6 +3911,7 @@ def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:
         allowed,
         f"kind={pdf_access.get('access_kind') or 'unknown'}",
         f"reason={pdf_access.get('reason') or 'unknown'}",
+        f"download={pdf_access.get('download_reason') or 'unknown'}",
         f"oa={pdf_access.get('oa_status') or 'unknown'}",
         f"license={pdf_access.get('license') or 'unknown'}",
         f"accessed={pdf_access.get('access_date') or 'unknown'}",

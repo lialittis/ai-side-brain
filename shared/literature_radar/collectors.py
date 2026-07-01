@@ -1501,6 +1501,45 @@ def expand_openreview_venue_profiles(selectors: list[str] | None = None) -> list
     return unique
 
 
+def openreview_venue_profile_selection_summary(
+    selectors: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    selected_selectors = [str(selector).strip() for selector in selectors or [] if str(selector).strip()]
+    try:
+        profiles = expand_openreview_venue_profiles(selected_selectors or None)
+    except ValueError as error:
+        return {
+            "status": "invalid",
+            "selectors": selected_selectors,
+            "profile_count": 0,
+            "groups": {},
+            "profiles": [],
+            "error": str(error),
+        }
+    groups: dict[str, int] = {}
+    profile_records = []
+    for profile in profiles:
+        group = str(profile.get("group") or "unknown")
+        groups[group] = groups.get(group, 0) + 1
+        profile_records.append(
+            {
+                "id": profile.get("id"),
+                "name": profile.get("name"),
+                "group": group,
+                "venue_id_template": profile.get("venue_id_template"),
+                "submission_invitation_templates": list(profile.get("submission_invitation_templates") or []),
+                "accepted_venueid_templates": list(profile.get("accepted_venueid_templates") or []),
+            }
+        )
+    return {
+        "status": "ready",
+        "selectors": selected_selectors,
+        "profile_count": len(profile_records),
+        "groups": groups,
+        "profiles": profile_records,
+    }
+
+
 def openreview_profile_invitations(profile: dict[str, Any], year: int) -> list[str]:
     return [
         template.format(year=int(year))

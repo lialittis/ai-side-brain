@@ -137,7 +137,13 @@ invitation IDs before a team member starts a run, and it shows recommended
 configuration such as OpenAlex or Crossref contact mail.
 The same read-only settings and readiness contract is available as local JSON at
 `/radar/settings.json`, so automation can verify source selection and readiness
-without starting collectors, downloading PDFs, or calling AI.
+without starting collectors, downloading PDFs, or calling AI. The JSON also
+includes the current Team Interest scoring profile and a compact
+`scoring_profile_summary`, so operators can confirm which weighted interests
+will drive relevance before a scheduled run spends API calls. When DBLP,
+OpenAlex, or OpenReview venue profile selectors are configured, the payload also
+includes `venue_profile_summary` with the expanded top-conference profiles that
+will be queried.
 
 ## CLI Runner
 
@@ -150,9 +156,11 @@ python team/research_cli.py radar-settings --json
 ```
 
 `radar-settings` is a read-only preflight command. It prints the saved Team
-Radar defaults, selected sources, source policy, and pre-run readiness without
-starting collectors, downloading PDFs, or calling AI. Use it before enabling a
-cron/systemd job or after changing `/radar` defaults.
+Radar defaults, selected sources, active Team Interest scoring profile, source
+policy, expanded venue profile summary, and pre-run readiness without starting
+collectors, downloading PDFs, or calling AI. Use it before enabling a
+cron/systemd job or after changing `/radar` defaults, Team Interest weights, or
+venue selectors.
 
 Useful options:
 
@@ -272,8 +280,9 @@ python team/research_cli.py radar-run --source openreview_venues --openreview-ve
 Without `--import-results`, the runner only collects metadata, deduplicates,
 scores, and writes/reports recommendations. Each report item includes the PDF
 policy decision with access kind, source URL, access timestamp, OA status,
-license, local PDF path when present, and the reason a PDF can or cannot be
-downloaded. Access kind distinguishes arXiv/open repository PDFs, arXiv-only
+license, local PDF path when present, the legal-access reason, and
+`download_reason` explaining whether the file was cached, skipped, or not
+legally downloadable. Access kind distinguishes arXiv/open repository PDFs, arXiv-only
 links, confirmed OA PDFs, restricted publisher PDFs, DOI-only links,
 publisher-only links, local PDFs, and metadata-only records. This is the safer default for early daily or
 weekly scheduled runs.
@@ -298,16 +307,18 @@ python team/research_cli.py radar-brief --days 7 --json
 Every `radar-run` creates durable Team-side history in SQLite:
 
 - `literature_radar_runs` stores source choices, query terms, non-secret
-  collection settings, status, total counts, per-source collection stats,
-  venue coverage by configured top-conference profile, errors, scoring profile
-  snapshot, pipeline phase trace, and the Markdown report.
+  collection settings including the arXiv category scope, status, total counts,
+  per-source collection stats, venue coverage by configured top-conference
+  profile, errors, scoring profile snapshot, pipeline phase trace, and the
+  Markdown report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
   and latest-seen timestamps, source IDs, PDF-access decision metadata, latest
-  recommendation score/context/summary, persisted signal lines, and any imported
-  Team item ID.
+  recommendation score/context/summary/attention summary, persisted signal lines,
+  and any imported Team item ID.
 - `literature_radar_recommendations` stores the ranked recommendations for each
   run, including score, label, novelty, PDF-access decision metadata, summary,
-  persisted signal lines, imported item ID, and the full recommendation JSON.
+  attention summary, persisted signal lines, imported item ID, and the full
+  recommendation JSON.
 
 When a recommendation is imported, the Team library item also keeps a compact
 `radar` object and top-level `pdf_access` object. This lets the Latest Papers UI
@@ -334,8 +345,8 @@ The CLI and browser both expose review queues: use
 `radar-queue` for the active daily terminal queue ranked with the same shared
 priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
 papers and papers already imported into the library, and the text output includes
-stored signal lines for why a paper is relevant, how it relates to existing
-context, and which interests matched. Use
+stored signal lines plus an attention summary for why a paper is relevant now,
+how it relates to existing context, and which interests matched. Use
 `radar-settings` to verify saved source readiness before a scheduled run. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
@@ -345,8 +356,9 @@ For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
 `python team/research_cli.py radar-queue --json` return the same active queue
 shape with review counts, latest-run health/freshness/source stats, compact
 source coverage status, `source_policy` authoritative/trend-signal counts, a
-`health_action` next step, persisted signal lines, active-queue PDF access
-summary, paper records, and links back to the HTML review surfaces.
+`health_action` next step, persisted signal lines, top-level
+`attention_summary` records for queued papers, active-queue PDF access summary,
+paper records, and links back to the HTML review surfaces.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,

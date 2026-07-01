@@ -34,6 +34,8 @@ surfaces describe sources consistently.
 The shared preflight payload builder combines selected settings, source policy,
 source readiness, supported source IDs, and source option records into one
 read-only contract that product surfaces can expose before running collectors.
+Adapters can attach scoring-profile and venue-profile summaries so operators
+can verify relevance and top-conference coverage before scheduled API calls.
 
 Pipeline phases are explicit:
 
@@ -44,12 +46,13 @@ Pipeline phases are explicit:
 5. relevance scoring
 6. context linking to prior Personal or Team work
 7. AI summarization
-8. long-term storage
-9. recommendation report
+8. attention summary
+9. long-term storage
+10. recommendation report
 
 The shared package currently provides source definitions, default security and
 AI topic interests, deduplication, PDF access policy, deterministic scoring,
-context linking, and recommendation report generation. It also includes a
+context linking, attention-summary generation, and recommendation report generation. It also includes a
 product-neutral pipeline trace builder so Personal and Team runs can store
 phase-level status for the explicit radar pipeline. The initial arXiv, DBLP,
 Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors use public
@@ -83,8 +86,10 @@ active candidates.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
-unimported candidates are sorted by latest recommendation score. Personal and
-Team surfaces use this same queue logic.
+unimported candidates are sorted by latest recommendation score. Queue records
+include persisted signal lines and promote the latest `attention_summary` to the
+queued paper record for dashboard consumers. Personal and Team surfaces use this
+same queue logic.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.
@@ -111,7 +116,9 @@ bibliographic records.
 Current implemented collectors:
 
 - `collect_arxiv(...)` builds an arXiv API query over configured categories and
-  search terms, then parses Atom metadata into radar papers.
+  search terms, then parses Atom metadata into radar papers. Product adapters
+  record the active default category scope in non-secret collection config
+  whenever the `arxiv` source is selected.
 - `collect_dblp_publications(...)` calls DBLP publication search XML and parses
   bibliographic metadata into radar papers.
 - `collect_dblp_author_publications(...)` tracks configured DBLP person PIDs
@@ -173,6 +180,11 @@ Current implemented collectors:
   sources as `not_run` instead of attempting doomed collector calls. Runs with
   only blocked sources are reported as `blocked`; mixed successful and skipped
   sources are reported as `partial`.
+- `build_radar_preflight_payload(...)` and
+  `radar_scoring_profile_summary(...)` provide a shared read-only settings
+  contract for Personal and Team scheduled runs. The payload includes selected
+  sources, source policy/readiness, non-secret collection config, and the active
+  relevance scoring profile summary without starting collectors or calling AI.
 - `radar_run_health_action(...)` turns latest-run status, source readiness,
   source coverage, errors, and freshness into one machine-readable next step for
   daily queue JSON, CLI output, and Team web health chips.
@@ -190,7 +202,8 @@ unauthorized sources must not be downloaded or redistributed.
 `assess_pdf_access(...)` records the download decision separately from metadata
 collection. Its record includes `source_url`, `access_date`, `license`,
 `oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`,
-`access_kind`, and the reason why a PDF should or should not be downloaded.
+`access_kind`, the legal-access reason, and `download_reason` explaining whether
+the file was cached, skipped, or not legally downloadable.
 `access_kind` distinguishes local PDFs, arXiv/open repository PDFs, arXiv-only
 links, confirmed open-access PDFs, restricted publisher PDFs, DOI-only links,
 publisher-only links, and metadata-only records.
@@ -199,7 +212,7 @@ publisher-only links, and metadata-only records.
 product adapters. It only calls its injected fetcher when `assess_pdf_access`
 allows download, verifies the response looks like a PDF, writes the local file,
 and returns an updated PDF-access record with `local_pdf_path`, `sha256`, byte
-count, and download status.
+count, download status, and `download_reason`.
 
 `cache_recommendation_pdfs(...)` applies that policy to already-ranked
 recommendations, which lets products cache only papers worth attention instead

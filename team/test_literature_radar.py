@@ -92,6 +92,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(papers[0]["item"]["pdf_access"]["can_download"])
             self.assertEqual(papers[0]["item"]["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(papers[0]["item"]["pdf_access"]["reason"], "arxiv_or_open_repository")
+            self.assertEqual(papers[0]["item"]["pdf_access"]["download_reason"], "download_not_requested")
             self.assertEqual(papers[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
             self.assertEqual(
                 papers[0]["item"]["radar"]["recommendation"]["score"],
@@ -328,6 +329,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             stored_run = database.get_literature_radar_run(result["run_id"])
             self.assertEqual(stored_run["collection_config"]["max_results"], 2)
             self.assertEqual(stored_run["collection_config"]["recommendation_limit"], 10)
+            self.assertEqual(
+                stored_run["collection_config"]["arxiv_categories"],
+                ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
+            )
             self.assertEqual(stored_run["collection_config"]["conference_year"], 2026)
             self.assertFalse(stored_run["collection_config"]["cache_pdfs"])
             self.assertNotIn("semantic_scholar_api_key", stored_run["collection_config"])
@@ -349,6 +354,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["context_record_count"], 1)
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 0)
+            self.assertEqual(pipeline_by_phase["attention_summary"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["long_term_storage"]["metrics"]["storage_target"], "team_sqlite")
 
     def test_run_team_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
@@ -383,6 +389,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             pdf_access = result["recommendations"][0]["pdf_access"]
             self.assertEqual(seen_urls, ["https://arxiv.org/pdf/2601.00033.pdf"])
             self.assertTrue(pdf_access["downloaded"])
+            self.assertEqual(pdf_access["download_reason"], "downloaded_to_cache")
             self.assertTrue(Path(pdf_access["local_pdf_path"]).exists())
             stored_paper = database.list_literature_radar_papers(limit=1)[0]
             self.assertTrue(stored_paper["pdf_access"]["downloaded"])
@@ -509,14 +516,19 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("LLM security", context["matched_interest_terms"])
             self.assertEqual(context["related_items"][0]["title"], "Agentic Security Baseline")
             self.assertIn("Related to existing context", context["relationship_summary"])
+            self.assertIn("attention_summary", result["recommendations"][0])
+            self.assertIn("agentic security", result["recommendations"][0]["attention_summary"]["why_attention"])
             self.assertIn("Context: Matches active interests", result["report"])
+            self.assertIn("Attention:", result["report"])
             stored = database.list_literature_radar_recommendations(result["run_id"])[0]
             self.assertEqual(stored["context"]["related_items"][0]["title"], "Agentic Security Baseline")
+            self.assertIn("attention_summary", stored)
             stored_run = database.get_literature_radar_run(result["run_id"])
             pipeline_by_phase = {record["phase"]: record for record in stored_run["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["related_item_count"], 1)
+            self.assertEqual(pipeline_by_phase["attention_summary"]["status"], "succeeded")
 
     def test_run_team_literature_radar_links_recommendations_to_watched_radar_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1318,6 +1330,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(direct_queue["latest_run"]["health_action"]["action"], "review_queue")
             self.assertEqual(direct_queue["latest_run"]["health_action"]["severity"], "good")
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertIn("attention_summary", queue_result["papers"][0])
+            self.assertIn("why_attention", queue_result["papers"][0]["attention_summary"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertEqual(queue_result["links"]["radar"], "/radar")
@@ -1726,8 +1740,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "max_results": 7,
                     "limit": 3,
                     "source_contact_email": "radar@example.org",
+                    "venue_profiles": ["systems"],
+                    "openreview_venue_profiles": ["iclr"],
                 },
             )
+            database.upsert_team_interest_keyword(keyword="system security", weight=70)
+            database.upsert_team_interest_keyword(keyword="agentic security", weight=90)
 
             json_stdout = io.StringIO()
             with contextlib.redirect_stdout(json_stdout):
@@ -1763,11 +1781,21 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
         self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
+        self.assertIn(
+            {"keyword": "agentic security", "weight": 90},
+            payload["scoring_profile_summary"]["top_interests"],
+        )
         self.assertNotIn("run_id", payload)
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
         self.assertIn("Team Literature Radar Settings", text)
         self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Scoring: Team Interests", text)
+        self.assertIn("agentic security=90", text)
+        self.assertIn("Venue profiles:", text)
+        self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +1 more", text)
+        self.assertIn("OpenReview: ICLR", text)
         self.assertIn("Source policy:", text)
         self.assertIn("Source readiness:", text)
         self.assertIn("status=blocked", text)
@@ -1791,6 +1819,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             ],
         )
         self.assertEqual(preset_payload["source_readiness"]["status"], "ready")
+        self.assertGreaterEqual(preset_payload["scoring_profile_summary"]["interest_count"], 2)
+        self.assertEqual(
+            preset_payload["collection_config"]["arxiv_categories"],
+            ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
+        )
         self.assertNotIn("secret-key", json.dumps(preset_payload))
 
     def test_cli_radar_run_explicit_args_override_saved_defaults(self) -> None:

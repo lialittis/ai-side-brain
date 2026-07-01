@@ -27,10 +27,13 @@ from shared.literature_radar import (
     assess_pdf_access,
     build_radar_preflight_payload,
     build_radar_review_queue,
+    openreview_venue_profile_selection_summary,
+    radar_dblp_venue_profile_selection_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_run_freshness,
     radar_run_health_action,
+    radar_scoring_profile_summary,
     radar_source_coverage_summary,
     radar_source_policy_summary,
     radar_source_option_metadata,
@@ -48,6 +51,7 @@ from team.literature_radar import (
     import_radar_recommendation,
     run_team_literature_radar,
     team_radar_collection_config,
+    team_radar_scoring_profile,
     team_radar_source_presets,
 )
 from team.research_ai import analyze_submitted_item
@@ -609,6 +613,10 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .radar-ai-summary p {{ margin: 0 0 5px; }}
     .radar-ai-summary p:last-child {{ margin-bottom: 0; }}
+    .radar-attention {{
+      border-left-color: #2f6fed;
+      background: #f3f7ff;
+    }}
     .radar-context {{
       display: grid;
       gap: 5px;
@@ -892,6 +900,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     chips = [
         render_radar_metric_chip("preset", radar_source_preset_label(settings)),
         render_radar_metric_chip("sources", radar_list_preview(radar_source_setting_labels(settings), limit=3)),
+        render_radar_metric_chip("scoring", radar_settings_scoring_label(database)),
         render_radar_metric_chip("max/source", settings["max_results"]),
         render_radar_metric_chip("recommendations", settings["limit"]),
         render_radar_metric_chip("summaries", "yes" if settings.get("summarize") else "no"),
@@ -940,6 +949,20 @@ def radar_tracker_count(settings: dict[str, Any]) -> int:
     return sum(len(settings.get(key) or []) for key in RADAR_LIST_SETTING_KEYS)
 
 
+def radar_settings_scoring_label(database: TeamResearchDatabase) -> str:
+    summary = radar_scoring_profile_summary(team_radar_scoring_profile(database.list_team_interest_keywords()))
+    interests = summary.get("top_interests") if isinstance(summary.get("top_interests"), list) else []
+    parts = [
+        f"{interest.get('keyword')}={interest.get('weight')}"
+        for interest in interests[:3]
+        if isinstance(interest, dict) and interest.get("keyword")
+    ]
+    if not parts:
+        return "no weighted interests"
+    suffix = f" +{len(interests) - 3}" if len(interests) > 3 else ""
+    return ", ".join(parts) + suffix
+
+
 def render_radar_settings_readiness(settings: dict[str, Any]) -> str:
     readiness = radar_source_readiness_summary(
         list(settings.get("sources") or []),
@@ -985,6 +1008,8 @@ def build_literature_radar_settings_payload(
         settings=settings,
         sources=source_ids,
         collection_config=collection_config,
+        scoring_profile=team_radar_scoring_profile(database.list_team_interest_keywords()),
+        venue_profile_summary=radar_settings_venue_profile_summary(settings),
         source_preset_label=radar_source_preset_label(settings),
         links={
             "html": "/radar",
@@ -1001,6 +1026,15 @@ def build_literature_radar_settings_payload(
         if isinstance(option, dict)
     ]
     return payload
+
+
+def radar_settings_venue_profile_summary(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "dblp_openalex": radar_dblp_venue_profile_selection_summary(list(settings.get("venue_profiles") or [])),
+        "openreview": openreview_venue_profile_selection_summary(
+            list(settings.get("openreview_venue_profiles") or [])
+        ),
+    }
 
 
 def render_radar_readiness_missing(readiness: dict[str, Any]) -> str:
@@ -1378,17 +1412,25 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
 def render_radar_paper_latest_signal(latest: Any) -> str:
     if not isinstance(latest, dict) or not latest:
         return ""
-    signal_rows = "".join(render_radar_signal_line_row(line) for line in radar_latest_signal_lines(latest))
+    has_attention = bool(latest.get("attention_summary"))
+    lines = radar_latest_signal_lines(latest)
+    if has_attention:
+        lines = [line for line in lines if not normalize_inline_text(line).lower().startswith("attention:")]
+    signal_rows = "".join(render_radar_signal_line_row(line) for line in lines)
     return f"""
     <div class="radar-ai-summary">
       <p><strong>Latest signal:</strong> {relevance_pill(str(latest.get("label") or "needs_review"))} <span class="pill">Score: {html_escape(int(float(latest.get("score") or 0)))}</span></p>
       {signal_rows}
     </div>
+    {render_radar_attention_summary(latest)}
     """
 
 
-def render_radar_signal_lines(latest: Any) -> str:
-    signal_rows = "".join(render_radar_signal_line_row(line) for line in radar_latest_signal_lines(latest))
+def render_radar_signal_lines(latest: Any, *, include_attention: bool = True) -> str:
+    lines = radar_latest_signal_lines(latest)
+    if not include_attention:
+        lines = [line for line in lines if not normalize_inline_text(line).lower().startswith("attention:")]
+    signal_rows = "".join(render_radar_signal_line_row(line) for line in lines)
     if not signal_rows:
         return ""
     return f'<div class="radar-ai-summary radar-signal-lines">{signal_rows}</div>'
@@ -1399,6 +1441,30 @@ def render_radar_signal_line_row(line: str) -> str:
     if separator:
         return f"<p><strong>{html_escape(label)}:</strong> {html_escape(value)}</p>"
     return f"<p>{html_escape(line)}</p>"
+
+
+def render_radar_attention_summary(source: Any) -> str:
+    if not isinstance(source, dict):
+        return ""
+    attention = source.get("attention_summary") if isinstance(source.get("attention_summary"), dict) else {}
+    if not attention:
+        return ""
+    why = normalize_inline_text(attention.get("why_attention") or "")
+    interests = normalize_inline_text(attention.get("relationship_to_interests") or "")
+    existing = normalize_inline_text(attention.get("relationship_to_existing_work") or "")
+    why_now = normalize_inline_text(attention.get("why_now") or "")
+    if not any([why, interests, existing, why_now]):
+        return ""
+    rows = []
+    if why:
+        rows.append(f"<p><strong>Attention:</strong> {html_escape(why)}</p>")
+    if interests:
+        rows.append(f"<p><strong>Interests:</strong> {html_escape(interests)}</p>")
+    if existing:
+        rows.append(f"<p><strong>Context:</strong> {html_escape(existing)}</p>")
+    if why_now:
+        rows.append(f"<p><strong>Now:</strong> {html_escape(why_now)}</p>")
+    return f'<div class="radar-ai-summary radar-attention">{"".join(rows)}</div>'
 
 
 def render_radar_paper_import_control(
@@ -1931,15 +1997,17 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
     novelty = record.get("novelty") or recommendation.get("novelty") or {}
     context = record.get("context") or recommendation.get("context") or {}
     summary = record.get("summary") or recommendation.get("summary") or {}
+    attention_source = {"attention_summary": record.get("attention_summary") or recommendation.get("attention_summary") or {}}
     review = radar_review_from_record(record)
     imported_item_id = record.get("imported_item_id") or (record.get("import_result") or {}).get("item_id")
-    signal_lines = render_radar_signal_lines(recommendation)
+    signal_lines = render_radar_signal_lines(recommendation, include_attention=not bool(attention_source["attention_summary"]))
     return f"""
     <article class="radar-recommendation">
       <div><span class="radar-rank">{rank}</span></div>
       <div>
         <div class="radar-rec-title">{html_escape(title)}</div>
         <div class="meta">{html_escape(" · ".join(meta_parts))}</div>
+        {render_radar_attention_summary(attention_source)}
         {signal_lines or f'<p class="radar-reasons">{html_escape(why)}</p>'}
         {render_radar_context(context)}
         {render_radar_summary(summary)}
@@ -2430,7 +2498,8 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
         {pdf_access_html}
         {source_tags}
       </div>
-      {render_radar_signal_lines(latest)}
+      {render_radar_attention_summary(latest)}
+      {render_radar_signal_lines(latest, include_attention=not bool(latest.get("attention_summary")))}
       <div class="radar-links">
         {render_radar_links(paper)}
         {render_radar_paper_import_control(record, review_filter=review_filter, return_to="latest")}
@@ -2510,16 +2579,18 @@ def render_paper_radar_insight(item: dict[str, Any]) -> str:
         return ""
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
     context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+    attention = recommendation.get("attention_summary") if isinstance(recommendation.get("attention_summary"), dict) else {}
     summary_text = normalize_inline_text(summary.get("short_summary") or "")
     relation_text = normalize_inline_text(summary.get("relationship_to_interests") or "")
     why_text = normalize_inline_text(recommendation.get("why_relevant") or "")
     context_text = normalize_inline_text(context.get("relationship_summary") or "")
+    attention_text = normalize_inline_text(attention.get("why_attention") or "")
     matched_terms = [
         normalize_inline_text(term)
         for term in recommendation.get("matched_positive_keywords") or []
         if normalize_inline_text(term)
     ]
-    if not any([summary_text, relation_text, why_text, context_text, matched_terms]):
+    if not any([summary_text, relation_text, why_text, context_text, attention_text, matched_terms]):
         return ""
     label = str(recommendation.get("label") or "needs_review")
     score = recommendation.get("score")
@@ -2535,19 +2606,26 @@ def render_paper_radar_insight(item: dict[str, Any]) -> str:
         if normalize_inline_text(line)
     ]
     if stored_signal_lines:
+        if attention:
+            stored_signal_lines = [
+                line for line in stored_signal_lines if not line.lower().startswith("attention:")
+            ]
         signal_rows = "".join(render_radar_signal_line_row(line) for line in stored_signal_lines)
         return f"""
         <div class="radar-ai-summary paper-radar-insight">
           <p><strong>Radar insight:</strong> {relevance_pill(label)}<span class="pill">Radar{html_escape(score_text)}</span></p>
           {signal_rows}
         </div>
+        {render_radar_attention_summary(recommendation)}
         """
     matched_html = (
         f"<p><strong>Matched:</strong> {html_escape(', '.join(matched_terms[:6]))}</p>"
         if matched_terms
         else ""
     )
+    attention_html = render_radar_attention_summary(recommendation)
     return f"""
+    {attention_html}
     <div class="radar-ai-summary paper-radar-insight">
       <p><strong>Radar insight:</strong> {relevance_pill(label)}<span class="pill">Radar{html_escape(score_text)}</span></p>
       {f'<p><strong>Summary:</strong> {html_escape(summary_text)}</p>' if summary_text else ''}
