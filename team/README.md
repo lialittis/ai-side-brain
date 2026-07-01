@@ -50,7 +50,13 @@ python team/research_cli.py demo
 Launch the team-member web UI:
 
 ```bash
-python team/research_web.py
+scripts/start_research_web.sh
+```
+
+Stop it:
+
+```bash
+scripts/stop_research_web.sh
 ```
 
 Open:
@@ -61,7 +67,7 @@ http://127.0.0.1:8790
 
 The local MVP runs shared source intake, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation without external API calls.
 
-The CLI remains the admin/local-control surface. Team members should use the web UI for intake, review, project library, and brief workflows.
+The CLI remains the admin/local-control surface. Team members should use the web UI for the two simplest daily workflows: scanning the latest relevant papers by tag, and submitting either one paper link or one PDF.
 
 Useful commands:
 
@@ -76,11 +82,10 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 
 Web UI surfaces:
 
-- dashboard with intake form and review queue;
-- manual research item submission;
-- item review page with card, relevance, and accept form;
-- project library page;
-- Markdown brief page.
+- Latest Relevant Papers page with tag filtering and paper/PDF links;
+- Submit page with only two choices: paste one paper link, or upload one PDF.
+
+PDF uploads are stored locally under ignored Team state. The current MVP derives a placeholder title from the link or PDF filename; AI metadata extraction, tagging, and full PDF text extraction are Research Core TODOs.
 
 Default local state:
 

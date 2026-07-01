@@ -51,13 +51,13 @@ Monday 09:10
 Alice finds an arXiv paper about tunable emissivity.
 
 Monday 09:11
-Alice adds the arXiv URL through the browser extension or CLI.
+Alice opens the Submit page, pastes the arXiv URL, and submits it.
 
 Monday 09:12
-Side-Brain fetches metadata, extracts text, creates a research card, screens it against the "dynamic radiative cooling" topic, and marks it "possibly_relevant".
+Side-Brain fetches metadata, extracts text, creates a research card, screens it against the "dynamic radiative cooling" topic, and adds tags such as `radiative-cooling` and `tunable-emissivity`.
 
 Monday 10:00
-Bob opens the review inbox, sees why the paper matched the topic, checks the source trace, and accepts it into the project library.
+Bob opens Latest Relevant Papers, filters by `tunable-emissivity`, and opens the paper link from the list.
 
 Monday 10:03
 Bob assigns Alice to read it and answer: "Does this provide a useful tunable-emissivity benchmark?"
@@ -66,7 +66,7 @@ Wednesday 16:30
 Alice adds a note and marks the item "useful".
 
 Friday 17:00
-The weekly brief includes the paper, Alice's note, the relevance reason, and a follow-up action for the project meeting.
+The richer future workflow can add reader assignment, notes, and weekly briefs on top of this same submitted item.
 ```
 
 ## Access Formats
@@ -76,7 +76,7 @@ Team members should be able to access Team Side-Brain through multiple formats, 
 | Format | Best For | Example |
 | --- | --- | --- |
 | CLI | local MVP, power users, scripts | `team research add --doi ...` |
-| Web dashboard | daily review, project library, search, briefs | `http://127.0.0.1:8790` locally |
+| Web UI | latest relevant papers, tag filtering, link/PDF submission | `http://127.0.0.1:8790` locally |
 | Browser extension/bookmarklet | capturing papers while browsing | "Save to Team Side-Brain" button |
 | Zotero sync | importing existing libraries and keeping metadata current | sync collection `DRC` |
 | Upload folder | batch PDF import | drop PDFs into `team/uploads/inbox/` |
@@ -84,7 +84,7 @@ Team members should be able to access Team Side-Brain through multiple formats, 
 | Weekly Markdown brief | async team reading | `team/briefs/YYYY-WW.md` |
 | API | automation and future integrations | `POST /team/research/sources` |
 
-The first implementation is admin CLI plus local SQLite plus a team-member web UI. The product should still be designed so the same actions later appear in deployed dashboards and integrations.
+The first implementation is admin CLI plus local SQLite plus a team-member web UI with two pages: Latest Relevant Papers and Submit. The product should still be designed so the same actions later appear in deployed dashboards and integrations.
 
 ## Interaction Model
 
@@ -92,10 +92,10 @@ The system should expose the same core actions everywhere:
 
 | Action | CLI | Web UI | Integration |
 | --- | --- | --- | --- |
-| Add source | `team research add` | intake form | browser/Zotero/chat/API |
-| Review inbox | `team research inbox` | review queue | daily notification |
-| Inspect item | `team research show item_xxx` | item detail page | shared item link |
-| Accept/reject | `team research accept/reject` | review buttons | approval action |
+| Add source | `team research add` | Submit page | browser/Zotero/chat/API |
+| Browse latest relevant papers | `team research library` | Latest Relevant Papers page | daily notification |
+| Inspect item | `team research show item_xxx` | paper/PDF link from latest list | shared item link |
+| Accept/reject | `team research accept/reject` | future review buttons | approval action |
 | Assign reader | `team research assign` | assignment panel | Slack/email notification |
 | Add note | `team research note` | notes panel | comment import |
 | Search | `team research search` | search page | API |
@@ -187,6 +187,11 @@ Collection rules:
 ## Concrete Product Views
 
 The later web dashboard should be built around work surfaces, not generic tables.
+
+Current MVP surfaces:
+
+- Latest Relevant Papers: one scan-friendly page with newest relevant items, customized tags, relevance label, and open link/PDF actions.
+- Submit: two source-only choices, paste one paper URL or upload one PDF. The backend should fill metadata, tags, topic routing, and summaries.
 
 ### Intake
 
@@ -297,10 +302,10 @@ Add source
 Expected commands for local MVP:
 
 ```bash
-python team/research_web.py
+scripts/start_research_web.sh
 ```
 
-Team members can use the dashboard intake form instead of CLI. The CLI remains available for admin/local workflows:
+Team members can use the Submit page instead of CLI. The CLI remains available for admin/local workflows:
 
 ```bash
 python team/research_cli.py add-manual --title "..." --abstract "..."
@@ -343,7 +348,7 @@ Open review inbox
 Expected commands for local MVP:
 
 ```bash
-python team/research_web.py
+scripts/start_research_web.sh
 ```
 
 Team members review items in the browser. Admin CLI equivalents:
@@ -566,12 +571,8 @@ Search
 Current local web UI already covers:
 
 ```text
-Dashboard
-Manual Intake
-Review Queue
-Research Item
-Project Library
-Weekly Brief
+Latest Relevant Papers
+Submit Link/PDF
 ```
 
 ## What Makes It Useful

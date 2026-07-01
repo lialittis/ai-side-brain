@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Interactive web UI for Team Research MVP."""
+"""Simple team-member web UI for relevant papers and submissions."""
 
 from __future__ import annotations
 
 import argparse
+from email.parser import BytesParser
+from email.policy import default as email_policy
+import hashlib
 from html import escape
 import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import re
 import sys
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -17,13 +21,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.research import example_topic_profiles, topic_profile_by_id
+from shared.research import topic_profile_by_id
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8790
+DEFAULT_PROJECT = "team-library"
+UPLOAD_DIR = ROOT / "team" / "uploads" / "research"
 
 
 def html_escape(value: Any) -> str:
@@ -32,28 +38,58 @@ def html_escape(value: Any) -> str:
     return escape(str(value), quote=True)
 
 
-def url_for(path: str, **query: str) -> str:
-    if not query:
-        return path
-    encoded = "&".join(f"{quote(key)}={quote(value)}" for key, value in query.items() if value is not None)
-    return f"{path}?{encoded}" if encoded else path
+def parse_tags(value: str) -> list[str]:
+    return sorted({tag.strip().lower() for tag in re.split(r"[,#]", value or "") if tag.strip()})
 
 
-def parse_form(body: bytes) -> dict[str, str]:
-    parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
-    return {key: values[-1].strip() for key, values in parsed.items()}
+def safe_filename(filename: str) -> str:
+    name = Path(filename or "paper.pdf").name
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip(".-")
+    return cleaned or "paper.pdf"
 
 
-def page(title: str, body: str, *, active: str = "dashboard") -> str:
-    nav_items = [
-        ("dashboard", "/", "Dashboard"),
-        ("inbox", "/inbox", "Review"),
-        ("library", "/library", "Library"),
-        ("brief", "/brief", "Brief"),
-    ]
+def readable_title(value: str) -> str:
+    cleaned = re.sub(r"\.pdf$", "", value.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"[-_]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ./")
+    return cleaned or "Untitled paper"
+
+
+def title_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    path = unquote(parsed.path).strip("/")
+    if path:
+        return readable_title(path.split("/")[-1])
+    return parsed.netloc or url
+
+
+def title_from_filename(filename: str) -> str:
+    return readable_title(Path(safe_filename(filename)).stem)
+
+
+def save_uploaded_pdf(filename: str, content: bytes, upload_dir: Path | None = None) -> str:
+    if not content:
+        raise ValueError("Uploaded PDF is empty.")
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    safe_name = safe_filename(filename)
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name = f"{safe_name}.pdf"
+    upload_dir = upload_dir or UPLOAD_DIR
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    path = upload_dir / f"{digest}-{safe_name}"
+    path.write_bytes(content)
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def page(title: str, body: str, *, active: str = "papers") -> str:
     nav = "\n".join(
-        f'<a class="nav-item {"active" if key == active else ""}" href="{href}">{label}</a>'
-        for key, href, label in nav_items
+        [
+            f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
+            f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
+        ]
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -63,16 +99,15 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
   <title>{html_escape(title)} - Team Side-Brain</title>
   <style>
     :root {{
-      --bg: #f7f8fa;
+      --bg: #f6f7f9;
       --panel: #ffffff;
-      --text: #1d2733;
+      --text: #202832;
       --muted: #667085;
       --line: #d8dde6;
-      --strong: #0f5b5f;
-      --accent: #2f6fed;
+      --accent: #0f766e;
+      --accent-2: #315bc7;
       --good: #18794e;
       --warn: #a15c00;
-      --danger: #b42318;
       --shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
     }}
     * {{ box-sizing: border-box; }}
@@ -80,17 +115,13 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 14px/1.48 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }}
-    a {{ color: var(--accent); text-decoration: none; }}
+    a {{ color: var(--accent-2); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
-    .shell {{ display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }}
-    .sidebar {{
-      background: #18222f;
-      color: #f9fafb;
-      padding: 18px 14px;
-    }}
-    .brand {{ font-size: 17px; font-weight: 700; margin: 0 0 4px; }}
+    .shell {{ display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }}
+    .sidebar {{ background: #18222f; color: #f9fafb; padding: 18px 14px; }}
+    .brand {{ font-size: 17px; font-weight: 750; margin: 0 0 4px; }}
     .subtitle {{ color: #b8c2d0; font-size: 12px; margin: 0 0 22px; }}
     .nav-item {{
       display: block;
@@ -98,42 +129,56 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
       padding: 9px 10px;
       border-radius: 6px;
       margin-bottom: 4px;
-      font-weight: 600;
+      font-weight: 650;
     }}
-    .nav-item:hover, .nav-item.active {{ background: #273548; color: #ffffff; text-decoration: none; }}
-    .content {{ padding: 22px 28px 40px; max-width: 1280px; width: 100%; }}
+    .nav-item:hover, .nav-item.active {{ background: #273548; color: #fff; text-decoration: none; }}
+    .content {{ padding: 24px 28px 44px; max-width: 1180px; width: 100%; }}
     .topline {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }}
     h1 {{ font-size: 24px; margin: 0 0 4px; letter-spacing: 0; }}
-    h2 {{ font-size: 16px; margin: 0 0 12px; letter-spacing: 0; }}
+    h2 {{ font-size: 16px; margin: 0 0 10px; letter-spacing: 0; }}
     h3 {{ font-size: 14px; margin: 0 0 8px; letter-spacing: 0; }}
     .muted {{ color: var(--muted); }}
-    .grid {{ display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }}
-    .span-3 {{ grid-column: span 3; }}
-    .span-4 {{ grid-column: span 4; }}
-    .span-5 {{ grid-column: span 5; }}
-    .span-7 {{ grid-column: span 7; }}
-    .span-8 {{ grid-column: span 8; }}
-    .span-12 {{ grid-column: span 12; }}
+    .notice {{ background: #eef4ff; color: #24427a; border: 1px solid #c7d7fe; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }}
     .panel {{
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 14px;
+      margin-bottom: 14px;
     }}
-    .metric {{ font-size: 26px; font-weight: 750; margin: 0; }}
-    .label {{ color: var(--muted); font-size: 12px; font-weight: 650; text-transform: uppercase; }}
-    .row {{
+    .toolbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }}
+    .submit-options {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: start;
+    }}
+    .submit-option {{
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }}
+    .paper {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 14px;
-      padding: 12px 0;
+      padding: 14px 0;
       border-top: 1px solid var(--line);
     }}
-    .row:first-child {{ border-top: 0; padding-top: 0; }}
-    .title {{ font-weight: 700; color: var(--text); }}
+    .paper:first-child {{ border-top: 0; padding-top: 0; }}
+    .paper-title {{ font-size: 16px; font-weight: 750; color: var(--text); }}
     .meta {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
-    .pill {{
+    .abstract {{ margin: 8px 0 0; color: #344054; }}
+    .tags {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }}
+    .tag, .pill {{
       display: inline-block;
       border: 1px solid var(--line);
       background: #f4f6f8;
@@ -147,19 +192,21 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
     .pill.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
     .pill.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
-    button, .button {{
+    .button, button {{
       border: 1px solid #b7c3d2;
-      background: #ffffff;
+      background: #fff;
       color: #1d2733;
       border-radius: 6px;
       padding: 7px 10px;
+      font: inherit;
       font-weight: 700;
       cursor: pointer;
-      font: inherit;
       text-decoration: none;
     }}
-    button.primary, .button.primary {{ background: var(--strong); border-color: var(--strong); color: white; }}
-    button:hover, .button:hover {{ filter: brightness(0.98); text-decoration: none; }}
+    .button.primary, button.primary {{ background: var(--accent); border-color: var(--accent); color: #fff; }}
+    .form-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+    .field {{ margin-bottom: 12px; }}
+    label {{ display: block; font-weight: 700; margin-bottom: 4px; font-size: 12px; color: #344054; }}
     input, textarea, select {{
       width: 100%;
       border: 1px solid #b7c3d2;
@@ -169,28 +216,14 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
       background: #fff;
       color: var(--text);
     }}
-    textarea {{ min-height: 116px; resize: vertical; }}
-    form .field {{ margin-bottom: 10px; }}
-    form label {{ display: block; font-weight: 700; margin-bottom: 4px; font-size: 12px; color: #344054; }}
-    .two {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
-    pre {{
-      white-space: pre-wrap;
-      background: #111827;
-      color: #f9fafb;
-      padding: 14px;
-      border-radius: 8px;
-      overflow: auto;
-    }}
-    .notice {{ background: #eef4ff; color: #24427a; border: 1px solid #c7d7fe; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }}
-    .empty {{ color: var(--muted); border: 1px dashed var(--line); padding: 18px; border-radius: 8px; text-align: center; }}
+    textarea {{ min-height: 110px; resize: vertical; }}
+    .empty {{ color: var(--muted); border: 1px dashed var(--line); padding: 20px; border-radius: 8px; text-align: center; }}
     @media (max-width: 860px) {{
       .shell {{ grid-template-columns: 1fr; }}
-      .sidebar {{ position: static; }}
       .content {{ padding: 18px; }}
-      .span-3, .span-4, .span-5, .span-7, .span-8, .span-12 {{ grid-column: span 12; }}
-      .topline, .row {{ grid-template-columns: 1fr; display: grid; }}
+      .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
       .actions {{ justify-content: flex-start; }}
-      .two {{ grid-template-columns: 1fr; }}
+      .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -198,48 +231,13 @@ def page(title: str, body: str, *, active: str = "dashboard") -> str:
   <div class="shell">
     <aside class="sidebar">
       <p class="brand">Team Side-Brain</p>
-      <p class="subtitle">Research review workspace</p>
+      <p class="subtitle">Relevant papers library</p>
       <nav>{nav}</nav>
     </aside>
     <main class="content">{body}</main>
   </div>
 </body>
 </html>"""
-
-
-def status_pill(label: str | None) -> str:
-    value = label or "unknown"
-    cls = "good" if value in {"accepted", "highly_relevant"} else "warn" if value in {"needs_review", "possibly_relevant"} else ""
-    return f'<span class="pill {cls}">{html_escape(value)}</span>'
-
-
-def render_dashboard(database: TeamResearchDatabase, notice: str = "") -> str:
-    summary = database.dashboard_summary()
-    inbox = database.list_review_items()
-    projects = database.list_projects()
-    body = f"""
-    {render_topline("Research Dashboard", "Capture, review, and route research items.", "/inbox", "Open Review")}
-    {render_notice(notice)}
-    <section class="grid">
-      {metric("Total Items", summary["total_items"])}
-      {metric("Needs Review", summary["needs_review"])}
-      {metric("Accepted", summary["accepted"])}
-      {metric("Library Items", summary["library_items"])}
-      <div class="panel span-5">
-        <h2>Add research item</h2>
-        {render_add_form()}
-      </div>
-      <div class="panel span-7">
-        <h2>Review queue</h2>
-        {render_inbox_rows(inbox[:6])}
-      </div>
-      <div class="panel span-12">
-        <h2>Project libraries</h2>
-        {render_projects(projects)}
-      </div>
-    </section>
-    """
-    return page("Research Dashboard", body, active="dashboard")
 
 
 def render_topline(title: str, subtitle: str, action_href: str | None = None, action_label: str = "") -> str:
@@ -259,274 +257,213 @@ def render_notice(notice: str) -> str:
     return f'<div class="notice">{html_escape(notice)}</div>' if notice else ""
 
 
-def metric(label: str, value: Any) -> str:
-    return f"""
-    <div class="panel span-3">
-      <div class="label">{html_escape(label)}</div>
-      <p class="metric">{html_escape(value)}</p>
+def relevance_pill(label: str | None) -> str:
+    value = label or "unknown"
+    css = "good" if value == "highly_relevant" else "warn" if value == "possibly_relevant" else ""
+    return f'<span class="pill {css}">{html_escape(value)}</span>'
+
+
+def render_latest_papers_page(database: TeamResearchDatabase, *, tag: str | None = None, notice: str = "") -> str:
+    papers = database.list_latest_relevant_papers(tag=tag)
+    tags = database.list_tags()
+    body = f"""
+    {render_topline("Latest Relevant Papers", "Recent papers and resources screened as relevant, with team tags and links.", "/submit", "Submit Paper")}
+    {render_notice(notice)}
+    <div class="panel">
+      <form class="toolbar" method="get" action="/">
+        <div>
+          <label for="tag">Filter by tag</label>
+          <select id="tag" name="tag">
+            <option value="">All tags</option>
+            {render_tag_options(tags, tag)}
+          </select>
+        </div>
+        <button type="submit">Apply</button>
+      </form>
+      {render_paper_list(papers)}
     </div>
     """
+    return page("Latest Relevant Papers", body, active="papers")
 
 
-def render_add_form() -> str:
-    topic_options = "\n".join(
-        f'<option value="{html_escape(profile["id"])}">{html_escape(profile["name"])}</option>'
-        for profile in example_topic_profiles()
+def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(tag["tag"])}" {"selected" if tag["tag"] == selected else ""}>{html_escape(tag["tag"])} ({tag["item_count"]})</option>'
+        for tag in tags
     )
-    return f"""
-    <form method="post" action="/add-manual">
-      <div class="field">
-        <label for="title">Title</label>
-        <input id="title" name="title" required placeholder="Paper or resource title">
-      </div>
-      <div class="field">
-        <label for="abstract">Abstract or note</label>
-        <textarea id="abstract" name="abstract" required placeholder="Paste an abstract, summary, or note"></textarea>
-      </div>
-      <div class="two">
-        <div class="field">
-          <label for="author">Author</label>
-          <input id="author" name="author" placeholder="Optional">
-        </div>
-        <div class="field">
-          <label for="year">Year</label>
-          <input id="year" name="year" inputmode="numeric" placeholder="Optional">
-        </div>
-      </div>
-      <div class="two">
-        <div class="field">
-          <label for="topic">Topic</label>
-          <select id="topic" name="topic">{topic_options}</select>
-        </div>
-        <div class="field">
-          <label for="submitted_by">Submitted by</label>
-          <input id="submitted_by" name="submitted_by" value="team-member">
-        </div>
-      </div>
-      <div class="field">
-        <label for="project">Project hint</label>
-        <input id="project" name="project" placeholder="dynamic-radiative-cooling">
-      </div>
-      <button class="primary" type="submit">Add To Review</button>
-    </form>
-    """
 
 
-def render_inbox_rows(items: list[dict[str, Any]]) -> str:
-    if not items:
-        return '<div class="empty">No items need review.</div>'
+def render_paper_list(papers: list[dict[str, Any]]) -> str:
+    if not papers:
+        return '<div class="empty">No relevant papers yet. Submit a link or PDF to start the library.</div>'
     rows = []
-    for item in items:
+    for paper in papers:
+        item = paper["item"]
+        screening = paper["screening"]
+        tags = paper["tags"]
+        link = paper.get("link")
+        abstract = item.get("abstract") or ""
+        link_html = render_paper_link(link)
+        tag_html = "".join(f'<a class="tag" href="/?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags)
         rows.append(
             f"""
-            <div class="row">
+            <article class="paper">
               <div>
-                <a class="title" href="/item/{quote(item['item_id'])}">{html_escape(item['title'])}</a>
-                <div class="meta">{html_escape(item.get('year') or 'n.d.')} · submitted by {html_escape(item.get('submitted_by') or 'unknown')}</div>
+                <div class="paper-title">{html_escape(item["title"])}</div>
+                <div class="meta">
+                  {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
+                </div>
+                <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
+                <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
               </div>
               <div class="actions">
-                {status_pill(item.get('review_status'))}
-                {status_pill(item.get('relevance_label'))}
-                <a class="button" href="/item/{quote(item['item_id'])}">Review</a>
+                {relevance_pill(screening.get("label"))}
+                {link_html}
               </div>
-            </div>
+            </article>
             """
         )
     return "\n".join(rows)
 
 
-def render_projects(projects: list[dict[str, Any]]) -> str:
-    if not projects:
-        return '<div class="empty">No project library entries yet.</div>'
-    return "\n".join(
-        f"""
-        <div class="row">
-          <div>
-            <a class="title" href="/library?project={quote(project['project_id'])}">{html_escape(project['project_id'])}</a>
-            <div class="meta">{project['item_count']} item(s)</div>
-          </div>
-          <div class="actions">
-            <a class="button" href="/brief?project={quote(project['project_id'])}">Brief</a>
-          </div>
-        </div>
-        """
-        for project in projects
-    )
+def render_paper_link(link: str | None) -> str:
+    if not link:
+        return ""
+    if link.startswith("http://") or link.startswith("https://"):
+        return f'<a class="button" href="{html_escape(link)}" target="_blank" rel="noreferrer">Open Link</a>'
+    return f'<a class="button" href="/files/{quote(link)}" target="_blank" rel="noreferrer">Open PDF</a>'
 
 
-def render_inbox_page(database: TeamResearchDatabase) -> str:
+def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
     body = f"""
-    {render_topline("Review Queue", "Items waiting for team judgment.", "/", "Add Item")}
-    <div class="panel">{render_inbox_rows(database.list_review_items())}</div>
-    """
-    return page("Review Queue", body, active="inbox")
-
-
-def render_item_page(database: TeamResearchDatabase, item_id: str, notice: str = "") -> str:
-    bundle = database.get_bundle(item_id)
-    item = bundle["item"]
-    team_record = bundle.get("team_record") or {}
-    card = bundle.get("card") or {}
-    screening = bundle.get("screening") or {}
-    library_entries = bundle.get("library_entries") or []
-    findings = "".join(f"<li>{html_escape(finding)}</li>" for finding in card.get("findings", []))
-    actions = "".join(f"<li>{html_escape(action)}</li>" for action in screening.get("suggested_actions", []))
-    matched = ", ".join(screening.get("matched_terms", [])) or "none"
-    body = f"""
-    {render_topline(item["title"], f"Item {item['id']}", "/inbox", "Back To Review")}
+    {render_topline("Submit To Library", "Add one paper link or one PDF.", "/", "Latest Papers")}
     {render_notice(notice)}
-    <section class="grid">
-      <div class="panel span-8">
-        <h2>Research card</h2>
-        <p><strong>Question:</strong> {html_escape(card.get("research_question", ""))}</p>
-        <p><strong>Method:</strong> {html_escape(card.get("method", ""))}</p>
-        <p><strong>Data:</strong> {html_escape(card.get("data", ""))}</p>
-        <h3>Findings</h3>
-        <ul>{findings}</ul>
-        <p><strong>Limitations:</strong> {html_escape("; ".join(card.get("limitations", [])))}</p>
-      </div>
-      <div class="panel span-4">
-        <h2>Review</h2>
-        <p>{status_pill(team_record.get("review_status"))} {status_pill(screening.get("label"))}</p>
-        <p><strong>Score:</strong> {html_escape(screening.get("score", "n/a"))}</p>
-        <p><strong>Matched:</strong> {html_escape(matched)}</p>
-        <h3>Accept to project</h3>
-        <form method="post" action="/accept">
-          <input type="hidden" name="item_id" value="{html_escape(item['id'])}">
+    <div class="panel">
+      <div class="submit-options">
+        <form class="submit-option" method="post" action="/submit">
+          <input type="hidden" name="source_type" value="url">
           <div class="field">
-            <label for="project">Project</label>
-            <input id="project" name="project" required value="{html_escape((screening.get('suggested_contexts') or ['dynamic-radiative-cooling'])[0])}">
+            <label for="url">Paper link</label>
+            <input id="url" name="url" type="url" required placeholder="https://arxiv.org/abs/...">
           </div>
+          <button class="primary" type="submit">Add Link</button>
+        </form>
+        <form class="submit-option" method="post" action="/submit" enctype="multipart/form-data">
+          <input type="hidden" name="source_type" value="pdf_upload">
           <div class="field">
-            <label for="actor">Reviewer</label>
-            <input id="actor" name="actor" value="team-member">
+            <label for="pdf">PDF file</label>
+            <input id="pdf" name="pdf" type="file" accept="application/pdf,.pdf" required>
           </div>
-          <div class="field">
-            <label for="reason">Why it matters</label>
-            <textarea id="reason" name="reason" placeholder="Short project relevance note"></textarea>
-          </div>
-          <button class="primary" type="submit">Accept</button>
+          <button class="primary" type="submit">Add PDF</button>
         </form>
       </div>
-      <div class="panel span-7">
-        <h2>Source and metadata</h2>
-        <p><strong>Authors:</strong> {html_escape(", ".join(item.get("authors", [])) or "unknown")}</p>
-        <p><strong>Year:</strong> {html_escape(item.get("year") or "n.d.")}</p>
-        <p><strong>Venue:</strong> {html_escape(item.get("venue") or "unknown")}</p>
-        <p class="muted">{html_escape(item.get("abstract") or "")}</p>
-      </div>
-      <div class="panel span-5">
-        <h2>Suggested actions</h2>
-        <ul>{actions}</ul>
-        <h3>Project entries</h3>
-        {render_item_library_entries(library_entries)}
-      </div>
-    </section>
-    """
-    return page("Research Item", body, active="inbox")
-
-
-def render_item_library_entries(entries: list[dict[str, Any]]) -> str:
-    if not entries:
-        return '<div class="empty">Not in a project library yet.</div>'
-    return "\n".join(
-        f'<p><a href="/library?project={quote(entry["project_id"])}">{html_escape(entry["project_id"])}</a> · {status_pill(entry.get("status"))}</p>'
-        for entry in entries
-    )
-
-
-def render_library_page(database: TeamResearchDatabase, project_id: str | None = None) -> str:
-    if not project_id:
-        projects = database.list_projects()
-        body = f"""
-        {render_topline("Project Libraries", "Accepted research by project.", "/", "Add Item")}
-        <div class="panel">{render_projects(projects)}</div>
-        """
-        return page("Project Libraries", body, active="library")
-
-    entries = database.list_library(project_id)
-    body = f"""
-    {render_topline(f"Library: {project_id}", "Project research items.", f"/brief?project={quote(project_id)}", "Open Brief")}
-    <div class="panel">{render_library_rows(entries)}</div>
-    """
-    return page("Project Library", body, active="library")
-
-
-def render_library_rows(entries: list[dict[str, Any]]) -> str:
-    if not entries:
-        return '<div class="empty">No items in this project library.</div>'
-    rows = []
-    for entry in entries:
-        item = entry["item"]
-        library = entry["library_entry"]
-        rows.append(
-            f"""
-            <div class="row">
-              <div>
-                <a class="title" href="/item/{quote(item['id'])}">{html_escape(item['title'])}</a>
-                <div class="meta">{html_escape(item.get('year') or 'n.d.')} · {html_escape(library.get('reason') or 'No reason recorded')}</div>
-              </div>
-              <div class="actions">{status_pill(library.get("status"))}</div>
-            </div>
-            """
-        )
-    return "\n".join(rows)
-
-
-def render_brief_page(database: TeamResearchDatabase, project_id: str | None = None) -> str:
-    projects = database.list_projects()
-    project_options = '<option value="">All projects</option>' + "\n".join(
-        f'<option value="{html_escape(project["project_id"])}" {"selected" if project["project_id"] == project_id else ""}>{html_escape(project["project_id"])}</option>'
-        for project in projects
-    )
-    markdown = database.generate_brief_markdown(project_id=project_id)
-    body = f"""
-    {render_topline("Weekly Brief", "Markdown summary generated from accepted and pending research.", None)}
-    <div class="panel">
-      <form method="get" action="/brief">
-        <div class="two">
-          <div class="field">
-            <label for="project">Project</label>
-            <select id="project" name="project">{project_options}</select>
-          </div>
-          <div class="field">
-            <label>&nbsp;</label>
-            <button class="primary" type="submit">Generate</button>
-          </div>
-        </div>
-      </form>
     </div>
-    <pre>{html_escape(markdown)}</pre>
     """
-    return page("Weekly Brief", body, active="brief")
+    return page("Submit To Library", body, active="submit")
 
 
-def add_manual_from_form(database: TeamResearchDatabase, form: dict[str, str]) -> str:
-    title = form.get("title", "")
-    abstract = form.get("abstract", "")
-    if not title or not abstract:
-        raise ValueError("Title and abstract are required.")
-    year = int(form["year"]) if form.get("year") else None
+def submit_research_item(
+    database: TeamResearchDatabase,
+    fields: dict[str, str],
+    *,
+    upload: tuple[str, bytes] | None = None,
+) -> str:
+    source_type = fields.get("source_type") or "url"
+    abstract = (fields.get("abstract") or "").strip()
+    topic_id = fields.get("topic") or "dynamic-radiative-cooling"
+    topic_profile = topic_profile_by_id(topic_id)
+    project_id = fields.get("project") or DEFAULT_PROJECT
+    submitted_by = fields.get("submitted_by") or "team-member"
+    tags = parse_tags(fields.get("tags", ""))
+
+    if source_type == "pdf_upload":
+        if upload is None:
+            raise ValueError("PDF upload source requires a PDF file.")
+        object_key = save_uploaded_pdf(upload[0], upload[1])
+        source_value = object_key
+        title = (fields.get("title") or "").strip() or title_from_filename(upload[0])
+        link_metadata = {"object_key": object_key}
+    else:
+        url = (fields.get("url") or "").strip()
+        if not url:
+            raise ValueError("URL source requires a paper link.")
+        source_type = "url"
+        source_value = url
+        title = (fields.get("title") or "").strip() or title_from_url(url)
+        link_metadata = {"url": url}
+
     metadata: dict[str, Any] = {
         "title": title,
         "abstract": abstract,
-        "authors": [form["author"]] if form.get("author") else [],
+        "authors": [],
         "item_type": "paper",
+        "tags": tags,
+        **link_metadata,
     }
-    if year is not None:
-        metadata["year"] = year
-    topic_id = form.get("topic") or "dynamic-radiative-cooling"
-    topic_profile = topic_profile_by_id(topic_id)
+    if fields.get("year"):
+        metadata["year"] = int(fields["year"])
+
     result = build_team_research_run(
-        source_type="manual",
-        source_value=title,
+        source_type=source_type,
+        source_value=source_value,
         metadata=metadata,
         topic_profile=topic_profile,
-        project_id=form.get("project") or topic_id,
-        submitted_by=form.get("submitted_by") or "team-member",
+        project_id=project_id,
+        submitted_by=submitted_by,
     )
     database.write_run(result, include_library_entry=False)
+    database.set_item_tags(result.item["id"], tags)
+    database.accept_item(
+        result.item["id"],
+        project_id=project_id,
+        actor=submitted_by,
+        reason=f"Submitted to {project_id} via web form.",
+    )
     return result.item["id"]
+
+
+def parse_urlencoded(body: bytes) -> dict[str, str]:
+    parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    return {key: values[-1].strip() for key, values in parsed.items()}
+
+
+def parse_multipart_form(handler: BaseHTTPRequestHandler, body: bytes) -> tuple[dict[str, str], tuple[str, bytes] | None]:
+    content_type = handler.headers.get("Content-Type", "")
+    message = BytesParser(policy=email_policy).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+    )
+    fields: dict[str, str] = {}
+    upload: tuple[str, bytes] | None = None
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        content = part.get_payload(decode=True) or b""
+        if filename:
+            if content:
+                upload = (filename, content)
+        else:
+            charset = part.get_content_charset() or "utf-8"
+            fields[name] = content.decode(charset, errors="replace").strip()
+    return fields, upload
+
+
+def parse_post_form(handler: BaseHTTPRequestHandler, body: bytes) -> tuple[dict[str, str], tuple[str, bytes] | None]:
+    content_type = handler.headers.get("Content-Type", "")
+    if content_type.startswith("multipart/form-data"):
+        return parse_multipart_form(handler, body)
+    return parse_urlencoded(body), None
+
+
+def safe_upload_path(relative_path: str) -> Path:
+    candidate = (ROOT / unquote(relative_path)).resolve()
+    upload_root = UPLOAD_DIR.resolve()
+    if upload_root not in candidate.parents and candidate != upload_root:
+        raise ValueError("Invalid file path.")
+    return candidate
 
 
 class ResearchWebHandler(BaseHTTPRequestHandler):
@@ -541,18 +478,13 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             notice = query.get("notice", [""])[0]
             if parsed.path == "/":
-                self.respond_html(render_dashboard(self.database, notice=notice))
-            elif parsed.path == "/inbox":
-                self.respond_html(render_inbox_page(self.database))
-            elif parsed.path.startswith("/item/"):
-                item_id = unquote(parsed.path.removeprefix("/item/"))
-                self.respond_html(render_item_page(self.database, item_id, notice=notice))
-            elif parsed.path == "/library":
-                project = query.get("project", [None])[0]
-                self.respond_html(render_library_page(self.database, project))
-            elif parsed.path == "/brief":
-                project = query.get("project", [None])[0] or None
-                self.respond_html(render_brief_page(self.database, project))
+                tag = query.get("tag", [None])[0] or None
+                self.respond_html(render_latest_papers_page(self.database, tag=tag, notice=notice))
+            elif parsed.path == "/submit":
+                self.respond_html(render_submit_page(self.database, notice=notice))
+            elif parsed.path.startswith("/files/"):
+                relative_path = parsed.path.removeprefix("/files/")
+                self.respond_file(safe_upload_path(relative_path))
             elif parsed.path == "/health":
                 self.respond_json({"success": True, "status": "ok"})
             else:
@@ -563,20 +495,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            form = parse_form(self.rfile.read(length))
+            fields, upload = parse_post_form(self, self.rfile.read(length))
             parsed = urlparse(self.path)
-            if parsed.path == "/add-manual":
-                item_id = add_manual_from_form(self.database, form)
-                self.redirect(url_for(f"/item/{item_id}", notice="Added to review queue."))
-            elif parsed.path == "/accept":
-                item_id = form.get("item_id", "")
-                project = form.get("project", "")
-                actor = form.get("actor") or "team-member"
-                reason = form.get("reason") or ""
-                if not item_id or not project:
-                    raise ValueError("Item and project are required.")
-                self.database.accept_item(item_id, project_id=project, actor=actor, reason=reason)
-                self.redirect(url_for(f"/item/{item_id}", notice=f"Accepted into {project}."))
+            if parsed.path == "/submit":
+                item_id = submit_research_item(self.database, fields, upload=upload)
+                self.redirect(f"/?notice={quote(f'Added {item_id} to the library.')}")
             else:
                 self.respond_html(page("Not Found", "<h1>Not Found</h1>", active=""), status=HTTPStatus.NOT_FOUND)
         except Exception as error:
@@ -598,19 +521,26 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def respond_file(self, path: Path) -> None:
+        if not path.exists() or not path.is_file():
+            self.respond_html(page("Not Found", "<h1>File Not Found</h1>", active=""), status=HTTPStatus.NOT_FOUND)
+            return
+        content = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def respond_error(self, error: Exception) -> None:
-        content = page(
-            "Error",
-            f"""
-            <div class="panel">
-              <h1>Request failed</h1>
-              <p class="muted">{html_escape(error)}</p>
-              <p><a class="button" href="/">Back to dashboard</a></p>
-            </div>
-            """,
-            active="",
+        self.respond_html(
+            page(
+                "Error",
+                f'<div class="panel"><h1>Request failed</h1><p class="muted">{html_escape(error)}</p><p><a class="button" href="/submit">Back to submit</a></p></div>',
+                active="",
+            ),
+            status=HTTPStatus.BAD_REQUEST,
         )
-        self.respond_html(content, status=HTTPStatus.BAD_REQUEST)
 
     def redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.SEE_OTHER)

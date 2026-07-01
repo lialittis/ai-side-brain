@@ -34,7 +34,7 @@ Current runnable local use case:
 
 ```bash
 python team/research_cli.py demo
-python team/research_web.py
+scripts/start_research_web.sh
 python team/research_cli.py inbox
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
@@ -49,14 +49,18 @@ The CLI remains the admin workflow. Other team members should use the interactiv
 http://127.0.0.1:8790
 ```
 
+Stop the local web UI with:
+
+```bash
+scripts/stop_research_web.sh
+```
+
 Current web UI features:
 
-- add manual research item;
-- review inbox;
-- inspect generated research card and relevance screening;
-- accept item into a project library;
-- view project library;
-- generate Markdown brief.
+- latest relevant papers page with customized tag filtering and paper/PDF links;
+- submit page with only two choices: paste one paper link, or upload one PDF.
+
+The current submit path derives a placeholder title from the link or PDF filename. AI metadata extraction, tagging, and full PDF text extraction are later Research Core features.
 
 ## Phase 2: Research Cards
 

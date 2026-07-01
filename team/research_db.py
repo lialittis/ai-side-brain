@@ -137,12 +137,21 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS item_tags (
+                    item_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (item_id, tag)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
                     ON project_library_entries(project_id, added_at);
                 CREATE INDEX IF NOT EXISTS idx_screening_item
                     ON relevance_screenings(item_id, screened_at);
+                CREATE INDEX IF NOT EXISTS idx_item_tags_tag
+                    ON item_tags(tag, item_id);
                 """
             )
 
@@ -327,6 +336,97 @@ class TeamResearchDatabase:
             }
             for row in rows
         ]
+
+    def set_item_tags(self, item_id: str, tags: list[str], *, now: datetime | None = None) -> None:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        normalized_tags = sorted({tag.strip().lower() for tag in tags if tag.strip()})
+        with self.connect() as connection:
+            connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item_id,))
+            connection.executemany(
+                "INSERT OR IGNORE INTO item_tags (item_id, tag, created_at) VALUES (?, ?, ?)",
+                [(item_id, tag, timestamp) for tag in normalized_tags],
+            )
+
+    def get_item_tags(self, item_id: str) -> list[str]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT tag FROM item_tags WHERE item_id = ? ORDER BY tag",
+                (item_id,),
+            ).fetchall()
+        return [row["tag"] for row in rows]
+
+    def list_tags(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tag, COUNT(*) AS item_count
+                FROM item_tags
+                GROUP BY tag
+                ORDER BY tag
+                """
+            ).fetchall()
+        return [{"tag": row["tag"], "item_count": row["item_count"]} for row in rows]
+
+    def list_latest_relevant_papers(
+        self,
+        *,
+        tag: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        params: list[Any] = []
+        tag_join = ""
+        tag_where = ""
+        if tag:
+            tag_join = "JOIN item_tags selected_tag ON selected_tag.item_id = i.id"
+            tag_where = "AND selected_tag.tag = ?"
+            params.append(tag.strip().lower())
+        params.append(limit)
+        query = f"""
+            SELECT
+                i.record_json AS item_json,
+                rs.record_json AS screening_json,
+                tr.record_json AS team_record_json,
+                ple.record_json AS library_json
+            FROM research_items i
+            JOIN relevance_screenings rs ON rs.item_id = i.id
+            LEFT JOIN team_research_records tr ON tr.item_id = i.id
+            LEFT JOIN project_library_entries ple ON ple.item_id = i.id
+            {tag_join}
+            WHERE (
+                rs.label IN ('highly_relevant', 'possibly_relevant')
+                OR (ple.status IS NOT NULL AND ple.status != 'archived')
+            )
+            {tag_where}
+            ORDER BY rs.screened_at DESC, i.created_at DESC
+            LIMIT ?
+        """
+        with self.connect() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        papers = []
+        seen: set[str] = set()
+        for row in rows:
+            item = loads(row["item_json"])
+            if item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            screening = loads(row["screening_json"])
+            team_record = loads(row["team_record_json"]) if row["team_record_json"] else None
+            library_entry = loads(row["library_json"]) if row["library_json"] else None
+            papers.append(
+                {
+                    "item": item,
+                    "screening": screening,
+                    "team_record": team_record,
+                    "library_entry": library_entry,
+                    "tags": self.get_item_tags(item["id"]),
+                    "link": item.get("url") or item.get("object_key"),
+                }
+            )
+        return papers
 
     def dashboard_summary(self) -> dict[str, Any]:
         self.initialize()

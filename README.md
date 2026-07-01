@@ -411,14 +411,14 @@ The first runnable Team adapter MVP is:
 
 ```bash
 python team/research_cli.py demo
-python team/research_web.py
+scripts/start_research_web.sh
 python team/research_cli.py inbox
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
 python team/research_cli.py brief --project dynamic-radiative-cooling
 ```
 
-The CLI is intended for admin/local control. Team members should use the web UI at:
+The CLI is intended for admin/local control. Team members should use the web UI for latest relevant papers, tag filtering, and source-only link/PDF submission at:
 
 ```text
 http://127.0.0.1:8790

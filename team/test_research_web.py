@@ -2,67 +2,126 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
-    add_manual_from_form,
-    render_brief_page,
-    render_dashboard,
-    render_item_page,
-    render_library_page,
+    render_latest_papers_page,
+    render_submit_page,
+    parse_post_form,
+    submit_research_item,
 )
 
 
 class TeamResearchWebTest(unittest.TestCase):
-    def test_render_dashboard_has_member_work_surfaces(self) -> None:
+    def test_latest_and_submit_pages_have_simple_member_workflows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
-            html = render_dashboard(database)
+            latest = render_latest_papers_page(database)
+            submit = render_submit_page(database)
 
-        self.assertIn("Research Dashboard", html)
-        self.assertIn("Add research item", html)
-        self.assertIn("Review queue", html)
-        self.assertIn("Project libraries", html)
+        self.assertIn("Latest Relevant Papers", latest)
+        self.assertIn("No relevant papers yet", latest)
+        self.assertIn("Submit To Library", submit)
+        self.assertIn("Paper link", submit)
+        self.assertIn("PDF file", submit)
+        self.assertIn("Add Link", submit)
+        self.assertIn("Add PDF", submit)
+        self.assertNotIn("Customized tags", submit)
+        self.assertNotIn("Screening topic", submit)
+        self.assertNotIn("Submitted by", submit)
 
-    def test_web_form_add_review_accept_library_brief(self) -> None:
+    def test_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
-            item_id = add_manual_from_form(
+            item_id = submit_research_item(
                 database,
                 {
+                    "source_type": "url",
+                    "url": "https://example.org/paper",
                     "title": "Switchable radiative cooling envelope control",
                     "abstract": (
                         "This study evaluates switchable radiative cooling with tunable emissivity. "
                         "It reports measured or simulated cooling performance and connects material "
                         "behavior to building or energy outcomes."
                     ),
-                    "author": "Example Author",
-                    "year": "2026",
-                    "topic": "dynamic-radiative-cooling",
+                    "tags": "radiative-cooling, envelope",
                     "project": "dynamic-radiative-cooling",
+                    "topic": "dynamic-radiative-cooling",
                     "submitted_by": "alice",
+                    "year": "2026",
                 },
             )
 
-            item_page = render_item_page(database, item_id)
-            self.assertIn("Research card", item_page)
-            self.assertIn("Accept to project", item_page)
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(len(papers), 1)
+            self.assertEqual(papers[0]["item"]["id"], item_id)
+            self.assertEqual(papers[0]["link"], "https://example.org/paper")
+            self.assertEqual(papers[0]["tags"], ["envelope", "radiative-cooling"])
+            self.assertEqual(database.list_latest_relevant_papers(tag="envelope")[0]["item"]["id"], item_id)
 
-            database.accept_item(
-                item_id,
-                project_id="dynamic-radiative-cooling",
-                actor="bob",
-                reason="Useful benchmark",
+            html = render_latest_papers_page(database)
+            self.assertIn("Switchable radiative cooling envelope control", html)
+            self.assertIn("radiative-cooling", html)
+            self.assertIn("Open Link", html)
+
+    def test_pdf_submission_saves_file_and_lists_pdf_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                item_id = submit_research_item(
+                    database,
+                    {"source_type": "pdf_upload"},
+                    upload=("paper.pdf", b"%PDF-1.4 test content"),
+                )
+
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(papers[0]["item"]["id"], item_id)
+            self.assertEqual(papers[0]["item"]["title"], "paper")
+            self.assertIn("paper.pdf", papers[0]["link"])
+            self.assertTrue(Path(papers[0]["link"]).exists())
+            self.assertEqual(papers[0]["tags"], [])
+            self.assertTrue(list(upload_dir.glob("*.pdf")))
+            self.assertIn("Open PDF", render_latest_papers_page(database))
+
+    def test_link_only_submission_shows_even_when_screening_needs_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "url",
+                    "url": "https://example.org/papers/weak-metadata.pdf",
+                },
             )
 
-            library = render_library_page(database, "dynamic-radiative-cooling")
-            self.assertIn("Switchable radiative cooling envelope control", library)
-            self.assertIn("Useful benchmark", library)
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(papers[0]["item"]["id"], item_id)
+            self.assertEqual(papers[0]["item"]["title"], "weak metadata")
+            self.assertEqual(papers[0]["screening"]["label"], "needs_review")
+            self.assertEqual(papers[0]["tags"], [])
 
-            brief = render_brief_page(database, "dynamic-radiative-cooling")
-            self.assertIn("Team Research Brief - dynamic-radiative-cooling", brief)
-            self.assertIn("Useful benchmark", brief)
+    def test_multipart_form_parser_extracts_fields_and_pdf(self) -> None:
+        boundary = "sidebrainboundary"
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="title"\r\n\r\n'
+            "Multipart paper\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="pdf"; filename="paper.pdf"\r\n'
+            "Content-Type: application/pdf\r\n\r\n"
+            "%PDF-1.4 parser test\r\n"
+            f"--{boundary}--\r\n"
+        ).encode("utf-8")
+        handler = SimpleNamespace(headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+        fields, upload = parse_post_form(handler, body)
+
+        self.assertEqual(fields["title"], "Multipart paper")
+        self.assertEqual(upload, ("paper.pdf", b"%PDF-1.4 parser test"))
 
 
 if __name__ == "__main__":
