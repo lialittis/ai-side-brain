@@ -10,7 +10,12 @@ from unittest import mock
 from shared.ai.openrouter import OpenRouterClient, OpenRouterConfig
 from shared.research import topic_profile_by_id
 from team.research_adapter import build_team_research_run
-from team.research_ai import TEAM_RESEARCH_ANALYSIS_SCHEMA, TeamResearchAnalyzer, build_analysis_input, pdf_url_from_supported_link
+from team.research_ai import (
+    TEAM_RESEARCH_ANALYSIS_SCHEMA,
+    TeamResearchAnalyzer,
+    build_analysis_input,
+    pdf_url_from_supported_link,
+)
 from team.research_db import TeamResearchDatabase
 from team.research_web import submit_research_item
 
@@ -36,7 +41,7 @@ def ai_response() -> dict[str, object]:
         "metadata": {
             "title": "AI analyzed tunable emissivity paper",
             "authors": ["Example Author"],
-            "abstract": "This paper studies tunable emissivity for switchable radiative cooling.",
+            "abstract": "This paper studies tunable emissivity for switchable radiative cooling and memory safety.",
             "year": 2026,
             "venue": "Example Journal",
             "identifiers": {"arxiv_id": "2605.14932"},
@@ -48,7 +53,7 @@ def ai_response() -> dict[str, object]:
             "findings": ["Tunable emissivity changes cooling performance."],
             "innovation": "Switchable envelope control.",
             "limitations": ["Small benchmark scope."],
-            "relevance": "Relevant to dynamic radiative cooling.",
+            "relevance": "Relevant to memory safety evaluation.",
             "possible_use": ["benchmark"],
             "confidence": "high",
         },
@@ -61,7 +66,7 @@ def ai_response() -> dict[str, object]:
             "suggested_actions": ["add_to_project_review:dynamic-radiative-cooling"],
             "confidence": "high",
         },
-        "tags": ["Radiative Cooling", "#Tunable-Emissivity", "benchmark"],
+        "tags": ["Radiative Cooling", "#Tunable-Emissivity", "Memory Safety", "benchmark"],
     }
 
 
@@ -123,9 +128,79 @@ class TeamResearchAITest(unittest.TestCase):
             self.assertEqual(bundle["item"]["title"], "AI analyzed tunable emissivity paper")
             self.assertEqual(bundle["card"]["ai_model_used"], "test/model")
             self.assertEqual(bundle["screening"]["label"], "highly_relevant")
-            self.assertEqual(database.get_item_tags(item_id), ["benchmark", "radiative-cooling", "tunable-emissivity"])
-            self.assertIn("Strong match", database.list_library("team-library")[0]["library_entry"]["reason"])
+            self.assertEqual(
+                database.get_item_tags(item_id),
+                ["benchmark", "memory-safety", "radiative-cooling", "tunable-emissivity"],
+            )
+            self.assertEqual(
+                [record["tag"] for record in database.list_tag_catalog()],
+                ["benchmark", "memory-safety", "radiative-cooling", "tunable-emissivity"],
+            )
+            self.assertIn("memory safety", database.list_library("team-library")[0]["library_entry"]["reason"])
             self.assertEqual(database.list_latest_relevant_papers()[0]["ai_status"], "succeeded")
+
+    def test_ai_prefers_tag_catalog_and_limits_new_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.ensure_tag_catalog(["memory-safety", "system-security", "agentic-security"], source="curated")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/catalog-tags",
+                    "title": "Catalog Tags",
+                    "brief": "Memory safety and agentic security for system security.",
+                },
+                analyze=False,
+            )
+            response = ai_response()
+            response["tags"] = [
+                "Memory Safety",
+                "System Security",
+                "Agentic Security",
+                "Novel Tag A",
+                "Novel Tag B",
+                "Novel Tag C",
+            ]
+
+            client = FakeOpenRouterClient(response)
+            run = TeamResearchAnalyzer(database, client=client).analyze_item(item_id)
+
+            self.assertEqual(run["status"], "succeeded")
+            prompt = json.dumps(client.calls[0]["messages"])
+            self.assertIn("tag_catalog", prompt)
+            self.assertIn("memory-safety", prompt)
+            self.assertEqual(
+                database.get_item_tags(item_id),
+                ["agentic-security", "memory-safety", "novel-tag-a", "novel-tag-b", "system-security"],
+            )
+            catalog_tags = [record["tag"] for record in database.list_tag_catalog()]
+            self.assertIn("novel-tag-a", catalog_tags)
+            self.assertIn("novel-tag-b", catalog_tags)
+            self.assertNotIn("novel-tag-c", catalog_tags)
+
+    def test_ai_analysis_preserves_manual_relevance_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/manual-override",
+                    "title": "Manual Override Paper",
+                    "brief": "This paper mentions memory safety.",
+                },
+                analyze=False,
+            )
+            database.update_item_relevance(item_id, label="low_relevance", score=5)
+
+            run = TeamResearchAnalyzer(database, client=FakeOpenRouterClient(ai_response())).analyze_item(item_id)
+
+            self.assertEqual(run["status"], "succeeded")
+            screening = database.get_bundle(item_id)["screening"]
+            self.assertEqual(screening["label"], "low_relevance")
+            self.assertEqual(screening["score"], 5.0)
+            self.assertTrue(screening["source_trace"]["manual_override"])
 
     def test_missing_api_key_records_pending_without_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

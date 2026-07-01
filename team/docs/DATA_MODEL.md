@@ -109,6 +109,43 @@ restored_by:
 restored_at:
 ```
 
+## Team Tag Catalog
+
+The tag catalog stores reusable team tags independently from individual paper assignments. AI analysis receives this catalog, reuses existing tags first, and adds capped new tags when needed.
+
+```yaml
+tag:
+source: manual | ai | existing
+sources:
+usage_count:
+created_at:
+updated_at:
+```
+
+## Paper Comments
+
+Paper comments are lightweight team notes attached to one research item and shown inline on the paper card.
+
+```yaml
+id:
+item_id:
+author:
+content:
+created_at:
+```
+
+## Team Interest Keywords
+
+Team interest keywords define the weighted topic fit used for initial relevance scoring. The deployed defaults are `system security`, `memory safety`, and `agentic security`.
+
+```yaml
+id:
+keyword:
+weight: 0-100
+created_at:
+updated_at:
+```
+
 ## Team AI Analysis Run
 
 Team AI runs track automated OpenRouter analysis separately from shared research records.

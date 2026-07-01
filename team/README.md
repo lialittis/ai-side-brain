@@ -83,10 +83,13 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 
 Web UI surfaces:
 
-- Latest Relevant Papers page with tag filtering, topic/sort controls, paper/PDF links, editable tags, relevance, and importance;
+- Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
+- Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
+
+AI-generated tags are guided by a reusable team tag catalog. Analysis prompts include the current catalog, prefer existing tags first, and only add a small number of missing concept tags back into the catalog.
 
 Library items can be soft-removed from the web UI. Recoverable removed papers remain at the end of the list in a muted, struck-through state for 24 hours.
 

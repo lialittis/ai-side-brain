@@ -193,6 +193,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
         [
             f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
+            f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Interests</a>',
         ]
     )
     return f"""<!doctype html>
@@ -285,6 +286,79 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .meta {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
     .abstract {{ margin: 8px 0 0; color: #344054; }}
     .tags {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }}
+    .comments {{
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line);
+    }}
+    .comment-line {{
+      display: grid;
+      grid-template-columns: minmax(90px, 140px) minmax(120px, auto) minmax(0, 1fr);
+      gap: 8px;
+      align-items: baseline;
+      color: #344054;
+      font-size: 13px;
+    }}
+    .comment-author {{ color: var(--text); font-weight: 750; overflow-wrap: anywhere; }}
+    .comment-date {{ color: var(--muted); font-size: 12px; white-space: nowrap; }}
+    .comment-content {{ overflow-wrap: anywhere; }}
+    .comment-form {{
+      display: grid;
+      grid-template-columns: minmax(90px, 140px) minmax(160px, 1fr) auto;
+      gap: 6px;
+      align-items: center;
+    }}
+    .comment-name-input, .comment-content-input {{
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 13px;
+    }}
+    .interest-bars {{
+      display: flex;
+      align-items: end;
+      gap: 14px;
+      min-height: 260px;
+      overflow-x: auto;
+      padding: 8px 2px 2px;
+    }}
+    .interest-card {{
+      display: grid;
+      grid-template-rows: 40px 150px auto auto;
+      justify-items: center;
+      gap: 8px;
+      min-width: 128px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }}
+    .interest-weight {{
+      font-weight: 800;
+      color: var(--accent);
+    }}
+    .interest-range {{
+      writing-mode: vertical-lr;
+      direction: rtl;
+      width: 32px;
+      height: 150px;
+      accent-color: var(--accent);
+    }}
+    .interest-keyword-input {{
+      width: 100%;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .interest-actions {{ display: flex; gap: 6px; }}
+    .interest-add {{
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) 120px auto;
+      gap: 8px;
+      align-items: end;
+      margin-top: 14px;
+    }}
     .paper-footer {{
       display: flex;
       justify-content: space-between;
@@ -413,6 +487,8 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .content {{ padding: 18px; }}
       .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
       .paper-footer {{ align-items: flex-start; }}
+      .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
+      .interest-add {{ grid-template-columns: 1fr; }}
       .actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
     }}
@@ -465,14 +541,12 @@ def render_latest_papers_page(
     database: TeamResearchDatabase,
     *,
     tag: str | None = None,
-    topic_id: str | None = None,
     sort_by: str = "latest",
     show_removed: bool = False,
     notice: str = "",
 ) -> str:
     papers = database.list_latest_relevant_papers(
         tag=tag,
-        topic_id=topic_id,
         sort_by=sort_by,
         show_removed=show_removed,
     )
@@ -487,13 +561,6 @@ def render_latest_papers_page(
           <select id="tag" name="tag">
             <option value="">All tags</option>
             {render_tag_options(tags, tag)}
-          </select>
-        </div>
-        <div class="field">
-          <label for="topic">Topic</label>
-          <select id="topic" name="topic">
-            <option value="">All topics</option>
-            {render_topic_options(topic_id)}
           </select>
         </div>
         <div class="field">
@@ -514,13 +581,6 @@ def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
     return "\n".join(
         f'<option value="{html_escape(tag["tag"])}" {"selected" if tag["tag"] == selected else ""}>{html_escape(tag["tag"])} ({tag["item_count"]})</option>'
         for tag in tags
-    )
-
-
-def render_topic_options(selected: str | None) -> str:
-    return "\n".join(
-        f'<option value="{html_escape(profile["id"])}" {"selected" if profile["id"] == selected else ""}>{html_escape(profile["name"])}</option>'
-        for profile in example_topic_profiles()
     )
 
 
@@ -558,6 +618,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                 </div>
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
+                {render_paper_comments(paper)}
               </div>
               <div class="paper-footer">
                 <div class="paper-controls">
@@ -578,6 +639,51 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
 
 def render_plain_tags(tags: list[str]) -> str:
     return "".join(f'<a class="tag" href="/?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags) or '<span class="muted">No tags</span>'
+
+
+def render_paper_comments(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    comments = paper.get("comments") or []
+    comment_lines = "".join(render_comment_line(comment) for comment in comments)
+    return f"""
+    <div class="comments">
+      {comment_lines}
+      {render_add_comment_form(item["id"])}
+    </div>
+    """
+
+
+def render_comment_line(comment: dict[str, Any]) -> str:
+    created_at_raw = str(comment.get("created_at") or "")
+    created_at = html_escape(created_at_raw)
+    display_date = html_escape(display_comment_date(created_at_raw))
+    return f"""
+    <div class="comment-line" title="{created_at}">
+      <span class="comment-author">{html_escape(comment.get("author") or "Unknown")}</span>
+      <time class="comment-date" datetime="{created_at}">{display_date}</time>
+      <span class="comment-content">{html_escape(comment.get("content") or "")}</span>
+    </div>
+    """
+
+
+def display_comment_date(value: str) -> str:
+    if not value:
+        return ""
+    date_part, _, time_part = value.partition("T")
+    if not time_part:
+        return date_part
+    return f"{date_part} {time_part[:5]}"
+
+
+def render_add_comment_form(item_id: str) -> str:
+    return f"""
+    <form class="comment-form" method="post" action="/paper/comment/add">
+      <input type="hidden" name="item_id" value="{html_escape(item_id)}">
+      <input class="comment-name-input" name="name" placeholder="Name" aria-label="Comment name" required>
+      <input class="comment-content-input" name="content" placeholder="Add comment" aria-label="Comment content" required>
+      <button class="mini-button" type="submit">Add</button>
+    </form>
+    """
 
 
 def render_tag_editor(paper: dict[str, Any]) -> str:
@@ -754,6 +860,65 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
     return page("Submit To Library", body, active="submit")
 
 
+def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> str:
+    interests = database.list_team_interest_keywords()
+    body = f"""
+    {render_topline("Team Interests", "Weighted keywords for initial relevance scoring.", "/", "Latest Papers")}
+    {render_notice(notice)}
+    <div class="panel">
+      <div class="interest-bars">
+        {"".join(render_interest_card(interest) for interest in interests)}
+      </div>
+      {render_interest_add_form()}
+    </div>
+    """
+    return page("Team Interests", body, active="interests")
+
+
+def render_interest_card(interest: dict[str, Any]) -> str:
+    weight = int(interest.get("weight") or 0)
+    keyword = html_escape(interest.get("keyword") or "")
+    interest_id = html_escape(interest.get("id") or "")
+    return f"""
+    <form class="interest-card" method="post" action="/interests/save">
+      <input type="hidden" name="interest_id" value="{interest_id}">
+      <output class="interest-weight">{weight}</output>
+      <input
+        class="interest-range"
+        type="range"
+        name="weight"
+        min="0"
+        max="100"
+        value="{weight}"
+        aria-label="Weight for {keyword}"
+        oninput="this.form.querySelector('output').value = this.value"
+        onchange="this.form.submit()"
+      >
+      <input class="interest-keyword-input" name="keyword" value="{keyword}" aria-label="Interest keyword">
+      <div class="interest-actions">
+        <button class="mini-button" type="submit">Save</button>
+        <button class="mini-button danger" type="submit" formaction="/interests/remove">Remove</button>
+      </div>
+    </form>
+    """
+
+
+def render_interest_add_form() -> str:
+    return """
+    <form class="interest-add" method="post" action="/interests/add">
+      <div class="field">
+        <label for="interest-keyword">Keyword</label>
+        <input id="interest-keyword" name="keyword" required placeholder="keyword">
+      </div>
+      <div class="field">
+        <label for="interest-weight">Weight</label>
+        <input id="interest-weight" name="weight" type="number" min="0" max="100" value="70" required>
+      </div>
+      <button class="primary" type="submit">Add Keyword</button>
+    </form>
+    """
+
+
 def submit_research_item(
     database: TeamResearchDatabase,
     fields: dict[str, str],
@@ -846,6 +1011,7 @@ def submit_research_item(
         actor=submitted_by,
         reason=f"Submitted to {project_id} via web form.",
     )
+    database.apply_team_interest_relevance(result.item["id"])
     if analyze:
         analyze_submitted_item(database, result.item["id"])
     return result.item["id"]
@@ -902,6 +1068,40 @@ def remove_paper_tag(database: TeamResearchDatabase, fields: dict[str, str]) -> 
     tags = [tag for tag in database.get_item_tags(item_id) if tag != removed_tag]
     database.set_item_tags(item_id, tags)
     return item_id
+
+
+def add_paper_comment(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    item_id = required_field(fields, "item_id")
+    database.add_item_comment(
+        item_id,
+        author=required_field(fields, "name"),
+        content=required_field(fields, "content"),
+    )
+    return item_id
+
+
+def save_team_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    interest_id = required_field(fields, "interest_id")
+    record = database.upsert_team_interest_keyword(
+        interest_id=interest_id,
+        keyword=required_field(fields, "keyword"),
+        weight=fields.get("weight", "0"),
+    )
+    return record["keyword"]
+
+
+def add_team_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    record = database.upsert_team_interest_keyword(
+        keyword=required_field(fields, "keyword"),
+        weight=fields.get("weight", "0"),
+    )
+    return record["keyword"]
+
+
+def remove_team_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    interest_id = required_field(fields, "interest_id")
+    database.remove_team_interest_keyword(interest_id)
+    return interest_id
 
 
 def update_paper_relevance(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
@@ -1020,14 +1220,12 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             notice = query.get("notice", [""])[0]
             if parsed.path == "/":
                 tag = query.get("tag", [None])[0] or None
-                topic_id = query.get("topic", [None])[0] or None
                 sort_by = query.get("sort", ["latest"])[0] or "latest"
                 show_removed = query.get("removed", [""])[0] == "1"
                 self.respond_html(
                     render_latest_papers_page(
                         self.database,
                         tag=tag,
-                        topic_id=topic_id,
                         sort_by=sort_by,
                         show_removed=show_removed,
                         notice=notice,
@@ -1035,6 +1233,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/submit":
                 self.respond_html(render_submit_page(self.database, notice=notice))
+            elif parsed.path == "/interests":
+                self.respond_html(render_interests_page(self.database, notice=notice))
             elif parsed.path.startswith("/files/"):
                 relative_path = parsed.path.removeprefix("/files/")
                 self.respond_file(safe_upload_path(relative_path))
@@ -1053,6 +1253,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             if parsed.path == "/submit":
                 item_id = submit_research_item(self.database, fields, upload=upload)
                 self.redirect(f"/?notice={quote(f'Added {item_id} to the library.')}")
+            elif parsed.path == "/interests/save":
+                keyword = save_team_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote(f'Saved {keyword}.')}")
+            elif parsed.path == "/interests/add":
+                keyword = add_team_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote(f'Added {keyword}.')}")
+            elif parsed.path == "/interests/remove":
+                remove_team_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote('Removed keyword.')}")
             elif parsed.path == "/paper/update":
                 item_id = update_paper_interactions(self.database, fields)
                 self.redirect(f"/?notice={quote(f'Updated {item_id}.')}")
@@ -1068,6 +1277,9 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/paper/tag/remove":
                 item_id = remove_paper_tag(self.database, fields)
                 self.redirect(f"/?notice={quote(f'Removed tag from {item_id}.')}")
+            elif parsed.path == "/paper/comment/add":
+                item_id = add_paper_comment(self.database, fields)
+                self.redirect(f"/?notice={quote(f'Added comment to {item_id}.')}")
             elif parsed.path == "/paper/relevance":
                 item_id = update_paper_relevance(self.database, fields)
                 self.redirect(f"/?notice={quote(f'Updated relevance for {item_id}.')}")

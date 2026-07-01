@@ -10,14 +10,19 @@ from unittest import mock
 
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
+    add_paper_comment,
     add_paper_tag,
+    add_team_interest,
     canonical_pdf_url,
+    render_interests_page,
     render_latest_papers_page,
     render_submit_page,
     parse_post_form,
     recover_paper,
     remove_paper,
     remove_paper_tag,
+    remove_team_interest,
+    save_team_interest,
     submit_research_item,
     update_paper_tag,
     update_paper_importance,
@@ -37,6 +42,9 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Latest Relevant Papers", latest)
         self.assertIn("No relevant papers yet", latest)
         self.assertIn("Submit To Library", submit)
+        self.assertIn("Interests", latest)
+        self.assertNotIn("All topics", latest)
+        self.assertNotIn('name="topic"', latest)
         self.assertIn("Direct PDF link", submit)
         self.assertIn("PDF file", submit)
         self.assertIn("Manual link", submit)
@@ -46,6 +54,40 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertNotIn("Customized tags", submit)
         self.assertNotIn("Screening topic", submit)
         self.assertNotIn("Submitted by", submit)
+
+    def test_team_interest_settings_are_editable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+
+            interests = database.list_team_interest_keywords()
+            self.assertEqual(
+                [interest["keyword"] for interest in interests],
+                ["memory safety", "system security", "agentic security"],
+            )
+            html = render_interests_page(database)
+            self.assertIn("Team Interests", html)
+            self.assertIn("system security", html)
+            self.assertIn("memory safety", html)
+            self.assertIn("agentic security", html)
+            self.assertIn('class="interest-range"', html)
+            self.assertIn('action="/interests/add"', html)
+
+            memory = next(interest for interest in interests if interest["keyword"] == "memory safety")
+            save_team_interest(
+                database,
+                {
+                    "interest_id": memory["id"],
+                    "keyword": "memory safety",
+                    "weight": "40",
+                },
+            )
+            added = add_team_interest(database, {"keyword": "exploit mitigation", "weight": "75"})
+            self.assertEqual(added, "exploit mitigation")
+            remove_team_interest(database, {"interest_id": memory["id"]})
+
+            updated_keywords = [interest["keyword"] for interest in database.list_team_interest_keywords()]
+            self.assertIn("exploit mitigation", updated_keywords)
+            self.assertNotIn("memory safety", updated_keywords)
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,6 +124,34 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Switchable radiative cooling envelope control", html)
             self.assertIn("radiative-cooling", html)
             self.assertIn("Open Link", html)
+
+    def test_manual_link_submission_uses_team_interest_relevance_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/security-paper",
+                    "title": "Memory Safety for Agentic Security Systems",
+                    "brief": "This work studies memory safety and system security for autonomous agents.",
+                    "tags": "agentic-security",
+                },
+                analyze=False,
+            )
+
+            paper = database.list_latest_relevant_papers()[0]
+            self.assertEqual(paper["item"]["id"], item_id)
+            self.assertEqual(paper["screening"]["label"], "highly_relevant")
+            self.assertEqual(paper["screening"]["score"], 100)
+            self.assertEqual(
+                paper["screening"]["matched_terms"],
+                ["memory safety", "system security", "agentic security"],
+            )
+            self.assertEqual(
+                paper["screening"]["source_trace"]["processor"],
+                "team-interest-keyword-scorer-v0.1",
+            )
 
     def test_indirect_link_is_rejected_from_pdf_link_lane(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -345,6 +415,57 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(paper["screening"]["label"], "highly_relevant")
             self.assertEqual(paper["screening"]["score"], 82.0)
             self.assertEqual(paper["importance"], 4)
+
+    def test_paper_card_comments_can_be_added_and_rendered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/comments",
+                    "title": "Commented Paper",
+                    "brief": "Switchable radiative cooling with tunable emissivity.",
+                },
+                analyze=False,
+            )
+
+            database.add_item_comment(
+                item_id,
+                author="Alice",
+                content="Useful baseline for the team.",
+                now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
+            )
+            add_paper_comment(
+                database,
+                {
+                    "item_id": item_id,
+                    "name": "Bob",
+                    "content": "Check the dataset <before> applying this.",
+                },
+            )
+
+            paper = database.list_latest_relevant_papers()[0]
+            self.assertEqual(
+                [(comment["author"], comment["content"]) for comment in paper["comments"]],
+                [
+                    ("Alice", "Useful baseline for the team."),
+                    ("Bob", "Check the dataset <before> applying this."),
+                ],
+            )
+
+            html = render_latest_papers_page(database)
+            self.assertIn('class="comments"', html)
+            self.assertIn('class="comment-line"', html)
+            self.assertIn('class="comment-date"', html)
+            self.assertIn('datetime="2026-07-01T12:30:00+00:00"', html)
+            self.assertIn("2026-07-01 12:30", html)
+            self.assertIn('action="/paper/comment/add"', html)
+            self.assertIn('name="name"', html)
+            self.assertIn('name="content"', html)
+            self.assertIn("Alice", html)
+            self.assertIn("Useful baseline for the team.", html)
+            self.assertIn("Check the dataset &lt;before&gt; applying this.", html)
 
     def test_papers_can_be_sorted_by_name_publish_date_relevance_and_importance(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

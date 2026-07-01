@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,13 @@ from team.research_adapter import (
     create_audit_event,
     create_project_library_entry,
     default_data_dir,
+)
+from team.research_interests import (
+    DEFAULT_TEAM_INTERESTS,
+    build_team_interest_screening,
+    clean_interest_weight,
+    normalize_interest_keyword,
+    screening_is_manual_override,
 )
 
 
@@ -148,6 +156,39 @@ class TeamResearchDatabase:
                     PRIMARY KEY (item_id, tag)
                 );
 
+                CREATE TABLE IF NOT EXISTS team_tag_catalog (
+                    tag TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    usage_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_comments (
+                    id TEXT PRIMARY KEY,
+                    item_id TEXT NOT NULL,
+                    author TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS team_interest_keywords (
+                    id TEXT PRIMARY KEY,
+                    keyword TEXT NOT NULL UNIQUE,
+                    weight INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS team_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS ai_analysis_runs (
                     id TEXT PRIMARY KEY,
                     source_id TEXT,
@@ -171,12 +212,20 @@ class TeamResearchDatabase:
                     ON relevance_screenings(item_id, screened_at);
                 CREATE INDEX IF NOT EXISTS idx_item_tags_tag
                     ON item_tags(tag, item_id);
+                CREATE INDEX IF NOT EXISTS idx_team_tag_catalog_usage
+                    ON team_tag_catalog(usage_count DESC, tag);
+                CREATE INDEX IF NOT EXISTS idx_paper_comments_item
+                    ON paper_comments(item_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_team_interest_keywords_weight
+                    ON team_interest_keywords(weight DESC, keyword);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_item
                     ON ai_analysis_runs(item_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_status
                     ON ai_analysis_runs(status, started_at);
                 """
             )
+            self._ensure_default_interest_keywords(connection)
+            self._sync_tag_catalog_from_item_tags(connection)
 
     def write_run(self, result: TeamResearchRunResult, *, include_library_entry: bool = False) -> dict[str, str]:
         self.initialize()
@@ -417,13 +466,14 @@ class TeamResearchDatabase:
     def set_item_tags(self, item_id: str, tags: list[str], *, now: datetime | None = None) -> None:
         self.initialize()
         timestamp = iso_timestamp(now or datetime.now(timezone.utc))
-        normalized_tags = sorted({tag.strip().lower() for tag in tags if tag.strip()})
+        normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
         with self.connect() as connection:
             connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item_id,))
             connection.executemany(
                 "INSERT OR IGNORE INTO item_tags (item_id, tag, created_at) VALUES (?, ?, ?)",
                 [(item_id, tag, timestamp) for tag in normalized_tags],
             )
+            self._ensure_tag_catalog(connection, normalized_tags, source="manual", timestamp=timestamp)
 
     def get_item_tags(self, item_id: str) -> list[str]:
         self.initialize()
@@ -433,6 +483,175 @@ class TeamResearchDatabase:
                 (item_id,),
             ).fetchall()
         return [row["tag"] for row in rows]
+
+    def list_tag_catalog(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM team_tag_catalog
+                ORDER BY usage_count DESC, tag ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def ensure_tag_catalog(
+        self,
+        tags: list[str],
+        *,
+        source: str = "manual",
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
+        with self.connect() as connection:
+            return self._ensure_tag_catalog(connection, normalized_tags, source=source, timestamp=timestamp)
+
+    def add_item_comment(
+        self,
+        item_id: str,
+        *,
+        author: str,
+        content: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        item = self.get_bundle(item_id)["item"]
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        cleaned_author = reflow_comment_text(author)
+        cleaned_content = reflow_comment_text(content)
+        if not cleaned_author:
+            raise ValueError("Comment name cannot be empty.")
+        if not cleaned_content:
+            raise ValueError("Comment content cannot be empty.")
+        comment = {
+            "id": stable_id(
+                "comment",
+                {
+                    "item_id": item["id"],
+                    "author": cleaned_author,
+                    "content": cleaned_content,
+                    "created_at": timestamp,
+                },
+            ),
+            "item_id": item["id"],
+            "author": cleaned_author,
+            "content": cleaned_content,
+            "created_at": timestamp,
+        }
+        with self.connect() as connection:
+            self._insert_paper_comment(connection, comment)
+        return comment
+
+    def list_item_comments(self, item_id: str) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM paper_comments
+                WHERE item_id = ?
+                ORDER BY created_at ASC
+                """,
+                (item_id,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def list_team_interest_keywords(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM team_interest_keywords
+                ORDER BY weight DESC, keyword ASC
+                """
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def upsert_team_interest_keyword(
+        self,
+        *,
+        keyword: str,
+        weight: int,
+        interest_id: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        cleaned_keyword = normalize_interest_keyword(keyword)
+        if not cleaned_keyword:
+            raise ValueError("Interest keyword cannot be empty.")
+        selected_weight = clean_interest_weight(weight)
+        record = {
+            "id": interest_id or stable_id("interest", {"keyword": cleaned_keyword}),
+            "keyword": cleaned_keyword,
+            "weight": selected_weight,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+        with self.connect() as connection:
+            if interest_id:
+                row = connection.execute(
+                    "SELECT record_json FROM team_interest_keywords WHERE id = ?",
+                    (interest_id,),
+                ).fetchone()
+                if row:
+                    existing = loads(row["record_json"])
+                    record["created_at"] = existing.get("created_at") or timestamp
+            self._upsert_interest_keyword(connection, record)
+        return record
+
+    def remove_team_interest_keyword(self, interest_id: str) -> None:
+        self.initialize()
+        with self.connect() as connection:
+            connection.execute("DELETE FROM team_interest_keywords WHERE id = ?", (interest_id,))
+
+    def build_team_interest_screening_for_records(
+        self,
+        *,
+        item: dict[str, Any],
+        card: dict[str, Any] | None,
+        tags: list[str],
+        base_screening: dict[str, Any] | None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        return build_team_interest_screening(
+            item,
+            card,
+            tags,
+            self.list_team_interest_keywords(),
+            base_screening,
+            now=now,
+        )
+
+    def apply_team_interest_relevance(
+        self,
+        item_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        bundle = self.get_bundle(item_id)
+        if screening_is_manual_override(bundle.get("screening")):
+            return bundle["screening"]
+        screening = self.build_team_interest_screening_for_records(
+            item=bundle["item"],
+            card=bundle.get("card"),
+            tags=self.get_item_tags(item_id),
+            base_screening=bundle.get("screening"),
+            now=now,
+        )
+        with self.connect() as connection:
+            self._upsert_screening(connection, screening)
+            card = bundle.get("card")
+            if card:
+                self._update_library_entries_for_analysis(connection, item_id, card["id"], screening)
+        return screening
 
     def list_tags(self) -> list[dict[str, Any]]:
         self.initialize()
@@ -757,10 +976,12 @@ class TeamResearchDatabase:
             self._upsert_screening(connection, screening)
             connection.execute("DELETE FROM item_tags WHERE item_id = ?", (item["id"],))
             timestamp = item["updated_at"]
+            normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
             connection.executemany(
                 "INSERT OR IGNORE INTO item_tags (item_id, tag, created_at) VALUES (?, ?, ?)",
-                [(item["id"], tag, timestamp) for tag in sorted({tag for tag in tags if tag})],
+                [(item["id"], tag, timestamp) for tag in normalized_tags],
             )
+            self._ensure_tag_catalog(connection, normalized_tags, source="ai", timestamp=timestamp)
             self._update_library_entries_for_analysis(connection, item["id"], card["id"], screening)
 
     def list_latest_relevant_papers(
@@ -843,6 +1064,7 @@ class TeamResearchDatabase:
                     "importance": library_importance(library_entry),
                     "recoverable": recoverable,
                     "tags": self.get_item_tags(item["id"]),
+                    "comments": self.list_item_comments(item["id"]),
                     "link": item.get("url") or item.get("object_key"),
                 }
             )
@@ -1097,6 +1319,142 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _insert_paper_comment(self, connection: sqlite3.Connection, comment: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT INTO paper_comments
+            (id, item_id, author, content, created_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                comment["id"],
+                comment["item_id"],
+                comment["author"],
+                comment["content"],
+                comment["created_at"],
+                dumps(comment),
+            ),
+        )
+
+    def _upsert_interest_keyword(self, connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO team_interest_keywords
+            (id, keyword, weight, created_at, updated_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["keyword"],
+                clean_interest_weight(record.get("weight")),
+                record["created_at"],
+                record["updated_at"],
+                dumps(record),
+            ),
+        )
+
+    def _ensure_tag_catalog(
+        self,
+        connection: sqlite3.Connection,
+        tags: list[str],
+        *,
+        source: str,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        records = []
+        for tag in tags:
+            normalized = normalize_catalog_tag(tag)
+            if not normalized:
+                continue
+            records.append(self._upsert_tag_catalog(connection, normalized, source=source, timestamp=timestamp))
+        return records
+
+    def _upsert_tag_catalog(
+        self,
+        connection: sqlite3.Connection,
+        tag: str,
+        *,
+        source: str,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        existing_row = connection.execute(
+            "SELECT record_json FROM team_tag_catalog WHERE tag = ?",
+            (tag,),
+        ).fetchone()
+        usage_row = connection.execute(
+            "SELECT COUNT(*) AS count FROM item_tags WHERE tag = ?",
+            (tag,),
+        ).fetchone()
+        usage_count = int(usage_row["count"]) if usage_row else 0
+        existing = loads(existing_row["record_json"]) if existing_row else {}
+        sources = set(existing.get("sources") or [])
+        sources.add(source)
+        record = {
+            "tag": tag,
+            "source": existing.get("source") or source,
+            "sources": sorted(sources),
+            "usage_count": usage_count,
+            "created_at": existing.get("created_at") or timestamp,
+            "updated_at": timestamp,
+        }
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO team_tag_catalog
+            (tag, source, usage_count, created_at, updated_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["tag"],
+                record["source"],
+                record["usage_count"],
+                record["created_at"],
+                record["updated_at"],
+                dumps(record),
+            ),
+        )
+        return record
+
+    def _sync_tag_catalog_from_item_tags(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT tag
+            FROM item_tags
+            GROUP BY tag
+            ORDER BY tag
+            """
+        ).fetchall()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        for row in rows:
+            self._upsert_tag_catalog(connection, row["tag"], source="existing", timestamp=timestamp)
+
+    def _ensure_default_interest_keywords(self, connection: sqlite3.Connection) -> None:
+        setting = connection.execute(
+            "SELECT value_json FROM team_settings WHERE key = ?",
+            ("team_interest_keywords_seeded",),
+        ).fetchone()
+        if setting:
+            return
+        row = connection.execute("SELECT COUNT(*) AS count FROM team_interest_keywords").fetchone()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        if not row or not row["count"]:
+            for interest in DEFAULT_TEAM_INTERESTS:
+                keyword = normalize_interest_keyword(str(interest["keyword"]))
+                record = {
+                    "id": stable_id("interest", {"keyword": keyword}),
+                    "keyword": keyword,
+                    "weight": clean_interest_weight(interest["weight"]),
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                }
+                self._upsert_interest_keyword(connection, record)
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO team_settings (key, value_json, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("team_interest_keywords_seeded", dumps({"seeded": True}), timestamp),
+        )
+
     def _update_library_entries_for_analysis(
         self,
         connection: sqlite3.Connection,
@@ -1161,6 +1519,15 @@ def library_importance(library_entry: dict[str, Any] | None) -> int:
         return min(5, max(0, int(library_entry.get("importance", 0))))
     except (TypeError, ValueError):
         return 0
+
+
+def reflow_comment_text(value: str) -> str:
+    return " ".join((value or "").split())
+
+
+def normalize_catalog_tag(value: str) -> str:
+    text = re.sub(r"[^a-z0-9_.-]+", "-", str(value or "").strip().lower().lstrip("#"))
+    return text.strip(".-")
 
 
 def team_record_is_removed(team_record: dict[str, Any] | None) -> bool:

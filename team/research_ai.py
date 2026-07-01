@@ -21,6 +21,7 @@ from shared.research import (
 from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import repo_root
 from team.research_db import TeamResearchDatabase
+from team.research_interests import screening_is_manual_override
 
 
 PROMPT_VERSION = "team-openrouter-research-analysis-v0.1"
@@ -185,8 +186,9 @@ class TeamResearchAnalyzer:
         if run["status"] != "running":
             run = self.database.complete_ai_analysis_run(run["id"], status="running")
         try:
+            tag_catalog = self.database.list_tag_catalog()
             response = self.client.chat_completion(
-                messages=analysis_messages(bundle, analysis_input),
+                messages=analysis_messages(bundle, analysis_input, tag_catalog=tag_catalog),
                 response_schema=TEAM_RESEARCH_ANALYSIS_SCHEMA,
                 schema_name="team_research_analysis",
                 plugins=pdf_plugins(self.pdf_engine) if analysis_input.file_data else None,
@@ -198,6 +200,18 @@ class TeamResearchAnalyzer:
                 model=self.model,
                 topic_id=topic_id,
             )
+            tags = select_catalog_guided_tags(tags, tag_catalog)
+            if not is_non_paper_response(response):
+                existing_screening = bundle.get("screening")
+                if screening_is_manual_override(existing_screening):
+                    screening = existing_screening
+                else:
+                    screening = self.database.build_team_interest_screening_for_records(
+                        item=item_record,
+                        card=card,
+                        tags=tags,
+                        base_screening=screening,
+                    )
             self.database.apply_ai_analysis_records(
                 item=item_record,
                 card=card,
@@ -281,7 +295,12 @@ def build_analysis_input(item: dict[str, Any]) -> AnalysisInput:
     return AnalysisInput(False, "Only uploaded PDFs, direct PDF URLs, and arXiv PDF/abs links are supported.")
 
 
-def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> list[dict[str, Any]]:
+def analysis_messages(
+    bundle: dict[str, Any],
+    analysis_input: AnalysisInput,
+    *,
+    tag_catalog: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     item = bundle["item"]
     screening = bundle.get("screening") or {}
     system = (
@@ -290,7 +309,9 @@ def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> 
         "First classify whether the source appears to describe research work. If it is not research work, "
         "set document_type to non_paper, is_research_paper to false, give a concise rejection_reason, "
         "set relevance label to low_relevance, and use conservative 'unknown' values for required fields. "
-        "Do not invent unknown bibliographic facts; use null, empty arrays, or 'unknown' when needed."
+        "Do not invent unknown bibliographic facts; use null, empty arrays, or 'unknown' when needed. "
+        "For tags, reuse the provided tag_catalog first. Create new concise lowercase tags only when the catalog "
+        "does not cover important paper concepts; prefer 3 to 6 total tags and create at most 2 new tags."
     )
     prompt_payload = {
         "source_kind": analysis_input.source_kind,
@@ -303,6 +324,13 @@ def analysis_messages(bundle: dict[str, Any], analysis_input: AnalysisInput) -> 
         },
         "topic_profile_id": screening.get("topic_profile_id") or DEFAULT_TOPIC_ID,
         "topic_profile": prompt_topic_profile(screening.get("topic_profile_id") or DEFAULT_TOPIC_ID),
+        "tag_catalog": prompt_tag_catalog(tag_catalog or []),
+        "tagging_rules": [
+            "Choose existing tag_catalog values first when they are accurate.",
+            "Create a new tag only for an important concept missing from tag_catalog.",
+            "Use lowercase hyphenated tags, 1 to 4 words, with no # prefix.",
+            "Return 3 to 6 tags when possible, and at most 2 new tags not already in tag_catalog.",
+        ],
     }
     user_text = (
         "Analyze this research item for a research team. Extract metadata, create a research card, "
@@ -470,6 +498,21 @@ def prompt_topic_profile(topic_id: str) -> dict[str, Any]:
     }
 
 
+def prompt_tag_catalog(tag_catalog: list[dict[str, Any]], *, limit: int = 120) -> list[dict[str, Any]]:
+    tags = []
+    for record in tag_catalog[:limit]:
+        tag = clean_string(record.get("tag"))
+        if not tag:
+            continue
+        tags.append(
+            {
+                "tag": tag,
+                "usage_count": int(record.get("usage_count") or 0),
+            }
+        )
+    return tags
+
+
 def source_trace(item: dict[str, Any], model: str, timestamp: str) -> dict[str, Any]:
     return {
         "item_id": item["id"],
@@ -586,3 +629,22 @@ def normalize_tags(value: Any) -> list[str]:
         if text:
             normalized.add(text)
     return sorted(normalized)
+
+
+def select_catalog_guided_tags(
+    tags: list[str],
+    tag_catalog: list[dict[str, Any]],
+    *,
+    max_total: int = 6,
+    max_new: int = 2,
+) -> list[str]:
+    catalog_tags = {str(record.get("tag") or "") for record in tag_catalog}
+    if not catalog_tags:
+        return sorted(dict.fromkeys(tags[:max_total]))
+    existing = [tag for tag in tags if tag in catalog_tags]
+    new = [tag for tag in tags if tag not in catalog_tags]
+    selected = [*existing[:max_total]]
+    remaining = max_total - len(selected)
+    if remaining > 0:
+        selected.extend(new[: min(max_new, remaining)])
+    return sorted(dict.fromkeys(selected))

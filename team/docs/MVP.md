@@ -57,10 +57,15 @@ scripts/stop_research_web.sh
 
 Current web UI features:
 
-- latest relevant papers page with customized tag filtering, topic/sort controls, paper/PDF links, editable tags, relevance, and importance;
+- latest relevant papers page with customized tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
+- team interests page with weighted keyword sliders for initial relevance scoring;
 - submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 The current submit path accepts only direct `.pdf` links that download without redirects in the PDF-link lane. Direct PDF links and uploaded PDFs are stored locally, deduplicated by SHA-256, and rejected before saving if the bytes are not a valid PDF. Manual links are for DOI, journal, arXiv abstract, inaccessible, or otherwise indirect pages; they require title plus brief info and do not trigger PDF download.
+
+The initial relevance score is computed from the team's weighted interest keywords at submit time and again after successful AI analysis adds richer metadata and tags. Manual relevance edits are persisted and are not overwritten by later AI analysis.
+
+AI-generated tags are guided by the stored team tag catalog. The prompt asks AI to reuse catalog tags first; backend post-processing caps total tags and limits new catalog additions once a catalog exists.
 
 With `OPENROUTER_API_KEY` set, Team Research attempts OpenRouter analysis on submit for uploaded PDFs, downloaded direct PDF links, and manual link briefs. The same AI call classifies whether the source is research work; non-papers are archived as `rejected_non_paper`. Retry pending or failed analysis with:
 
