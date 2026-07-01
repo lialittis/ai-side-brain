@@ -149,6 +149,9 @@ Current implemented collectors:
 - `collect_radar_source(...)` and the source-health report appenders keep
   collector failure accounting and Markdown report sections consistent across
   Personal and Team adapters.
+- `radar_source_readiness_summary(...)` checks whether selected sources have
+  the required seeds, author IDs, or invitations before/after a scheduled run,
+  and records optional API/contact warnings separately from blocking config.
 
 Collector parsers are pure functions and are tested with offline fixtures. This
 keeps scheduling and network failure handling outside the core.

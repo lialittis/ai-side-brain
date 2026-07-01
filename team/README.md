@@ -128,7 +128,11 @@ recommendations and import only the papers the team wants to track in the main l
 paper relevance. The queue also shows latest-run health and source-error counts
 when a scheduled run exists, even if no papers were stored. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, conference year, USENIX cycles, source contact email,
-PDF cache settings, and run limits as reusable Team defaults.
+PDF cache settings, source presets, and run limits as reusable Team defaults.
+Use the `Team Security Daily` preset for the current security, memory-safety,
+and agentic-security workflow; it combines latest paper APIs with DBLP/OpenReview
+venue profiles plus USENIX Security and NDSS accepted-paper pages. Scheduled
+runs can also set `RADAR_SOURCE_PRESET=team_security_daily`.
 For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can provide one fallback
 contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
 settings are configured.

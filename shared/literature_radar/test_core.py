@@ -13,6 +13,7 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -34,6 +35,9 @@ from shared.literature_radar import (
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_source_preset,
+    radar_source_presets,
+    radar_source_readiness_summary,
     radar_history_source_coverage_summary,
     radar_pdf_access_summary,
     radar_history_review_status,
@@ -74,6 +78,74 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "recommendation_report",
             ],
         )
+
+    def test_shared_source_presets_cover_daily_and_top_venue_workflows(self) -> None:
+        presets = {preset["id"]: preset for preset in radar_source_presets()}
+
+        self.assertIn("broad_daily", presets)
+        self.assertIn("security_memory_agentic_daily", presets)
+        self.assertIn("top_venues", presets)
+        security_daily = radar_source_preset("security_memory_agentic_daily")
+        self.assertEqual(
+            security_daily["sources"],
+            [
+                "arxiv",
+                "dblp",
+                "semantic_scholar",
+                "openalex",
+                "crossref",
+                "dblp_venues",
+                "openreview_venues",
+                "usenix_security",
+                "ndss",
+            ],
+        )
+        self.assertEqual(security_daily["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(security_daily["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+        self.assertEqual(radar_source_preset("team_security_daily")["id"], "security_memory_agentic_daily")
+
+    def test_source_readiness_marks_missing_required_and_recommended_config(self) -> None:
+        summary = radar_source_readiness_summary(
+            ["semantic_scholar_recommendations", "openalex", "crossref"],
+            {"openalex_mailto_configured": True},
+        )
+
+        self.assertEqual(summary["status"], "blocked")
+        self.assertEqual(summary["blocked_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(summary["warning_source_ids"], ["crossref"])
+        self.assertEqual(
+            summary["missing_required"],
+            [
+                {
+                    "source_id": "semantic_scholar_recommendations",
+                    "key": "seed_paper_ids",
+                    "label": "Semantic Scholar positive seed paper ID",
+                }
+            ],
+        )
+        self.assertEqual(summary["missing_recommended"][0]["key"], "crossref_mailto_configured")
+
+        ready = radar_source_readiness_summary(
+            ["semantic_scholar_recommendations", "openalex"],
+            {
+                "seed_paper_ids": ["paper-1"],
+                "semantic_scholar_api_key_configured": True,
+                "openalex_mailto_configured": True,
+            },
+        )
+        self.assertEqual(ready["status"], "ready")
+        self.assertEqual(ready["blocked_count"], 0)
+
+    def test_appends_source_readiness_to_report(self) -> None:
+        report = append_radar_source_readiness_to_report(
+            "# Radar",
+            ["semantic_scholar_references"],
+            {},
+        )
+
+        self.assertIn("## Source Readiness", report)
+        self.assertIn("status=blocked", report)
+        self.assertIn("Semantic Scholar seed paper ID", report)
 
     def test_default_topic_profile_contains_security_memory_and_ai_topics(self) -> None:
         profile = default_radar_topic_profile()

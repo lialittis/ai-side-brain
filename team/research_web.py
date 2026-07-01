@@ -30,16 +30,19 @@ from shared.literature_radar import (
     radar_latest_signal_lines,
     radar_run_freshness,
     radar_source_coverage_summary,
+    radar_source_readiness_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    apply_team_radar_source_preset,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     build_team_radar_scorer,
     import_radar_recommendation,
     run_team_literature_radar,
+    team_radar_source_presets,
 )
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
@@ -886,6 +889,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     latest_run = runs[0] if runs else None
     review_counts = database.literature_radar_paper_review_counts()
     chips = [
+        render_radar_metric_chip("preset", radar_source_preset_label(settings)),
         render_radar_metric_chip("sources", radar_list_preview(radar_source_setting_labels(settings), limit=3)),
         render_radar_metric_chip("max/source", settings["max_results"]),
         render_radar_metric_chip("recommendations", settings["limit"]),
@@ -922,6 +926,12 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
 def radar_source_setting_labels(settings: dict[str, Any]) -> list[str]:
     labels = {source_id: label for source_id, label in RADAR_WEB_SOURCE_OPTIONS}
     return [labels.get(source, source) for source in settings.get("sources") or []]
+
+
+def radar_source_preset_label(settings: dict[str, Any]) -> str:
+    selected_preset = str(settings.get("source_preset") or "custom")
+    labels = {preset["id"]: preset["name"] for preset in team_radar_source_presets()}
+    return labels.get(selected_preset, "Custom")
 
 
 def radar_tracker_count(settings: dict[str, Any]) -> int:
@@ -1049,6 +1059,12 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
     return f"""
     <form class="radar-run-form" method="post" action="/radar/run">
       <h2>Run Now</h2>
+      <label>
+        <span class="muted">Source preset</span>
+        <select name="source_preset">
+          {render_radar_source_preset_options(str(settings.get('source_preset') or 'custom'))}
+        </select>
+      </label>
       <div class="radar-source-grid">{sources}</div>
       <div class="radar-number-row">
         <label>
@@ -1295,6 +1311,7 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
     if not isinstance(saved_settings, dict):
         saved_settings = {}
     settings: dict[str, Any] = {
+        "source_preset": "custom",
         "sources": list(DEFAULT_RADAR_SOURCES),
         "max_results": 20,
         "limit": 10,
@@ -1311,6 +1328,7 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
     for key in RADAR_LIST_SETTING_KEYS:
         settings[key] = []
     settings.update(normalize_radar_settings(saved_settings))
+    settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
     if not settings["sources"]:
         settings["sources"] = list(DEFAULT_RADAR_SOURCES)
     return settings
@@ -1318,6 +1336,8 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
 
 def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
+    if "source_preset" in settings:
+        normalized["source_preset"] = clean_source_preset_id(settings.get("source_preset"))
     if "sources" in settings:
         source_values = settings.get("sources") or []
         normalized["sources"] = [
@@ -1363,6 +1383,21 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
 
 def radar_list_form_value(settings: dict[str, Any], key: str) -> str:
     return "\n".join(str(value) for value in settings.get(key) or [])
+
+
+def clean_source_preset_id(value: Any) -> str:
+    selected = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    valid = {preset["id"] for preset in team_radar_source_presets()}
+    return selected if selected in valid else "custom"
+
+
+def render_radar_source_preset_options(selected: str) -> str:
+    options = [("custom", "Custom")]
+    options.extend((preset["id"], preset["name"]) for preset in team_radar_source_presets())
+    return "\n".join(
+        f'<option value="{html_escape(value)}"{" selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in options
+    )
 
 
 def clean_radar_review_filter(value: str | None) -> str:
@@ -1429,6 +1464,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     </div>
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
+    {render_radar_source_readiness(run)}
     {render_radar_source_coverage(run)}
     {render_radar_source_stats(run)}
     {render_radar_venue_coverage(run)}
@@ -1497,6 +1533,33 @@ def render_radar_source_coverage(run: dict[str, Any]) -> str:
     if missing_sources:
         chips.append(f'<span class="tag warn">missing sources: {html_escape(", ".join(map(str, missing_sources[:3])))}</span>')
     return f'<div class="tags"><span class="muted">Source coverage:</span> {"".join(chips)}</div>'
+
+
+def render_radar_source_readiness(run: dict[str, Any]) -> str:
+    sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+    config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+    readiness = radar_source_readiness_summary(sources, config)
+    if readiness.get("status") == "no_sources":
+        return ""
+    status = str(readiness.get("status") or "unknown")
+    status_class = "tag warn" if status == "blocked" else "tag good" if status == "ready" else "tag"
+    chips = [
+        f'<span class="{status_class}">status: {html_escape(status)}</span>',
+        f'<span class="tag">sources: {int(readiness.get("source_count") or 0)}</span>',
+        f'<span class="tag">warnings: {int(readiness.get("warning_count") or 0)}</span>',
+        f'<span class="tag">blocked: {int(readiness.get("blocked_count") or 0)}</span>',
+    ]
+    blocked_sources = readiness.get("blocked_source_ids") if isinstance(readiness.get("blocked_source_ids"), list) else []
+    warning_sources = readiness.get("warning_source_ids") if isinstance(readiness.get("warning_source_ids"), list) else []
+    if blocked_sources:
+        chips.append(
+            f'<span class="tag warn">blocked sources: {html_escape(", ".join(map(str, blocked_sources[:3])))}</span>'
+        )
+    if warning_sources:
+        chips.append(
+            f'<span class="tag">warning sources: {html_escape(", ".join(map(str, warning_sources[:3])))}</span>'
+        )
+    return f'<div class="tags"><span class="muted">Source readiness:</span> {"".join(chips)}</div>'
 
 
 def render_radar_source_stats(run: dict[str, Any]) -> str:
@@ -2091,6 +2154,17 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         f'({int(source_coverage.get("reported_count") or 0)}/{int(source_coverage.get("source_count") or 0)})'
         f'</span>'
     )
+    source_readiness = radar_source_readiness_summary(
+        run.get("sources") if isinstance(run.get("sources"), list) else [],
+        run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {},
+    )
+    readiness_status = str(source_readiness.get("status") or "unknown")
+    readiness_css = "warn" if readiness_status == "blocked" else "good" if readiness_status == "ready" else ""
+    readiness_label = (
+        f'<span class="pill {readiness_css}">Readiness: {html_escape(readiness_status)}</span>'
+        if readiness_status != "no_sources"
+        else ""
+    )
     freshness = radar_run_freshness(run)
     freshness_css = "warn" if freshness.get("status") == "stale" else "good" if freshness.get("status") == "fresh" else ""
     freshness_label = f'<span class="pill {freshness_css}">Freshness: {html_escape(freshness.get("status") or "unknown")}</span>'
@@ -2101,6 +2175,7 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
       {status_pill(str(run.get("status") or "unknown"))}
       {freshness_label}
       {coverage_label}
+      {readiness_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
       <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
       {source_error_label}
@@ -2924,6 +2999,7 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         conference_year=settings["conference_year"] or None,
         dblp_venue_profiles=settings["venue_profiles"],
         usenix_security_cycles=settings["usenix_security_cycles"] or None,
+        source_preset=settings["source_preset"],
         cache_pdfs=settings["cache_pdfs"],
         pdf_cache_dir=Path(settings["pdf_cache_dir"]) if settings.get("pdf_cache_dir") else None,
         pdf_cache_max_bytes=settings["pdf_cache_max_bytes"],
@@ -2933,6 +3009,7 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
 
 def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
     settings = {
+        "source_preset": clean_source_preset_id(fields.get("source_preset", "")),
         "sources": selected_radar_sources(fields),
         "max_results": clean_positive_int(fields.get("max_results", ""), default=20, maximum=100),
         "limit": clean_positive_int(fields.get("limit", ""), default=10, maximum=50),
@@ -2958,6 +3035,7 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "openreview_venue_profiles": split_form_list(fields.get("openreview_venue_profiles", "")),
         "venue_profiles": split_form_list(fields.get("venue_profiles", "")),
     }
+    settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
     ensure_radar_sources_for_settings(settings)
     return settings
 

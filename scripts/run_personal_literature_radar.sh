@@ -27,8 +27,6 @@ LATEST_QUEUE_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
-read -r -a SOURCES <<< "${PERSONAL_RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
-
 ARGS=(
   "scripts/personal_literature_radar.py"
   "run"
@@ -38,9 +36,16 @@ ARGS=(
   "--json"
 )
 
-for source in "${SOURCES[@]}"; do
-  ARGS+=("--source" "$source")
-done
+if [[ -n "${PERSONAL_RADAR_SOURCE_PRESET:-}" ]]; then
+  ARGS+=("--source-preset" "$PERSONAL_RADAR_SOURCE_PRESET")
+fi
+
+if [[ -n "${PERSONAL_RADAR_SOURCES:-}" || -z "${PERSONAL_RADAR_SOURCE_PRESET:-}" ]]; then
+  read -r -a SOURCES <<< "${PERSONAL_RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+  for source in "${SOURCES[@]}"; do
+    ARGS+=("--source" "$source")
+  done
+fi
 
 if [[ -n "${PERSONAL_RADAR_TOPIC_PROFILE:-}" ]]; then
   ARGS+=("--topic-profile" "$PERSONAL_RADAR_TOPIC_PROFILE")

@@ -93,6 +93,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Novelty: new this run", report_text)
             self.assertIn("Signal: Memory safety and LLM security", report_text)
             self.assertIn("Matched: LLM security", report_text)
+            self.assertIn("## Source Readiness", report_text)
+            self.assertIn("status=ready", report_text)
             self.assertEqual(arxiv.call_args.kwargs["query_terms"], ["memory safety"])
 
     def test_run_personal_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
@@ -590,6 +592,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
+            self.assertEqual(queue_result["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             direct_queue = build_personal_literature_radar_queue_payload(
                 root,
@@ -612,7 +615,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("source_errors=0", queue_text)
             self.assertIn("freshness=", queue_text)
             self.assertIn("Source coverage:", queue_text)
+            self.assertIn("Source readiness:", queue_text)
             self.assertIn("status=succeeded", queue_text)
+            self.assertIn("status=ready", queue_text)
             self.assertIn("PDF access:", queue_text)
             self.assertIn("downloadable=1", queue_text)
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
@@ -710,6 +715,42 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Pipeline Trace", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
+
+    def test_personal_literature_radar_cli_passes_source_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fake_result = {
+                "run_id": "personalradar_preset",
+                "sources": ["arxiv"],
+                "query_terms": ["memory safety"],
+                "collected_count": 0,
+                "recommendation_count": 0,
+                "source_errors": [],
+                "source_stats": [],
+                "recommendations": [],
+                "report": "# Personal Radar\n",
+                "report_path": None,
+            }
+            stdout = io.StringIO()
+            with mock.patch(
+                "scripts.personal_literature_radar.run_personal_literature_radar",
+                return_value=fake_result,
+            ) as runner:
+                with contextlib.redirect_stdout(stdout):
+                    code = personal_literature_radar.main(
+                        [
+                            "run",
+                            "--root-path",
+                            str(root),
+                            "--source-preset",
+                            "security_memory_agentic_daily",
+                            "--json",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(runner.call_args.kwargs["source_preset"], "security_memory_agentic_daily")
+            self.assertEqual(json.loads(stdout.getvalue())["run_id"], "personalradar_preset")
 
     def test_personal_literature_radar_queue_reports_partial_empty_latest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

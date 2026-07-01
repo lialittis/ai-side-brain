@@ -35,7 +35,7 @@ if "--output" in args:
 if command in {"queue", "radar-queue"} and "--json" not in args:
     print(f"{command} text queue")
 else:
-    print(json.dumps({"command": command, "script": args[0] if args else ""}, sort_keys=True))
+    print(json.dumps({"args": args, "command": command, "script": args[0] if args else ""}, sort_keys=True))
 """
 
 
@@ -60,7 +60,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 env={
                     "PYTHON_BIN": str(fake_python),
                     "RADAR_OUTPUT_DIR": str(output_dir),
-                    "RADAR_SOURCES": "arxiv",
+                    "RADAR_SOURCE_PRESET": "team_security_daily",
                     "RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -74,7 +74,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(read_json(output_dir / "literature-radar-latest.json")["command"], "radar-run")
+            latest_run = read_json(output_dir / "literature-radar-latest.json")
+            self.assertEqual(latest_run["command"], "radar-run")
+            self.assertIn("--source-preset", latest_run["args"])
+            self.assertIn("team_security_daily", latest_run["args"])
             self.assertIn("radar-run markdown", (output_dir / "literature-radar-latest.md").read_text())
             self.assertEqual(
                 read_json(output_dir / "literature-radar-queue-latest.json")["command"],
@@ -115,15 +118,15 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_ROOT": str(workspace),
                     "PERSONAL_RADAR_OUTPUT_DIR": str(output_dir),
                     "PERSONAL_RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
-                    "PERSONAL_RADAR_SOURCES": "arxiv",
+                    "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
             )
 
-            self.assertEqual(
-                read_json(output_dir / "personal-literature-radar-latest.json")["command"],
-                "run",
-            )
+            latest_personal_run = read_json(output_dir / "personal-literature-radar-latest.json")
+            self.assertEqual(latest_personal_run["command"], "run")
+            self.assertIn("--source-preset", latest_personal_run["args"])
+            self.assertIn("security_memory_agentic_daily", latest_personal_run["args"])
             self.assertEqual(
                 read_json(output_dir / "personal-literature-radar-queue-latest.json")["command"],
                 "queue",

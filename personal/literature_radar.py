@@ -20,6 +20,7 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -57,6 +58,8 @@ from shared.literature_radar import (
     radar_review_counts,
     radar_run_freshness,
     radar_source_coverage_summary,
+    radar_source_preset,
+    radar_source_readiness_summary,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -113,6 +116,7 @@ def run_personal_literature_radar(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    source_preset: str | None = None,
     topic_profile: dict[str, Any] | None = None,
     topic_profile_path: Path | None = None,
     write_report: bool = True,
@@ -128,12 +132,24 @@ def run_personal_literature_radar(
         root,
         topic_profile_path=topic_profile_path,
     )
-    selected_sources = list(sources or DEFAULT_PERSONAL_RADAR_SOURCES)
+    preset = radar_source_preset(source_preset)
+    selected_sources = list((preset or {}).get("sources") or sources or DEFAULT_PERSONAL_RADAR_SOURCES)
+    selected_dblp_venue_profiles = dblp_venue_profiles
+    selected_openreview_venue_profiles = openreview_venue_profiles
+    selected_usenix_security_cycles = usenix_security_cycles
+    if preset:
+        if selected_dblp_venue_profiles is None:
+            selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
+        if selected_openreview_venue_profiles is None:
+            selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
+        if selected_usenix_security_cycles is None:
+            selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     collection_config = personal_radar_collection_config(
         selected_sources=selected_sources,
+        source_preset=(preset or {}).get("id"),
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,
@@ -150,10 +166,10 @@ def run_personal_literature_radar(
         dblp_author_pids=dblp_author_pids,
         openalex_author_ids=openalex_author_ids,
         conference_year=conference_year,
-        dblp_venue_profiles=dblp_venue_profiles,
-        openreview_venue_profiles=openreview_venue_profiles,
+        dblp_venue_profiles=selected_dblp_venue_profiles,
+        openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
-        usenix_security_cycles=usenix_security_cycles,
+        usenix_security_cycles=selected_usenix_security_cycles,
         topic_profile_path=topic_profile_path,
         write_report=write_report,
         cache_pdfs=cache_pdfs,
@@ -179,10 +195,10 @@ def run_personal_literature_radar(
         dblp_author_pids=dblp_author_pids,
         openalex_author_ids=openalex_author_ids,
         conference_year=conference_year,
-        dblp_venue_profiles=dblp_venue_profiles,
-        openreview_venue_profiles=openreview_venue_profiles,
+        dblp_venue_profiles=selected_dblp_venue_profiles,
+        openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
-        usenix_security_cycles=usenix_security_cycles,
+        usenix_security_cycles=selected_usenix_security_cycles,
         source_errors=source_errors,
         source_stats=source_stats,
         now=selected_now,
@@ -232,6 +248,7 @@ def run_personal_literature_radar(
         recommendations=recommendations,
     )
     report = append_radar_venue_coverage_to_report(report, venue_coverage)
+    report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
     report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
     report = append_radar_source_stats_to_report(report, source_stats)
     report = append_radar_source_errors_to_report(report, source_errors)
@@ -436,6 +453,8 @@ def personal_literature_radar_run_summary(
     source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
     source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
     venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
+    sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+    collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
     return {
         "id": run.get("id") or "",
         "status": run.get("status") or "unknown",
@@ -446,10 +465,11 @@ def personal_literature_radar_run_summary(
         "source_error_count": len(source_errors),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
             source_errors,
-            run.get("sources") if isinstance(run.get("sources"), list) else [],
+            sources,
         ),
         "venue_coverage": venue_coverage,
         "report_path": run.get("report_path") or "",
@@ -1054,6 +1074,7 @@ def personal_radar_scoring_profile(topic_profile: dict[str, Any]) -> dict[str, A
 def personal_radar_collection_config(
     *,
     selected_sources: list[str],
+    source_preset: str | None,
     max_results: int,
     recommendation_limit: int,
     summarize: bool,
@@ -1082,6 +1103,7 @@ def personal_radar_collection_config(
     now: datetime,
 ) -> dict[str, Any]:
     return build_radar_collection_config(
+        source_preset=source_preset,
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,

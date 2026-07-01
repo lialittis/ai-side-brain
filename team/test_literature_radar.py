@@ -16,7 +16,13 @@ from shared.literature_radar import (
     recommend_papers,
 )
 from team import research_cli
-from team.literature_radar import import_radar_recommendation, run_team_literature_radar, team_radar_context_items
+from team.literature_radar import (
+    apply_team_radar_source_preset,
+    import_radar_recommendation,
+    run_team_literature_radar,
+    team_radar_context_items,
+    team_radar_source_preset,
+)
 from team.literature_radar_ai import TEAM_RADAR_SUMMARY_SCHEMA, summarize_radar_recommendations_with_openrouter
 from team.research_db import TeamResearchDatabase
 
@@ -32,6 +38,32 @@ class FakeSummaryClient:
 
 
 class TeamLiteratureRadarTest(unittest.TestCase):
+    def test_team_radar_source_preset_expands_daily_security_defaults(self) -> None:
+        preset = team_radar_source_preset("team_security_daily")
+
+        self.assertIsNotNone(preset)
+        self.assertIn("arxiv", preset["sources"])
+        self.assertIn("dblp_venues", preset["sources"])
+        self.assertIn("openreview_venues", preset["sources"])
+        self.assertEqual(preset["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(preset["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+
+        settings = apply_team_radar_source_preset(
+            {
+                "sources": ["arxiv"],
+                "venue_profiles": [],
+                "openreview_venue_profiles": [],
+                "usenix_security_cycles": [],
+            },
+            "team_security_daily",
+        )
+
+        self.assertEqual(settings["source_preset"], "team_security_daily")
+        self.assertEqual(settings["sources"], preset["sources"])
+        self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+        self.assertEqual(settings["usenix_security_cycles"], [1])
+
     def test_imports_radar_recommendation_into_team_library(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -1234,6 +1266,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
+            self.assertEqual(queue_result["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -1249,7 +1282,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("source_errors=0", queue_text)
             self.assertIn("freshness=", queue_text)
             self.assertIn("Source coverage:", queue_text)
+            self.assertIn("Source readiness:", queue_text)
             self.assertIn("status=succeeded", queue_text)
+            self.assertIn("status=ready", queue_text)
             self.assertIn("PDF access:", queue_text)
             self.assertIn("downloadable=1", queue_text)
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
@@ -1557,6 +1592,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             database.set_team_setting(
                 "literature_radar_defaults",
                 {
+                    "source_preset": "top_venues",
                     "sources": ["openalex_authors"],
                     "max_results": 7,
                     "limit": 3,
@@ -1601,6 +1637,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             runner.assert_called_once()
+            self.assertEqual(runner.call_args.kwargs["source_preset"], "top_venues")
             self.assertEqual(runner.call_args.kwargs["sources"], ["openalex_authors"])
             self.assertEqual(runner.call_args.kwargs["max_results"], 7)
             self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 3)

@@ -41,6 +41,10 @@ if [[ "$USE_SAVED_DEFAULTS" == "1" ]]; then
   ARGS+=("--use-saved-defaults")
 fi
 
+if [[ -n "${RADAR_SOURCE_PRESET:-}" ]]; then
+  ARGS+=("--source-preset" "$RADAR_SOURCE_PRESET")
+fi
+
 if [[ -n "${RADAR_MAX_RESULTS:-}" ]]; then
   ARGS+=("--max-results" "$RADAR_MAX_RESULTS")
 elif [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
@@ -53,7 +57,7 @@ elif [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
   ARGS+=("--limit" "10")
 fi
 
-if [[ -n "${RADAR_SOURCES:-}" || "$USE_SAVED_DEFAULTS" != "1" ]]; then
+if [[ -n "${RADAR_SOURCES:-}" || ( "$USE_SAVED_DEFAULTS" != "1" && -z "${RADAR_SOURCE_PRESET:-}" ) ]]; then
   read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
   for source in "${SOURCES[@]}"; do
     ARGS+=("--source" "$source")

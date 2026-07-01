@@ -112,9 +112,17 @@ OpenReview invitation IDs, OpenReview venue profiles, Semantic Scholar author
 IDs, and DBLP venue profiles automatically enable their matching collectors for
 that run.
 
+The Source preset selector is the daily-use shortcut. `Broad Daily` is the
+previous broad metadata default. `Team Security Daily` is the recommended
+current team preset for system security, memory safety, and agentic security: it
+combines arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, DBLP security/PL
+venue profiles, OpenReview ICLR/NeurIPS/ICML venue profiles, USENIX Security,
+and NDSS. `Top Venue Sweep` is proceedings-focused across security, systems,
+PL/memory-safety, software-engineering, and AI/ML venue profiles.
+
 The form can save source choices, limits, summary provider, conference year,
 USENIX Security cycles, OpenReview accepted-only behavior, PDF cache settings,
-source contact email, tracked authors, positive and negative seed papers, and venue profiles as Team defaults. Saved
+source contact email, source preset, tracked authors, positive and negative seed papers, and venue profiles as Team defaults. Saved
 defaults live in the existing `team_settings` table under
 `literature_radar_defaults`, so the team can configure daily-use radar settings
 once and reuse them for later ad hoc or scheduled runs.
@@ -129,6 +137,8 @@ python team/research_cli.py radar-run --source arxiv --source dblp --source sema
 
 Useful options:
 
+- `--source-preset`: use a named source bundle. Current presets are
+  `broad_daily`, `team_security_daily`, and `top_venues`.
 - `--query-term`: override the default Team Interest keywords; repeatable.
 - `--max-results`: maximum source results per source query.
 - `--limit`: maximum recommendations in the report.
@@ -327,10 +337,12 @@ successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
 succeeded, failed, partial, missing, and empty sources for daily review, and
 the Radar page shows that coverage on the selected run detail before raw source
-stats. Source errors are shown in the Radar page and report. Generated Markdown
-reports and stored briefs include `Source Coverage` before detailed `Source
-Stats`, so a daily or weekly review can tell whether the radar was quiet or
-under-collected. Venue-profile runs also show `Venue Coverage` in the report
+stats. Source readiness checks whether selected sources have required seeds,
+author IDs, or OpenReview invitations and separates those blocking issues from
+optional API/contact warnings. Source errors are shown in the Radar page and
+report. Generated Markdown reports include `Source Readiness` and `Source
+Coverage` before detailed `Source Stats`, so a daily or weekly review can tell
+whether the radar was misconfigured, quiet, or under-collected. Venue-profile runs also show `Venue Coverage` in the report
 and Radar page, including candidate and recommendation counts per conference
 profile/year.
 
@@ -419,6 +431,9 @@ It reads `.env` first and supports these optional variables:
   tracking uses `semantic_scholar_authors`, `dblp_authors`, or
   `openalex_authors`; venue cross-checking can use `openalex_venues`;
   OpenReview venue presets use `openreview_venues`.
+- `RADAR_SOURCE_PRESET`: named source bundle for scheduled runs. Use
+  `team_security_daily` for the current team workflow, `broad_daily` for the
+  broad metadata default, or `top_venues` for a proceedings-focused sweep.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
 - `RADAR_WRITE_QUEUE=0`: skip writing queue snapshots from
   `run_literature_radar.sh`.

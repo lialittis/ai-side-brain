@@ -95,6 +95,75 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
     },
 ]
 
+RADAR_SOURCE_PRESETS: list[dict[str, Any]] = [
+    {
+        "id": "broad_daily",
+        "name": "Broad Daily",
+        "description": "Latest metadata from stable general paper sources plus USENIX Security and NDSS accepted-paper pages.",
+        "sources": ["arxiv", "dblp", "semantic_scholar", "openalex", "crossref", "usenix_security", "ndss"],
+        "venue_profiles": [],
+        "openreview_venue_profiles": [],
+        "usenix_security_cycles": [1],
+    },
+    {
+        "id": "security_memory_agentic_daily",
+        "name": "Security, Memory Safety, and Agentic Security Daily",
+        "description": "Daily discovery across preprints, metadata APIs, top security/PL venues, and OpenReview AI venues.",
+        "sources": [
+            "arxiv",
+            "dblp",
+            "semantic_scholar",
+            "openalex",
+            "crossref",
+            "dblp_venues",
+            "openreview_venues",
+            "usenix_security",
+            "ndss",
+        ],
+        "venue_profiles": ["security", "programming_languages_memory_safety"],
+        "openreview_venue_profiles": ["iclr", "neurips", "icml"],
+        "usenix_security_cycles": [1],
+    },
+    {
+        "id": "top_venues",
+        "name": "Top Venue Sweep",
+        "description": "Proceedings-focused sweep over the configured top security, systems, PL, software-engineering, and AI/ML venues.",
+        "sources": ["dblp_venues", "openalex_venues", "openreview_venues", "usenix_security", "ndss"],
+        "venue_profiles": [
+            "security",
+            "systems",
+            "programming_languages_memory_safety",
+            "software_engineering",
+        ],
+        "openreview_venue_profiles": ["iclr", "neurips", "icml"],
+        "usenix_security_cycles": [1],
+    },
+]
+
+RADAR_SOURCE_PRESET_ALIASES = {
+    "team_security_daily": "security_memory_agentic_daily",
+}
+RADAR_SOURCE_REQUIRED_CONFIG: dict[str, list[tuple[str, str]]] = {
+    "dblp_authors": [("dblp_author_pids", "DBLP author PID")],
+    "semantic_scholar_authors": [("semantic_scholar_author_ids", "Semantic Scholar author ID")],
+    "semantic_scholar_citations": [("seed_paper_ids", "Semantic Scholar seed paper ID")],
+    "semantic_scholar_references": [("seed_paper_ids", "Semantic Scholar seed paper ID")],
+    "semantic_scholar_recommendations": [("seed_paper_ids", "Semantic Scholar positive seed paper ID")],
+    "openalex_authors": [("openalex_author_ids", "OpenAlex author ID")],
+    "openreview": [("openreview_invitations", "OpenReview invitation ID")],
+}
+RADAR_SOURCE_RECOMMENDED_CONFIG: dict[str, list[tuple[str, str]]] = {
+    "semantic_scholar": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "semantic_scholar_authors": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "semantic_scholar_citations": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "semantic_scholar_references": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "semantic_scholar_recommendations": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "openalex": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
+    "openalex_authors": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
+    "openalex_venues": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
+    "crossref": [("crossref_mailto_configured", "Crossref mailto/contact")],
+}
+
 CONFERENCE_SOURCE_GROUPS: dict[str, list[str]] = {
     "security": ["USENIX Security", "IEEE S&P", "ACM CCS", "NDSS", "RAID", "ACSAC"],
     "systems": ["OSDI", "SOSP", "EuroSys", "USENIX ATC", "ASPLOS"],
@@ -339,6 +408,48 @@ def source_registry() -> list[dict[str, Any]]:
 
 def mvp_source_ids() -> list[str]:
     return [source["id"] for source in SOURCE_REGISTRY if source.get("mvp_collector")]
+
+
+def radar_source_presets() -> list[dict[str, Any]]:
+    return [
+        {
+            **preset,
+            "sources": list(preset.get("sources") or []),
+            "venue_profiles": list(preset.get("venue_profiles") or []),
+            "openreview_venue_profiles": list(preset.get("openreview_venue_profiles") or []),
+            "usenix_security_cycles": list(preset.get("usenix_security_cycles") or []),
+        }
+        for preset in RADAR_SOURCE_PRESETS
+    ]
+
+
+def radar_source_preset(preset_id: str | None) -> dict[str, Any] | None:
+    selected_id = normalize_radar_source_preset_id(preset_id)
+    if not selected_id:
+        return None
+    canonical_id = RADAR_SOURCE_PRESET_ALIASES.get(selected_id, selected_id)
+    for preset in radar_source_presets():
+        if preset["id"] == canonical_id:
+            return preset
+    raise ValueError(f"Unknown Literature Radar source preset: {preset_id}")
+
+
+def normalize_radar_source_preset_id(preset_id: str | None) -> str:
+    selected_id = re.sub(r"[^a-z0-9_]+", "_", str(preset_id or "").strip().lower()).strip("_")
+    return "" if selected_id in {"", "custom"} else selected_id
+
+
+def apply_radar_source_preset(settings: dict[str, Any], preset_id: str | None) -> dict[str, Any]:
+    preset = radar_source_preset(preset_id)
+    if preset is None:
+        return dict(settings)
+    updated = dict(settings)
+    updated["source_preset"] = preset["id"]
+    updated["sources"] = list(preset.get("sources") or [])
+    for key in ("venue_profiles", "openreview_venue_profiles", "usenix_security_cycles"):
+        if not updated.get(key):
+            updated[key] = list(preset.get(key) or [])
+    return updated
 
 
 def default_radar_topic_profile() -> dict[str, Any]:
@@ -670,6 +781,123 @@ def collect_radar_source(
             )
         )
     return papers
+
+
+def radar_source_readiness_summary(
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_sources = unique_source_ids(list(sources or []))
+    config = collection_config if isinstance(collection_config, dict) else {}
+    records = []
+    for source_id in selected_sources:
+        required = RADAR_SOURCE_REQUIRED_CONFIG.get(source_id, [])
+        recommended = RADAR_SOURCE_RECOMMENDED_CONFIG.get(source_id, [])
+        missing_required = [
+            {"key": key, "label": label}
+            for key, label in required
+            if not radar_config_value_present(config.get(key))
+        ]
+        missing_recommended = [
+            {"key": key, "label": label}
+            for key, label in recommended
+            if not radar_config_value_present(config.get(key))
+        ]
+        if missing_required:
+            status = "blocked"
+        elif missing_recommended:
+            status = "ready_with_warnings"
+        else:
+            status = "ready"
+        records.append(
+            {
+                "source_id": source_id,
+                "status": status,
+                "required_config_keys": [key for key, _label in required],
+                "missing_required_config": missing_required,
+                "recommended_config_keys": [key for key, _label in recommended],
+                "missing_recommended_config": missing_recommended,
+            }
+        )
+    blocked = [record for record in records if record["status"] == "blocked"]
+    warnings = [record for record in records if record["status"] == "ready_with_warnings"]
+    if not records:
+        status = "no_sources"
+    elif blocked:
+        status = "blocked"
+    elif warnings:
+        status = "ready_with_warnings"
+    else:
+        status = "ready"
+    return {
+        "status": status,
+        "source_count": len(records),
+        "ready_count": len([record for record in records if record["status"] == "ready"]),
+        "warning_count": len(warnings),
+        "blocked_count": len(blocked),
+        "blocked_source_ids": [record["source_id"] for record in blocked],
+        "warning_source_ids": [record["source_id"] for record in warnings],
+        "missing_required": [
+            {"source_id": record["source_id"], **missing}
+            for record in blocked
+            for missing in record["missing_required_config"]
+        ],
+        "missing_recommended": [
+            {"source_id": record["source_id"], **missing}
+            for record in warnings
+            for missing in record["missing_recommended_config"]
+        ],
+        "sources": records,
+    }
+
+
+def radar_config_value_present(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, list):
+        return any(radar_config_value_present(item) for item in value)
+    if isinstance(value, dict):
+        return bool(value)
+    return bool(str(value or "").strip())
+
+
+def format_radar_source_readiness(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    parts = [
+        "Source readiness:",
+        f"status={summary.get('status') or 'unknown'}",
+        f"sources={int(summary.get('source_count') or 0)}",
+        f"ready={int(summary.get('ready_count') or 0)}",
+        f"warnings={int(summary.get('warning_count') or 0)}",
+        f"blocked={int(summary.get('blocked_count') or 0)}",
+    ]
+    blocked = summary.get("blocked_source_ids") if isinstance(summary.get("blocked_source_ids"), list) else []
+    warnings = summary.get("warning_source_ids") if isinstance(summary.get("warning_source_ids"), list) else []
+    if blocked:
+        parts.append(f"blocked_sources={', '.join(str(value) for value in blocked[:3])}")
+    if warnings:
+        parts.append(f"warning_sources={', '.join(str(value) for value in warnings[:3])}")
+    return " | ".join(parts)
+
+
+def append_radar_source_readiness_to_report(
+    report: str,
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> str:
+    summary = radar_source_readiness_summary(sources, collection_config)
+    if summary.get("status") == "no_sources":
+        return report
+    lines = [report.rstrip(), "", "## Source Readiness", "", f"- {format_radar_source_readiness(summary)}"]
+    for key, label in (("missing_required", "Missing required"), ("missing_recommended", "Missing recommended")):
+        values = summary.get(key) if isinstance(summary.get(key), list) else []
+        for value in values[:8]:
+            lines.append(f"- {label}: `{value.get('source_id')}` needs {value.get('label') or value.get('key')}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str, Any]]) -> str:

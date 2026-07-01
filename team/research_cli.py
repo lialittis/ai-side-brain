@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     format_radar_source_coverage,
+    format_radar_source_readiness,
     format_radar_source_stats,
     radar_latest_signal_lines,
 )
@@ -26,6 +27,7 @@ from team.literature_radar import (
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     run_team_literature_radar,
+    team_radar_source_presets,
 )
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
@@ -100,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-saved-defaults",
         action="store_true",
         help="start from Team Radar defaults saved by the web UI",
+    )
+    radar.add_argument(
+        "--source-preset",
+        choices=[preset["id"] for preset in team_radar_source_presets()],
+        help="named Team Radar source bundle; overrides manual source checkboxes or saved source list",
     )
     radar.add_argument(
         "--source",
@@ -502,6 +509,13 @@ def print_radar_queue(result: dict[str, Any]) -> None:
         )
         if source_coverage:
             print(format_radar_source_coverage(source_coverage))
+        source_readiness = (
+            latest_run.get("source_readiness")
+            if isinstance(latest_run.get("source_readiness"), dict)
+            else {}
+        )
+        if source_readiness:
+            print(format_radar_source_readiness(source_readiness))
     access_summary = result.get("access_summary") if isinstance(result.get("access_summary"), dict) else {}
     if access_summary:
         print(format_radar_queue_access_summary(access_summary))
@@ -714,6 +728,9 @@ def main(argv: list[str] | None = None) -> int:
         saved_defaults = radar_saved_defaults(database, args.use_saved_defaults)
         summary_provider = args.summary_provider or saved_radar_summary_provider(saved_defaults)
         saved_source_contact_email = saved_radar_text(saved_defaults, "source_contact_email")
+        selected_source_preset = args.source_preset or (
+            None if args.source else saved_radar_text(saved_defaults, "source_preset")
+        )
         result = run_team_literature_radar(
             database,
             sources=args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES),
@@ -768,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
             dblp_author_pids=args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids") or None,
             dblp_venue_profiles=args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None,
             usenix_security_cycles=args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles") or None,
+            source_preset=selected_source_preset,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

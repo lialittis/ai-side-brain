@@ -37,6 +37,7 @@ it once, then edit the JSON keywords directly:
 ```bash
 python scripts/personal_literature_radar.py profile-init
 python scripts/personal_literature_radar.py run --source arxiv --source dblp
+python scripts/personal_literature_radar.py run --source-preset security_memory_agentic_daily
 python scripts/personal_literature_radar.py run --source dblp_venues --venue-profile security --conference-year 2026
 python scripts/personal_literature_radar.py run --source openalex_venues --venue-profile security --conference-year 2026
 python scripts/personal_literature_radar.py run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
@@ -87,6 +88,8 @@ without collecting again. Scheduled scripts also refresh stable
 the CLI `brief --json`: `kind=personal_literature_radar_brief`, selected
 limits, run count, latest-run health/freshness, review counts, active queue
 preview with PDF access summary, index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
+`PERSONAL_RADAR_SOURCE_PRESET` (`broad_daily`,
+`security_memory_agentic_daily`, or `top_venues`),
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
@@ -139,8 +142,9 @@ existing context, and which interests matched; the JSON queue includes the same
 lines under `signal_lines`. The JSON queue also includes `access_summary`, which counts downloadable,
 cached, metadata/link-only, and access-kind buckets for the active queue. Both
 text and JSON queue output include latest-run health/freshness, source-error
-counts, and compact source coverage, so scheduled queue snapshots distinguish
-an empty healthy queue from a collector problem.
+counts, compact source readiness, and compact source coverage, so scheduled
+queue snapshots distinguish misconfiguration, an empty healthy queue, and a
+collector problem.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated

@@ -13,6 +13,7 @@ from shared.literature_radar import (
     add_recommendation_context,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
@@ -47,6 +48,8 @@ from shared.literature_radar import (
     radar_latest_signal_lines,
     radar_run_freshness,
     radar_source_coverage_summary,
+    radar_source_presets,
+    radar_source_readiness_summary,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -107,6 +110,51 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
 }
 
 
+def team_radar_source_presets() -> list[dict[str, Any]]:
+    presets = []
+    for preset in radar_source_presets():
+        if preset["id"] == "security_memory_agentic_daily":
+            presets.append(
+                {
+                    **preset,
+                    "id": "team_security_daily",
+                    "name": "Team Security Daily",
+                    "description": "Daily security, memory-safety, and agentic-security discovery across preprints, metadata APIs, top security/PL venues, and OpenReview AI venues.",
+                }
+            )
+        else:
+            presets.append(preset)
+    return presets
+
+
+def team_radar_source_preset(preset_id: str | None) -> dict[str, Any] | None:
+    selected_id = normalize_team_radar_preset_id(preset_id)
+    if not selected_id:
+        return None
+    for preset in team_radar_source_presets():
+        if preset["id"] == selected_id:
+            return preset
+    raise ValueError(f"Unknown Team Radar source preset: {preset_id}")
+
+
+def normalize_team_radar_preset_id(preset_id: str | None) -> str:
+    selected_id = re.sub(r"[^a-z0-9_]+", "_", str(preset_id or "").strip().lower()).strip("_")
+    return "" if selected_id in {"", "custom"} else selected_id
+
+
+def apply_team_radar_source_preset(settings: dict[str, Any], preset_id: str | None) -> dict[str, Any]:
+    preset = team_radar_source_preset(preset_id)
+    if preset is None:
+        return dict(settings)
+    updated = dict(settings)
+    updated["source_preset"] = preset["id"]
+    updated["sources"] = list(preset.get("sources") or [])
+    for key in ("venue_profiles", "openreview_venue_profiles", "usenix_security_cycles"):
+        if not updated.get(key):
+            updated[key] = list(preset.get(key) or [])
+    return updated
+
+
 def run_team_literature_radar(
     database: TeamResearchDatabase,
     *,
@@ -138,6 +186,7 @@ def run_team_literature_radar(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    source_preset: str | None = None,
     cache_pdfs: bool = False,
     pdf_cache_dir: Path | None = None,
     pdf_fetcher: Callable[[str], bytes] | None = None,
@@ -146,11 +195,23 @@ def run_team_literature_radar(
 ) -> dict[str, Any]:
     selected_interests = database.list_team_interest_keywords()
     selected_terms = query_terms or team_radar_query_terms_from_interests(selected_interests)
-    selected_sources = list(sources or DEFAULT_RADAR_SOURCES)
+    preset = team_radar_source_preset(source_preset)
+    selected_sources = list((preset or {}).get("sources") or sources or DEFAULT_RADAR_SOURCES)
+    selected_dblp_venue_profiles = dblp_venue_profiles
+    selected_openreview_venue_profiles = openreview_venue_profiles
+    selected_usenix_security_cycles = usenix_security_cycles
+    if preset:
+        if selected_dblp_venue_profiles is None:
+            selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
+        if selected_openreview_venue_profiles is None:
+            selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
+        if selected_usenix_security_cycles is None:
+            selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
     collection_config = team_radar_collection_config(
         selected_sources=selected_sources,
+        source_preset=(preset or {}).get("id"),
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,
@@ -171,10 +232,10 @@ def run_team_literature_radar(
         dblp_author_pids=dblp_author_pids,
         openalex_author_ids=openalex_author_ids,
         conference_year=conference_year,
-        dblp_venue_profiles=dblp_venue_profiles,
-        openreview_venue_profiles=openreview_venue_profiles,
+        dblp_venue_profiles=selected_dblp_venue_profiles,
+        openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
-        usenix_security_cycles=usenix_security_cycles,
+        usenix_security_cycles=selected_usenix_security_cycles,
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=pdf_cache_dir,
         pdf_cache_max_bytes=pdf_cache_max_bytes,
@@ -209,10 +270,10 @@ def run_team_literature_radar(
             dblp_author_pids=dblp_author_pids,
             openalex_author_ids=openalex_author_ids,
             conference_year=conference_year,
-            dblp_venue_profiles=dblp_venue_profiles,
-            openreview_venue_profiles=openreview_venue_profiles,
+            dblp_venue_profiles=selected_dblp_venue_profiles,
+            openreview_venue_profiles=selected_openreview_venue_profiles,
             openreview_accepted_only=openreview_accepted_only,
-            usenix_security_cycles=usenix_security_cycles,
+            usenix_security_cycles=selected_usenix_security_cycles,
             source_errors=source_errors,
             source_stats=source_stats,
             now=now,
@@ -274,6 +335,7 @@ def run_team_literature_radar(
             recommendations=recommendations,
         )
         report = append_radar_venue_coverage_to_report(report, venue_coverage)
+        report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
         report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
         report = append_radar_source_stats_to_report(report, source_stats)
         report = append_radar_source_errors_to_report(report, source_errors)
@@ -464,6 +526,8 @@ def team_literature_radar_run_summary(
     source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
     source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
     venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
+    sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+    collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
     return {
         "id": run.get("id") or "",
         "status": run.get("status") or "unknown",
@@ -475,10 +539,11 @@ def team_literature_radar_run_summary(
         "source_error_count": len(source_errors),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
             source_errors,
-            run.get("sources") if isinstance(run.get("sources"), list) else [],
+            sources,
         ),
         "venue_coverage": venue_coverage,
         "freshness": radar_run_freshness(run, now=now, max_age_hours=freshness_max_age_hours),
@@ -667,6 +732,7 @@ def team_radar_scoring_profile(interests: list[dict[str, Any]]) -> dict[str, Any
 def team_radar_collection_config(
     *,
     selected_sources: list[str],
+    source_preset: str | None,
     max_results: int,
     recommendation_limit: int,
     summarize: bool,
@@ -697,6 +763,7 @@ def team_radar_collection_config(
     now: datetime | None,
 ) -> dict[str, Any]:
     return build_radar_collection_config(
+        source_preset=source_preset,
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,

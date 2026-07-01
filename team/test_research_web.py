@@ -152,12 +152,14 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Status: failed", html)
             self.assertIn("Freshness:", html)
             self.assertIn("Coverage: failed", html)
+            self.assertIn("Readiness: ready", html)
             self.assertIn("Source errors: 1", html)
             self.assertNotIn("Priority Candidates", html)
             self.assertEqual(payload["latest_run"]["status"], "failed")
             self.assertEqual(payload["latest_run"]["freshness"]["status"], "fresh")
             self.assertEqual(payload["latest_run"]["source_coverage"]["status"], "failed")
             self.assertEqual(payload["latest_run"]["source_coverage"]["failed_source_ids"], ["dblp"])
+            self.assertEqual(payload["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(payload["latest_run"]["source_error_count"], 1)
             self.assertEqual(payload["latest_run"]["source_errors"][0]["source_id"], "dblp")
 
@@ -239,6 +241,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_payload["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_payload["latest_run"]["source_coverage"]["failed_count"], 0)
+            self.assertEqual(queue_payload["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertIn(
@@ -412,7 +415,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("local-radar-summary-v0.1", html)
             self.assertIn("Status: partial", html)
             self.assertIn("Source coverage", html)
+            self.assertIn("Source readiness", html)
             self.assertIn("status: partial", html)
+            self.assertIn("status: ready", html)
             self.assertIn("sources: 2/2", html)
             self.assertIn("failed sources: dblp", html)
             self.assertIn("Source stats", html)
@@ -650,6 +655,56 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("tracked lists: 3", html)
             self.assertIn("last run: none", html)
             self.assertIn("Save as defaults", html)
+
+    def test_literature_radar_web_run_can_save_source_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_preset"},
+            ) as runner:
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_preset": "team_security_daily",
+                        "max_results": "9",
+                        "limit": "4",
+                        "summary_provider": "local",
+                        "save_defaults": "1",
+                    },
+                )
+
+            self.assertEqual(run_id, "radar_run_preset")
+            settings = database.get_team_setting(RADAR_SETTINGS_KEY)
+            self.assertEqual(settings["source_preset"], "team_security_daily")
+            self.assertEqual(
+                settings["sources"],
+                [
+                    "arxiv",
+                    "dblp",
+                    "semantic_scholar",
+                    "openalex",
+                    "crossref",
+                    "dblp_venues",
+                    "openreview_venues",
+                    "usenix_security",
+                    "ndss",
+                ],
+            )
+            self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
+            self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+            self.assertEqual(settings["usenix_security_cycles"], [1])
+            self.assertEqual(runner.call_args.kwargs["source_preset"], "team_security_daily")
+            self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security", "programming_languages_memory_safety"])
+            self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+
+            html = render_literature_radar_page(database)
+            self.assertIn('<option value="team_security_daily" selected>Team Security Daily</option>', html)
+            self.assertIn('name="source_dblp_venues" value="1" checked', html)
+            self.assertIn('name="source_openreview_venues" value="1" checked', html)
+            self.assertIn('name="venue_profiles" placeholder="security, systems" value="security\nprogramming_languages_memory_safety"', html)
+            self.assertIn('name="openreview_venue_profiles" placeholder="iclr, ai_ml" value="iclr\nneurips\nicml"', html)
+            self.assertIn("preset: Team Security Daily", html)
 
     def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

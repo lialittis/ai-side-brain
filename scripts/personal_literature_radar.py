@@ -25,10 +25,12 @@ from personal.literature_radar import (
 )
 from shared.literature_radar import (
     format_radar_source_coverage,
+    format_radar_source_readiness,
     format_radar_source_stats,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
+    radar_source_presets,
 )
 
 
@@ -40,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run = subparsers.add_parser("run", help="collect and rank personal literature recommendations")
+    run.add_argument(
+        "--source-preset",
+        choices=[preset["id"] for preset in radar_source_presets()],
+        help="named shared Literature Radar source bundle",
+    )
     run.add_argument("--source", action="append", choices=[
         "arxiv",
         "dblp",
@@ -240,6 +247,13 @@ def print_personal_queue(
         )
         if source_coverage:
             print(format_radar_source_coverage(source_coverage))
+        source_readiness = (
+            latest_run.get("source_readiness")
+            if isinstance(latest_run.get("source_readiness"), dict)
+            else {}
+        )
+        if source_readiness:
+            print(format_radar_source_readiness(source_readiness))
     if access_summary:
         print(format_personal_queue_access_summary(access_summary))
     if not review:
@@ -354,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
             dblp_author_pids=args.dblp_author_pid or None,
             dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
+            source_preset=args.source_preset,
             topic_profile_path=args.topic_profile,
             write_report=not args.no_report,
             root_path=args.root_path,
