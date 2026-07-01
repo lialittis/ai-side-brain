@@ -23,6 +23,8 @@ into the existing Team Research database:
 This means radar-discovered papers can reuse the current Team UI:
 
 - Latest Papers page for scan/relevance/comments;
+- Latest Papers page Radar Queue for noticing and quickly triaging unreviewed
+  scheduled discovery results during normal daily scanning;
 - Radar page for reviewing stored scheduled recommendations before import;
 - tag catalog and tag filtering;
 - Team Interests weighted relevance scoring;
@@ -67,6 +69,12 @@ the current Team Interest weights from the `/interests` sliders, so changing
 those weights affects both new Radar runs and later imported library relevance.
 The Radar page also shows review queue counts for all stored Radar papers, so a
 team member can jump directly to unreviewed, watch, or dismissed candidates.
+The main Latest Papers page repeats those queue counts in a compact Radar Queue
+panel whenever stored Radar papers exist. It also previews the highest-priority
+stored candidates, with paper links plus watch, dismiss, and add-to-library
+actions that return to the daily page. That keeps scheduled discovery visible
+in the team’s normal daily scan without auto-importing candidates into the main
+library.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -208,6 +216,7 @@ Stored runs can be inspected later:
 
 ```bash
 python team/research_cli.py radar-history
+python team/research_cli.py radar-queue                # active review queue by score
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
 python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
@@ -251,6 +260,9 @@ new paper is related to watched-but-not-yet-imported work. Mark a paper as
 `dismissed` to stop future Team Radar runs from recommending it again while
 still preserving the metadata trail.
 The CLI and browser both expose review queues: use
+`radar-queue` for the active daily terminal queue ranked with the same shared
+priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
+papers and papers already imported into the library. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 `--status dismissed`, or `--status unreviewed` to change a stored paper from
@@ -296,9 +308,11 @@ saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
 
 The run script writes a Markdown report and matching JSON result into
-`team/logs/`. The brief script writes a stored-run roll-up without collecting
-again. The cycle script runs both in order; if collection fails, the brief step
-does not run.
+`team/logs/`. It also writes text and JSON `literature-radar-queue-*` snapshots
+for the active review queue unless `RADAR_WRITE_QUEUE=0`; use
+`RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
+brief script writes a stored-run roll-up without collecting again. The cycle
+script runs both in order; if collection fails, the brief step does not run.
 
 PDF caching is disabled by default. To cache only legal open-access PDFs for
 ranked recommendations, use:
@@ -330,6 +344,10 @@ It reads `.env` first and supports these optional variables:
   `openalex_authors`; venue cross-checking can use `openalex_venues`;
   OpenReview venue presets use `openreview_venues`.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
+- `RADAR_WRITE_QUEUE=0`: skip writing queue snapshots from
+  `run_literature_radar.sh`.
+- `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
+  snapshot; default `3`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
   `RADAR_SUMMARY_LIMIT`.

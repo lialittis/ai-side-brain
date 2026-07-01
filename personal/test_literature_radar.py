@@ -549,6 +549,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["seen_count"], 1)
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "possibly_relevant")
 
+            queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(queue_stdout):
+                queue_code = personal_literature_radar.main(["queue", "--root-path", str(root), "--json"])
+            self.assertEqual(queue_code, 0)
+            queue_result = json.loads(queue_stdout.getvalue())
+            self.assertEqual(queue_result["review"], "unreviewed")
+            self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+
             review_stdout = io.StringIO()
             with contextlib.redirect_stdout(review_stdout):
                 review_code = personal_literature_radar.main(
@@ -583,6 +592,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             watch_result = json.loads(watch_stdout.getvalue())
             self.assertEqual(watch_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 0, "watch": 1})
             self.assertEqual(watch_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            watch_queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_queue_stdout):
+                watch_queue_code = personal_literature_radar.main(["queue", "--root-path", str(root), "--json"])
+            self.assertEqual(watch_queue_code, 0)
+            watch_queue = json.loads(watch_queue_stdout.getvalue())
+            self.assertEqual(watch_queue["review"], "watch")
+            self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
 
             brief_stdout = io.StringIO()
             with contextlib.redirect_stdout(brief_stdout):
@@ -608,6 +624,72 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Pipeline Trace", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
+
+    def test_personal_literature_radar_queue_prioritizes_score_and_excludes_dismissed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            def collect_once(paper: dict[str, object], now: datetime) -> None:
+                with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                    run_personal_literature_radar(
+                        root_path=root,
+                        sources=["arxiv"],
+                        query_terms=["memory safety"],
+                        max_results=1,
+                        now=now,
+                    )
+
+            older_high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00039",
+                title="Older Higher Priority Personal Radar Paper",
+                abstract="Memory safety, system security, LLM security, and prompt injection for software.",
+                identifiers={"arxiv_id": "2601.00039"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00039"},
+            )
+            recent_low = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00040",
+                title="Recent Lower Priority Personal Radar Paper",
+                abstract="Memory safety for software.",
+                identifiers={"arxiv_id": "2601.00040"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00040"},
+            )
+            dismissed_high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00041",
+                title="Dismissed High Priority Personal Radar Paper",
+                abstract="Memory safety, system security, LLM security, prompt injection, and AI security.",
+                identifiers={"arxiv_id": "2601.00041"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00041"},
+            )
+            collect_once(older_high, datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc))
+            collect_once(recent_low, datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc))
+            collect_once(dismissed_high, datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))
+            mark_personal_radar_paper_review(
+                root,
+                dismissed_high["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = personal_literature_radar.main(["queue", "--root-path", str(root), "--json"])
+
+            self.assertEqual(code, 0)
+            queue = json.loads(stdout.getvalue())
+            self.assertEqual(queue["review"], "unreviewed")
+            self.assertEqual(queue["review_counts"], {"all": 3, "dismissed": 1, "unreviewed": 2, "watch": 0})
+            titles = [record["title"] for record in queue["papers"]]
+            self.assertEqual(
+                titles,
+                [
+                    "Older Higher Priority Personal Radar Paper",
+                    "Recent Lower Priority Personal Radar Paper",
+                ],
+            )
+            self.assertNotIn("Dismissed High Priority Personal Radar Paper", titles)
 
     def test_personal_literature_radar_profile_init_writes_default_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

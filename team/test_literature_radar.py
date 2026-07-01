@@ -1058,6 +1058,14 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["source_ids"], ["arxiv"])
             self.assertTrue(papers[0]["pdf_access"]["can_download"])
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "highly_relevant")
+            queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(queue_stdout):
+                queue_code = research_cli.main(["radar-queue", "--db-path", str(db_path), "--json"])
+            self.assertEqual(queue_code, 0)
+            queue_result = json.loads(queue_stdout.getvalue())
+            self.assertEqual(queue_result["review"], "unreviewed")
+            self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             review_stdout = io.StringIO()
             with contextlib.redirect_stdout(review_stdout):
                 review_code = research_cli.main(
@@ -1096,6 +1104,13 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             watch_result = json.loads(watch_stdout.getvalue())
             self.assertEqual(watch_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 0, "watch": 1})
             self.assertEqual(watch_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            watch_queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_queue_stdout):
+                watch_queue_code = research_cli.main(["radar-queue", "--db-path", str(db_path), "--json"])
+            self.assertEqual(watch_queue_code, 0)
+            watch_queue = json.loads(watch_queue_stdout.getvalue())
+            self.assertEqual(watch_queue["review"], "watch")
+            self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             stored_recommendations = database.list_literature_radar_recommendations(result["run_id"])
             self.assertEqual(stored_recommendations[0]["review"]["status"], "watch")
             self.assertEqual(stored_recommendations[0]["review"]["reviewed_by"], "alice")
@@ -1110,6 +1125,75 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Team Literature Radar Brief", brief["brief"])
             self.assertIn("Memory Safety for Agentic Security", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
+
+    def test_cli_radar_queue_prioritizes_score_and_excludes_dismissed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+
+            def store_radar_paper(title: str, paper_id: str, score: int, completed_at: datetime) -> dict[str, object]:
+                paper = create_radar_paper(
+                    source_id="arxiv",
+                    source_paper_id=paper_id,
+                    title=title,
+                    abstract="Memory safety and system security for low-level software research.",
+                    identifiers={"arxiv_id": paper_id},
+                    links={"arxiv": f"https://arxiv.org/abs/{paper_id}"},
+                )
+                recommendations = recommend_papers([paper], limit=1)
+                recommendations[0]["scoring"]["score"] = score
+                run = database.create_literature_radar_run(
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    now=completed_at,
+                )
+                database.complete_literature_radar_run(
+                    run["id"],
+                    collected_papers=[paper],
+                    recommendations=recommendations,
+                    now=completed_at,
+                )
+                return paper
+
+            store_radar_paper(
+                "Older Higher Priority Team Radar Paper",
+                "2601.00039",
+                95,
+                datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            store_radar_paper(
+                "Recent Lower Priority Team Radar Paper",
+                "2601.00040",
+                20,
+                datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc),
+            )
+            dismissed = store_radar_paper(
+                "Dismissed High Priority Team Radar Paper",
+                "2601.00041",
+                100,
+                datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            database.mark_literature_radar_paper_review(
+                dismissed["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = research_cli.main(["radar-queue", "--db-path", str(db_path), "--json"])
+
+            self.assertEqual(code, 0)
+            queue = json.loads(stdout.getvalue())
+            self.assertEqual(queue["review"], "unreviewed")
+            self.assertEqual(queue["review_counts"], {"all": 3, "dismissed": 1, "unreviewed": 2, "watch": 0})
+            self.assertEqual(
+                [paper["title"] for paper in queue["papers"]],
+                [
+                    "Older Higher Priority Team Radar Paper",
+                    "Recent Lower Priority Team Radar Paper",
+                ],
+            )
 
     def test_cli_radar_run_dispatches_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -53,6 +53,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Submit To Library", submit)
         self.assertIn("Interests", latest)
         self.assertIn("Radar", latest)
+        self.assertNotIn("Radar Queue", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
         self.assertIn("Direct PDF link", submit)
@@ -544,6 +545,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertNotIn("Add to Library", html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("PDF: metadata_only_no_legal_pdf_found", latest_html)
+            self.assertIn("Radar Queue", latest_html)
+            self.assertNotIn("Priority Candidates", latest_html)
+            self.assertNotIn('action="/radar/papers/import"', latest_html)
 
     def test_radar_review_marks_recommendation_and_paper_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -633,6 +637,107 @@ class TeamResearchWebTest(unittest.TestCase):
             unreviewed_history_html = render_literature_radar_papers_page(database, review_status="unreviewed")
             self.assertIn("Unreviewed Radar History Paper", unreviewed_history_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", unreviewed_history_html)
+            latest_html = render_latest_papers_page(database)
+            self.assertIn("Radar Queue", latest_html)
+            self.assertIn("1 unreviewed, 1 watch, 0 dismissed from 2 stored Radar papers.", latest_html)
+            self.assertIn("Priority Candidates", latest_html)
+            self.assertIn("Unreviewed Radar History Paper", latest_html)
+            self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
+            self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)
+            self.assertIn('href="/radar">Run Radar</a>', latest_html)
+            self.assertIn('href="/radar/papers?limit=50">All 2</a>', latest_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=unreviewed">Unreviewed 1</a>', latest_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=watch">Watch 1</a>', latest_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=dismissed">Dismissed 0</a>', latest_html)
+            self.assertIn('name="review_filter" value="unreviewed"', latest_html)
+            self.assertIn('name="return_to" value="latest"', latest_html)
+            self.assertIn('action="/radar/papers/import"', latest_html)
+            self.assertIn('action="/radar/review"', latest_html)
+
+    def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00038",
+                title="Dismissed Radar History Paper",
+                abstract="A paper that was dismissed during team radar review.",
+                identifiers={"arxiv_id": "2601.00038"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00038"},
+            )
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=recommend_papers([paper], limit=1),
+                now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
+            )
+            database.mark_literature_radar_paper_review(
+                paper["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+            )
+
+            latest_html = render_latest_papers_page(database)
+
+            self.assertIn("Radar Queue", latest_html)
+            self.assertIn("0 unreviewed, 0 watch, 1 dismissed from 1 stored Radar paper.", latest_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=dismissed">Dismissed 1</a>', latest_html)
+            self.assertNotIn("Priority Candidates", latest_html)
+            self.assertNotIn("Dismissed Radar History Paper", latest_html)
+
+    def test_latest_radar_queue_orders_priority_candidates_by_score(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+
+            def store_radar_paper(title: str, paper_id: str, score: int, completed_at: datetime) -> None:
+                paper = create_radar_paper(
+                    source_id="arxiv",
+                    source_paper_id=paper_id,
+                    title=title,
+                    abstract="Memory safety and system security for low-level software research.",
+                    identifiers={"arxiv_id": paper_id},
+                    links={"arxiv": f"https://arxiv.org/abs/{paper_id}"},
+                )
+                recommendations = recommend_papers([paper], limit=1)
+                recommendations[0]["scoring"]["score"] = score
+                run = database.create_literature_radar_run(
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    now=completed_at - timedelta(minutes=1),
+                )
+                database.complete_literature_radar_run(
+                    run["id"],
+                    collected_papers=[paper],
+                    recommendations=recommendations,
+                    now=completed_at,
+                )
+
+            store_radar_paper(
+                "Older Higher Priority Radar Paper",
+                "2601.00039",
+                95,
+                datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            store_radar_paper(
+                "Recent Lower Priority Radar Paper",
+                "2601.00040",
+                20,
+                datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc),
+            )
+
+            latest_html = render_latest_papers_page(database)
+
+            self.assertIn("Older Higher Priority Radar Paper", latest_html)
+            self.assertIn("Recent Lower Priority Radar Paper", latest_html)
+            self.assertLess(
+                latest_html.index("Older Higher Priority Radar Paper"),
+                latest_html.index("Recent Lower Priority Radar Paper"),
+            )
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

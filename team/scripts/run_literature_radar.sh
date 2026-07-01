@@ -20,6 +20,8 @@ OUTPUT_DIR="${RADAR_OUTPUT_DIR:-team/logs}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 REPORT_PATH="$OUTPUT_DIR/literature-radar-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/literature-radar-$STAMP.json"
+QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.txt"
+QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
 mkdir -p "$OUTPUT_DIR"
 
 USE_SAVED_DEFAULTS="${RADAR_USE_SAVED_DEFAULTS:-0}"
@@ -137,5 +139,31 @@ fi
 
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
+if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
+  QUEUE_ARGS=(
+    "team/research_cli.py"
+    "radar-queue"
+    "--json"
+  )
+  QUEUE_TEXT_ARGS=(
+    "team/research_cli.py"
+    "radar-queue"
+  )
+  if [[ -n "${RADAR_DB_PATH:-}" ]]; then
+    QUEUE_ARGS+=("--db-path" "$RADAR_DB_PATH")
+    QUEUE_TEXT_ARGS+=("--db-path" "$RADAR_DB_PATH")
+  fi
+  if [[ -n "${RADAR_QUEUE_LIMIT:-}" ]]; then
+    QUEUE_ARGS+=("--limit" "$RADAR_QUEUE_LIMIT")
+    QUEUE_TEXT_ARGS+=("--limit" "$RADAR_QUEUE_LIMIT")
+  fi
+  "$PYTHON_BIN" "${QUEUE_ARGS[@]}" > "$QUEUE_JSON_PATH"
+  "$PYTHON_BIN" "${QUEUE_TEXT_ARGS[@]}" > "$QUEUE_PATH"
+fi
+
 echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
+if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
+  echo "Literature Radar queue: $QUEUE_PATH"
+  echo "Literature Radar queue JSON: $QUEUE_JSON_PATH"
+fi

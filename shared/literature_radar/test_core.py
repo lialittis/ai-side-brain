@@ -16,6 +16,7 @@ from shared.literature_radar import (
     build_recommendation_report,
     build_radar_pipeline_trace,
     build_radar_history_brief,
+    build_radar_review_queue,
     build_venue_coverage_summary,
     cache_open_access_pdf,
     cache_recommendation_pdfs,
@@ -26,6 +27,8 @@ from shared.literature_radar import (
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_history_review_status,
+    radar_review_counts,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
@@ -174,6 +177,53 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(coverage[1]["source_ids"], ["dblp_venues"])
         self.assertIn("## Venue Coverage", report)
         self.assertIn("`acm_ccs` ACM CCS (security, 2026): 1 candidate(s), 1 recommended", report)
+
+    def test_builds_review_queue_from_history_records(self) -> None:
+        records = [
+            {
+                "title": "Watched High Score",
+                "review_status": "watch",
+                "latest_seen_at": "2026-07-01T12:00:00+00:00",
+                "latest_recommendation": {"score": 100, "review": {"status": "unreviewed"}},
+            },
+            {
+                "title": "Unreviewed Low Score",
+                "latest_seen_at": "2026-07-01T13:00:00+00:00",
+                "latest_recommendation": {"score": 10},
+            },
+            {
+                "title": "Unreviewed High Score",
+                "latest_seen_at": "2026-07-01T11:00:00+00:00",
+                "latest_recommendation": {"score": 90},
+            },
+            {
+                "title": "Imported Unreviewed Highest Score",
+                "imported_item_id": "item_imported",
+                "latest_seen_at": "2026-07-01T15:00:00+00:00",
+                "latest_recommendation": {"score": 300},
+            },
+            {
+                "title": "Dismissed Highest Score",
+                "review_status": "dismissed",
+                "latest_seen_at": "2026-07-01T14:00:00+00:00",
+                "latest_recommendation": {"score": 200},
+            },
+        ]
+
+        queue = build_radar_review_queue(records, limit=3)
+
+        self.assertEqual(radar_history_review_status(records[0]), "watch")
+        self.assertEqual(queue["review"], "unreviewed")
+        self.assertEqual(queue["review_counts"], {"all": 5, "dismissed": 1, "unreviewed": 3, "watch": 1})
+        self.assertEqual(
+            [record["title"] for record in queue["papers"]],
+            ["Unreviewed High Score", "Unreviewed Low Score"],
+        )
+
+        watch_queue = build_radar_review_queue([records[0], records[3]], limit=3)
+        self.assertEqual(watch_queue["review"], "watch")
+        self.assertEqual([record["title"] for record in watch_queue["papers"]], ["Watched High Score"])
+        self.assertEqual(radar_review_counts(records)["dismissed"], 1)
 
     def test_deduplicates_by_doi_and_merges_source_records(self) -> None:
         first = create_radar_paper(

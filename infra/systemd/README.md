@@ -45,6 +45,11 @@ from the defaults saved in `/radar`. Environment variables in `.env` can still
 override the script behavior. Brief timers write Markdown and JSON roll-ups to
 `team/logs/` and `memory/06_Logs/` by default; they do not call external paper
 sources.
+Collection timers also write active queue snapshots by default:
+`literature-radar-queue-*` under `team/logs/` and
+`personal-literature-radar-queue-*` under `memory/06_Logs/`. Set
+`RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable those files;
+set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size.
 
 For a simpler cron-style setup, `team/scripts/run_literature_radar_cycle.sh`
 runs Team collection and then builds the Team brief in one command. It defaults

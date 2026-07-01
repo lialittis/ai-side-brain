@@ -1462,7 +1462,7 @@ class TeamResearchDatabase:
     def list_literature_radar_papers(
         self,
         *,
-        limit: int = 50,
+        limit: int | None = 50,
         review_status: str | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
@@ -1482,7 +1482,7 @@ class TeamResearchDatabase:
                 for paper in papers
                 if literature_radar_review_record(paper)["status"] == selected_status
             ]
-        return papers[:limit]
+        return papers if limit is None else papers[:limit]
 
     def literature_radar_paper_review_counts(self) -> dict[str, int]:
         self.initialize()

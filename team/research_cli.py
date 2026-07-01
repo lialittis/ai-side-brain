@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.literature_radar import build_radar_history_brief
+from shared.literature_radar import build_radar_history_brief, build_radar_review_queue
 from shared.research import topic_profile_by_id
 from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
@@ -204,6 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="filter by stored Radar review state",
     )
     radar_papers.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_queue = subparsers.add_parser("radar-queue", help="show active Literature Radar papers worth reviewing first")
+    add_db_args(radar_queue)
+    radar_queue.add_argument("--limit", type=int, default=3)
+    radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_review = subparsers.add_parser(
         "radar-review",
@@ -459,6 +464,23 @@ def print_radar_papers(
         )
 
 
+def print_radar_queue(result: dict[str, Any]) -> None:
+    print("Team Literature Radar Queue")
+    print(
+        "Review queues: "
+        + ", ".join(
+            f"{status}={int((result.get('review_counts') or {}).get(status) or 0)}"
+            for status in ("all", "unreviewed", "watch", "dismissed")
+        )
+    )
+    review = str(result.get("review") or "")
+    if not review:
+        print("No active unreviewed or watched Radar papers.")
+        return
+    print(f"Priority filter: {review}")
+    print_radar_papers(result.get("papers") or [], review=review)
+
+
 def print_radar_review(record: dict[str, Any]) -> None:
     review = record.get("review") if isinstance(record.get("review"), dict) else {}
     status = review.get("status") or record.get("review_status") or "unreviewed"
@@ -696,6 +718,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print_radar_papers(papers, review_counts=review_counts, review=review)
+        return 0
+
+    if args.command == "radar-queue":
+        review_counts = database.literature_radar_paper_review_counts()
+        result = build_radar_review_queue(
+            database.list_literature_radar_papers(limit=None),
+            limit=args.limit,
+            review_counts=review_counts,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_queue(result)
         return 0
 
     if args.command == "radar-review":

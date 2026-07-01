@@ -84,7 +84,10 @@ Team members should be able to access Team Side-Brain through multiple formats, 
 | Weekly Markdown brief | async team reading | `team/briefs/YYYY-WW.md` |
 | API | automation and future integrations | `POST /team/research/sources` |
 
-The first implementation is admin CLI plus local SQLite plus a team-member web UI with two pages: Latest Relevant Papers and Submit. The product should still be designed so the same actions later appear in deployed dashboards and integrations.
+The first implementation is admin CLI plus local SQLite plus a team-member web
+UI centered on Latest Relevant Papers, Submit, Team Interests, and Literature
+Radar. The product should still be designed so the same actions later appear in
+deployed dashboards and integrations.
 
 ## Interaction Model
 
@@ -94,6 +97,7 @@ The system should expose the same core actions everywhere:
 | --- | --- | --- | --- |
 | Add source | `team research add` | Submit page | browser/Zotero/chat/API |
 | Browse latest relevant papers | `team research library` | Latest Relevant Papers page | daily notification |
+| Review scheduled discovery | `radar-papers --review unreviewed` | Latest Papers Radar Queue quick triage and Radar Papers page | daily/weekly radar job |
 | Inspect item | `team research show item_xxx` | paper/PDF link from latest list | shared item link |
 | Accept/reject | `team research accept/reject` | future review buttons | approval action |
 | Assign reader | `team research assign` | assignment panel | Slack/email notification |

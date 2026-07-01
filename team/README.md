@@ -92,6 +92,7 @@ python team/research_cli.py radar-run --source semantic_scholar_citations --seed
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
 python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-dir team/data/literature-radar-pdfs
 python team/research_cli.py radar-history
+python team/research_cli.py radar-queue
 python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
 python team/research_cli.py radar-brief --days 7
@@ -103,7 +104,7 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 
 Web UI surfaces:
 
-- Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, and per-paper comments;
+- Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates when scheduled discovery has stored papers awaiting review;
 - Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
 - radar-imported library papers keep their radar provenance and PDF-access decision, so the main Latest Relevant Papers list shows whether a legal PDF is available and why;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
@@ -113,12 +114,18 @@ For daily radar usage, run `team/scripts/run_literature_radar.sh` from cron, or
 open `/radar` and use `Run Radar` for an ad hoc check. Use `/radar/brief` or
 `team/scripts/build_literature_radar_brief.sh` for a weekly or daily roll-up
 over stored runs without collecting again. Use `/radar/papers` to inspect
-deduplicated collected-paper history and add stored papers to the library. Scan the latest
+deduplicated collected-paper history and add stored papers to the library. The
+main Latest Relevant Papers page also shows a compact Radar Queue with
+unreviewed, watch, and dismissed counts plus the top priority candidates, so
+daily users can review scheduled Radar output without remembering a separate URL. Scan the latest
 recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
 paper relevance. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, conference year, USENIX cycles, PDF cache settings, and
 run limits as reusable Team defaults.
+For terminal review, use `python team/research_cli.py radar-queue`; it uses the
+same active, unimported queue priority as the web UI. Scheduled collection
+writes matching text and JSON queue snapshots under `team/logs/` by default.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

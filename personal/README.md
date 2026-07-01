@@ -51,6 +51,7 @@ python scripts/personal_literature_radar.py run --source semantic_scholar_author
 python scripts/personal_literature_radar.py run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python scripts/personal_literature_radar.py run --source arxiv --cache-pdfs --pdf-cache-dir memory/06_Logs/literature-radar-pdfs
 python scripts/personal_literature_radar.py history
+python scripts/personal_literature_radar.py queue
 python scripts/personal_literature_radar.py papers
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status dismissed
@@ -70,7 +71,9 @@ User-level systemd timer templates live under `infra/systemd/user/`; see
 
 The script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
-set. The brief script writes a Markdown and JSON roll-up over stored runs
+set. It also writes a text and JSON `personal-literature-radar-queue-*` snapshot
+for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
+brief script writes a Markdown and JSON roll-up over stored runs
 without collecting again. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
@@ -78,7 +81,8 @@ without collecting again. Useful environment variables include `PERSONAL_RADAR_S
 `PERSONAL_RADAR_DBLP_AUTHOR_PIDS`, `PERSONAL_RADAR_OPENALEX_AUTHOR_IDS`,
 `PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_SEED_PAPER_IDS`,
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_CACHE_PDFS=1`, and
-`PERSONAL_RADAR_PDF_CACHE_DIR`. PDF caching only applies to ranked
+`PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
+many active queue papers the run script writes. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief
 variables include
@@ -100,6 +104,10 @@ by future Personal Radar recommendations and context linking, which keeps
 repeated low-value hits from consuming review slots. Review changes also update
 stored run recommendations so weekly or daily briefs show the current review
 state without requiring another collection run.
+Use `queue` for the daily review surface: it prefers unreviewed papers, falls
+back to watched papers when there are no unreviewed items, sorts the active
+queue by latest recommendation score, and excludes dismissed or already-moved
+papers from the priority list.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated

@@ -63,6 +63,11 @@ profile snapshot, non-secret collection settings, and phase trace used for the
 run. It also carries venue coverage for DBLP, OpenAlex, and OpenReview venue
 profile runs. Brief ranking is review-aware: `watch` papers are surfaced before
 unreviewed papers, while `dismissed` papers fall behind active candidates.
+The shared core also builds daily review queues from stored paper history:
+unreviewed papers are handled before watched papers, dismissed papers are
+excluded from the priority list, already-imported papers are skipped, and active
+unimported candidates are sorted by latest recommendation score. Personal and
+Team surfaces use this same queue logic.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.

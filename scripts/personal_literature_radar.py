@@ -21,7 +21,12 @@ from personal.literature_radar import (
     read_personal_radar_paper_history,
     run_personal_literature_radar,
 )
-from shared.literature_radar import build_radar_history_brief
+from shared.literature_radar import (
+    build_radar_history_brief,
+    build_radar_review_queue,
+    radar_history_review_status,
+    radar_review_counts,
+)
 
 
 PERSONAL_RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
@@ -101,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     papers.add_argument("--limit", type=int, default=20)
     papers.add_argument("--review", choices=PERSONAL_RADAR_REVIEW_FILTERS, default="all")
     papers.add_argument("--json", action="store_true")
+
+    queue = subparsers.add_parser("queue", help="show active personal radar papers worth reviewing first")
+    queue.add_argument("--root-path", type=Path, default=ROOT)
+    queue.add_argument("--limit", type=int, default=3)
+    queue.add_argument("--json", action="store_true")
 
     review = subparsers.add_parser("review", help="mark one personal radar paper as watch, dismissed, or unreviewed")
     review.add_argument("dedupe_key")
@@ -201,6 +211,27 @@ def print_paper_history(
         )
 
 
+def print_personal_queue(
+    records: list[dict[str, Any]],
+    *,
+    review_counts: dict[str, int],
+    review: str,
+) -> None:
+    print("Personal Literature Radar Queue")
+    print(
+        "Review queues: "
+        + ", ".join(
+            f"{status}={int(review_counts.get(status) or 0)}"
+            for status in PERSONAL_RADAR_REVIEW_FILTERS
+        )
+    )
+    if not review:
+        print("No active unreviewed or watched Radar papers.")
+        return
+    print(f"Priority filter: {review}")
+    print_paper_history(records, review=review)
+
+
 def sorted_paper_history(
     records: dict[str, dict[str, Any]],
     *,
@@ -218,18 +249,21 @@ def sorted_paper_history(
     )[:limit]
 
 
+def priority_paper_history(
+    records: dict[str, dict[str, Any]],
+    *,
+    limit: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    queue = build_radar_review_queue(records, limit=limit)
+    return str(queue["review"]), list(queue["papers"])
+
+
 def personal_paper_review_counts(records: dict[str, dict[str, Any]]) -> dict[str, int]:
-    counts = {status: 0 for status in PERSONAL_RADAR_REVIEW_FILTERS}
-    for record in records.values():
-        status = personal_paper_review_status(record)
-        counts["all"] += 1
-        counts[status] = counts.get(status, 0) + 1
-    return counts
+    return radar_review_counts(records)
 
 
 def personal_paper_review_status(record: dict[str, Any]) -> str:
-    status = str(record.get("review_status") or "unreviewed").strip().lower()
-    return status if status in PERSONAL_RADAR_REVIEW_FILTERS and status != "all" else "unreviewed"
+    return radar_history_review_status(record)
 
 
 def normalize_personal_review_filter(value: str) -> str:
@@ -317,6 +351,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print_paper_history(records, review_counts=review_counts, review=selected_review)
+        return 0
+
+    if args.command == "queue":
+        history_records = read_personal_radar_paper_history(args.root_path)
+        review_counts = personal_paper_review_counts(history_records)
+        selected_review, records = priority_paper_history(history_records, limit=args.limit)
+        if args.json:
+            print_json(
+                {
+                    "review": selected_review,
+                    "review_counts": review_counts,
+                    "papers": records,
+                }
+            )
+        else:
+            print_personal_queue(records, review_counts=review_counts, review=selected_review)
         return 0
 
     if args.command == "review":

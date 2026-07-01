@@ -241,6 +241,8 @@ TREND_SIGNAL_SOURCES = [
     "ResearchRabbit exports",
     "Connected Papers exports",
 ]
+RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
+RADAR_ACTIVE_REVIEW_STATUSES = ("unreviewed", "watch")
 
 DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "security-memory-agentic-radar",
@@ -1901,15 +1903,106 @@ def recommendation_review_record(recommendation: dict[str, Any]) -> dict[str, An
 
 
 def normalize_recommendation_review_record(review: dict[str, Any]) -> dict[str, Any]:
-    status = str(review.get("status") or "unreviewed").strip().lower()
-    if status not in {"unreviewed", "watch", "dismissed"}:
+    status = str(review.get("status") or review.get("review_status") or "unreviewed").strip().lower()
+    if status not in RADAR_REVIEW_FILTERS or status == "all":
         status = "unreviewed"
     return {
         "status": status,
         "reviewed_by": review.get("reviewed_by") or "",
         "reviewed_at": review.get("reviewed_at") or "",
-        "reason": review.get("reason") or "",
+        "reason": review.get("reason") or review.get("review_reason") or "",
     }
+
+
+def radar_history_review_record(record: dict[str, Any] | None) -> dict[str, Any]:
+    source = record or {}
+    latest = source.get("latest_recommendation") if isinstance(source.get("latest_recommendation"), dict) else {}
+    if any(source.get(key) for key in ("review_status", "reviewed_by", "reviewed_at", "review_reason")):
+        return normalize_recommendation_review_record(
+            {
+                "status": source.get("review_status"),
+                "reviewed_by": source.get("reviewed_by"),
+                "reviewed_at": source.get("reviewed_at"),
+                "reason": source.get("review_reason"),
+            }
+        )
+    for candidate in (source.get("review"), latest.get("review")):
+        if isinstance(candidate, dict) and candidate:
+            return normalize_recommendation_review_record(candidate)
+    return normalize_recommendation_review_record(
+        {
+            "status": source.get("review_status") or latest.get("review_status"),
+            "reviewed_by": source.get("reviewed_by") or latest.get("reviewed_by"),
+            "reviewed_at": source.get("reviewed_at") or latest.get("reviewed_at"),
+            "reason": source.get("review_reason") or latest.get("review_reason"),
+        }
+    )
+
+
+def radar_history_review_status(record: dict[str, Any] | None) -> str:
+    return radar_history_review_record(record)["status"]
+
+
+def radar_review_counts(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, int]:
+    counts = {status: 0 for status in RADAR_REVIEW_FILTERS}
+    values = records.values() if isinstance(records, dict) else records
+    for record in values:
+        status = radar_history_review_status(record)
+        counts["all"] += 1
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def build_radar_review_queue(
+    records: list[dict[str, Any]] | dict[str, dict[str, Any]],
+    *,
+    limit: int = 3,
+    review_counts: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    counts = review_counts or radar_review_counts(values)
+    selected_review = radar_queue_priority_review_status(values)
+    active_records = [
+        record
+        for record in values
+        if selected_review
+        and radar_history_review_status(record) == selected_review
+        and not radar_history_is_imported(record)
+    ]
+    return {
+        "review": selected_review,
+        "review_counts": counts,
+        "papers": sorted(active_records, key=radar_history_priority_key, reverse=True)[: max(0, int(limit))],
+    }
+
+
+def radar_queue_priority_review_status(records: list[dict[str, Any]]) -> str:
+    for status in RADAR_ACTIVE_REVIEW_STATUSES:
+        if any(radar_history_review_status(record) == status and not radar_history_is_imported(record) for record in records):
+            return status
+    return ""
+
+
+def radar_history_is_imported(record: dict[str, Any]) -> bool:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    return bool(
+        record.get("imported_item_id")
+        or latest.get("imported_item_id")
+        or (isinstance(record.get("import_result"), dict) and record["import_result"].get("item_id"))
+    )
+
+
+def radar_history_priority_key(record: dict[str, Any]) -> tuple[float, str, str]:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    try:
+        score = float(latest.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return (
+        score,
+        str(record.get("latest_seen_at") or ""),
+        str(record.get("title") or "").lower(),
+    )
 
 
 def radar_brief_recommendation_novelty(recommendation: dict[str, Any]) -> dict[str, Any]:

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.literature_radar import assess_pdf_access, build_radar_history_brief
+from shared.literature_radar import assess_pdf_access, build_radar_history_brief, build_radar_review_queue
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
@@ -317,6 +317,41 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       margin-bottom: 14px;
     }}
     .toolbar .field {{ margin-bottom: 0; min-width: 150px; }}
+    .radar-queue {{
+      display: grid;
+      gap: 10px;
+    }}
+    .radar-queue-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
+    .radar-queue-head h2 {{ margin-bottom: 3px; }}
+    .radar-queue-actions {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }}
+    .radar-queue-preview {{
+      display: grid;
+      gap: 8px;
+      padding-top: 2px;
+    }}
+    .radar-queue-item {{
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }}
+    .radar-queue-title {{
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }}
     .submit-options {{
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -695,7 +730,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .paper-footer {{ align-items: flex-start; }}
       .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
       .interest-add {{ grid-template-columns: 1fr; }}
-      .actions {{ justify-content: flex-start; }}
+      .actions, .radar-queue-actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
     }}
   </style>
@@ -1060,7 +1095,12 @@ def render_radar_paper_latest_signal(latest: Any) -> str:
     """
 
 
-def render_radar_paper_import_control(record: dict[str, Any], *, review_filter: str = "all") -> str:
+def render_radar_paper_import_control(
+    record: dict[str, Any],
+    *,
+    review_filter: str = "all",
+    return_to: str = "papers",
+) -> str:
     imported_item_id = str(record.get("imported_item_id") or "")
     if imported_item_id:
         return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
@@ -1068,6 +1108,7 @@ def render_radar_paper_import_control(record: dict[str, Any], *, review_filter: 
     <form class="inline-form" method="post" action="/radar/papers/import">
       <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
       <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
+      <input type="hidden" name="return_to" value="{html_escape(return_to)}">
       <button class="mini-button primary" type="submit">Add to Library</button>
     </form>
     """
@@ -1749,6 +1790,7 @@ def render_latest_papers_page(
     body = f"""
     {render_topline("Latest Relevant Papers", "Recent papers and resources screened as relevant, with team tags and links.", "/submit", "Submit Paper")}
     {render_notice(notice)}
+    {render_latest_radar_queue(database)}
     <div class="panel">
       <form class="toolbar" method="get" action="/">
         <div class="field">
@@ -1770,6 +1812,103 @@ def render_latest_papers_page(
     </div>
     """
     return page("Latest Relevant Papers", body, active="papers")
+
+
+def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
+    counts = database.literature_radar_paper_review_counts()
+    total = int(counts.get("all") or 0)
+    if total == 0:
+        return ""
+    unreviewed = int(counts.get("unreviewed") or 0)
+    watch = int(counts.get("watch") or 0)
+    dismissed = int(counts.get("dismissed") or 0)
+    queue = build_radar_review_queue(
+        database.list_literature_radar_papers(limit=None),
+        limit=3,
+        review_counts=counts,
+    )
+    selected_review = str(queue["review"] or "all")
+    priority_records = list(queue["papers"])
+    status_line = (
+        f"{unreviewed} unreviewed, {watch} watch, {dismissed} dismissed from {total} stored Radar paper"
+        f"{'' if total == 1 else 's'}."
+    )
+    return f"""
+    <section class="panel radar-queue" aria-label="Literature Radar review queue">
+      <div class="radar-queue-head">
+        <div>
+          <h2>Radar Queue</h2>
+          <div class="muted">{html_escape(status_line)}</div>
+        </div>
+        <div class="radar-queue-actions">
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
+          <a class="button" href="/radar">Run Radar</a>
+        </div>
+      </div>
+      {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
+      {render_latest_radar_queue_preview(priority_records, review_filter=selected_review)}
+    </section>
+    """
+
+
+def render_latest_radar_queue_preview(records: list[dict[str, Any]], *, review_filter: str) -> str:
+    if not records:
+        return ""
+    items = "".join(render_latest_radar_queue_item(record, review_filter=review_filter) for record in records)
+    return f"""
+    <div class="radar-queue-preview">
+      <h3>Priority Candidates</h3>
+      {items}
+    </div>
+    """
+
+
+def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    review = radar_review_from_record(record)
+    label = str(latest.get("label") or "needs_review")
+    score = int(float(latest.get("score") or 0))
+    source_ids = record.get("source_ids") or []
+    source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids[:4])
+    if len(source_ids) > 4:
+        source_tags += f'<span class="pill">+{len(source_ids) - 4} sources</span>'
+    latest_text = latest_radar_queue_signal_text(latest)
+    return f"""
+    <article class="radar-queue-item">
+      <div class="radar-queue-title">{html_escape(record.get("title") or "Untitled radar paper")}</div>
+      <div class="meta">
+        Latest {html_escape(display_radar_datetime(str(record.get("latest_seen_at") or "")) or "unknown")}
+        · seen {int(record.get("seen_count") or 0)} time{'s' if int(record.get("seen_count") or 0) != 1 else ''}
+      </div>
+      <div class="tags">
+        {render_radar_review_pill(review)}
+        {relevance_pill(label)}
+        <span class="pill">Score: {score}</span>
+        {source_tags}
+      </div>
+      {f'<div class="muted">{html_escape(latest_text)}</div>' if latest_text else ''}
+      <div class="radar-links">
+        {render_radar_links(paper)}
+        {render_radar_paper_import_control(record, review_filter=review_filter, return_to="latest")}
+        {render_radar_review_controls(record.get("dedupe_key") or "", return_to="latest", review=review, review_filter=review_filter)}
+      </div>
+    </article>
+    """
+
+
+def latest_radar_queue_signal_text(latest: dict[str, Any]) -> str:
+    if not latest:
+        return ""
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    return re.sub(
+        r"\s+",
+        " ",
+        str(summary.get("short_summary") or "")
+        or str(context.get("relationship_summary") or "")
+        or str(latest.get("why_relevant") or ""),
+    ).strip()
 
 
 def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
@@ -2714,16 +2853,22 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
             elif parsed.path == "/radar/papers/import":
                 item_id = import_radar_paper_to_library(self.database, fields)
-                self.redirect(
-                    radar_papers_path(
-                        notice=f"Added {item_id} to the library.",
-                        review_filter=fields.get("review_filter") or "all",
+                notice = f"Added {item_id} to the library."
+                if fields.get("return_to") == "latest":
+                    self.redirect(f"/?notice={quote(notice)}")
+                else:
+                    self.redirect(
+                        radar_papers_path(
+                            notice=notice,
+                            review_filter=fields.get("review_filter") or "all",
+                        )
                     )
-                )
             elif parsed.path == "/radar/review":
                 result = review_radar_paper(self.database, fields)
                 status = result["status"]
-                if result.get("return_to") == "papers":
+                if result.get("return_to") == "latest":
+                    self.redirect(f"/?notice={quote(f'Marked radar paper as {status}.')}")
+                elif result.get("return_to") == "papers":
                     self.redirect(
                         radar_papers_path(
                             notice=f"Marked radar paper as {status}.",
