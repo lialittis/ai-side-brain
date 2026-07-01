@@ -1180,6 +1180,8 @@ class TeamResearchDatabase:
                     timestamp=timestamp,
                     imported_item_id=import_result.get("item_id"),
                     count_seen=dedupe_key not in recorded_paper_keys,
+                    recommendation=recommendation,
+                    rank=rank,
                 )
                 self._upsert_literature_radar_recommendation(
                     connection,
@@ -1452,7 +1454,12 @@ class TeamResearchDatabase:
             ).fetchone()
         return loads(row["record_json"]) if row else None
 
-    def list_literature_radar_papers(self, *, limit: int = 50) -> list[dict[str, Any]]:
+    def list_literature_radar_papers(
+        self,
+        *,
+        limit: int = 50,
+        review_status: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.initialize()
         with self.connect() as connection:
             rows = connection.execute(
@@ -1460,11 +1467,31 @@ class TeamResearchDatabase:
                 SELECT record_json
                 FROM literature_radar_papers
                 ORDER BY latest_seen_at DESC, first_seen_at DESC, title ASC
-                LIMIT ?
-                """,
-                (limit,),
+                """
             ).fetchall()
-        return [loads(row["record_json"]) for row in rows]
+        papers = [loads(row["record_json"]) for row in rows]
+        if review_status:
+            selected_status = normalize_literature_radar_review_status(review_status)
+            papers = [
+                paper
+                for paper in papers
+                if literature_radar_review_record(paper)["status"] == selected_status
+            ]
+        return papers[:limit]
+
+    def literature_radar_paper_review_counts(self) -> dict[str, int]:
+        self.initialize()
+        counts = {"all": 0, "unreviewed": 0, "watch": 0, "dismissed": 0}
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT record_json FROM literature_radar_papers"
+            ).fetchall()
+        for row in rows:
+            paper = loads(row["record_json"])
+            status = literature_radar_review_record(paper)["status"]
+            counts["all"] += 1
+            counts[status] = counts.get(status, 0) + 1
+        return counts
 
     def list_latest_relevant_papers(
         self,
@@ -1833,6 +1860,8 @@ class TeamResearchDatabase:
         timestamp: str,
         imported_item_id: str | None = None,
         count_seen: bool = True,
+        recommendation: dict[str, Any] | None = None,
+        rank: int | None = None,
     ) -> dict[str, Any]:
         dedupe_key = radar_paper_key(paper)
         existing_row = connection.execute(
@@ -1860,6 +1889,21 @@ class TeamResearchDatabase:
         for key in ("review_status", "reviewed_by", "reviewed_at", "review_reason"):
             if existing.get(key):
                 record[key] = existing[key]
+        if recommendation:
+            scoring = recommendation.get("scoring") or {}
+            record["latest_recommendation"] = {
+                "rank": rank,
+                "score": scoring.get("score"),
+                "label": scoring.get("label"),
+                "novelty": recommendation.get("novelty"),
+                "review": recommendation.get("review"),
+                "context": recommendation.get("context"),
+                "summary": recommendation.get("summary"),
+                "why_relevant": recommendation.get("why_relevant"),
+                "recommended_action": recommendation.get("recommended_action"),
+            }
+        elif existing.get("latest_recommendation"):
+            record["latest_recommendation"] = existing["latest_recommendation"]
         connection.execute(
             """
             INSERT OR REPLACE INTO literature_radar_papers

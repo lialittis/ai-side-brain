@@ -353,6 +353,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             pipeline_by_phase = {record["phase"]: record for record in runs[0]["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
+            self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
+            self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["context_record_count"], 1)
 
     def test_run_personal_literature_radar_uses_openrouter_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -426,12 +428,18 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
 
             papers_stdout = io.StringIO()
             with contextlib.redirect_stdout(papers_stdout):
-                papers_code = personal_literature_radar.main(["papers", "--root-path", str(root), "--json"])
+                papers_code = personal_literature_radar.main(
+                    ["papers", "--root-path", str(root), "--review", "unreviewed", "--json"]
+                )
 
             self.assertEqual(papers_code, 0)
-            papers = json.loads(papers_stdout.getvalue())
+            papers_result = json.loads(papers_stdout.getvalue())
+            self.assertEqual(papers_result["review"], "unreviewed")
+            self.assertEqual(papers_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            papers = papers_result["papers"]
             self.assertEqual(papers[0]["title"], "Agentic Security for Memory Safety")
             self.assertEqual(papers[0]["seen_count"], 1)
+            self.assertEqual(papers[0]["latest_recommendation"]["label"], "possibly_relevant")
 
             review_stdout = io.StringIO()
             with contextlib.redirect_stdout(review_stdout):
@@ -458,6 +466,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             updated_runs = read_personal_radar_index(root)
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["status"], "watch")
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["reviewed_by"], "alice")
+            watch_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_stdout):
+                watch_code = personal_literature_radar.main(
+                    ["papers", "--root-path", str(root), "--review", "watch", "--json"]
+                )
+            self.assertEqual(watch_code, 0)
+            watch_result = json.loads(watch_stdout.getvalue())
+            self.assertEqual(watch_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 0, "watch": 1})
+            self.assertEqual(watch_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
 
             brief_stdout = io.StringIO()
             with contextlib.redirect_stdout(brief_stdout):

@@ -49,8 +49,9 @@ The page is review-first:
 3. the Radar Papers page exposes deduplicated collected-paper history, including
    papers that have not been imported, and can promote a stored paper into the
    Team library;
-4. a team member marks Radar papers as `watch` or `dismissed` without importing
-   them into the main library;
+4. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
+   `dismissed`, uses the review counts to see queue size, and marks Radar
+   papers without importing them into the main library;
 5. a team member clicks `Add to Library` only for papers worth tracking;
 6. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls.
@@ -64,6 +65,8 @@ same Team Interest keywords as the CLI, keeps review-first import behavior, and
 can optionally enable local or OpenRouter summaries. Recommendation ranking uses
 the current Team Interest weights from the `/interests` sliders, so changing
 those weights affects both new Radar runs and later imported library relevance.
+The Radar page also shows review queue counts for all stored Radar papers, so a
+team member can jump directly to unreviewed, watch, or dismissed candidates.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same seed IDs for
 graph expansion. OpenReview invitation IDs, OpenReview venue profiles, Semantic
@@ -204,6 +207,7 @@ Stored runs can be inspected later:
 ```bash
 python team/research_cli.py radar-history
 python team/research_cli.py radar-papers               # deduplicated paper history
+python team/research_cli.py radar-papers --review watch
 python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
 python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
@@ -218,8 +222,8 @@ Every `radar-run` creates durable Team-side history in SQLite:
   errors, scoring profile snapshot, pipeline phase trace, and the Markdown
   report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
-  and latest-seen timestamps, source IDs, PDF-access decision metadata, and any
-  imported Team item ID.
+  and latest-seen timestamps, source IDs, PDF-access decision metadata, latest
+  recommendation score/context/summary, and any imported Team item ID.
 - `literature_radar_recommendations` stores the ranked recommendations for each
   run, including score, label, novelty, PDF-access decision metadata, summary,
   imported item ID, and the full recommendation JSON.
@@ -241,6 +245,10 @@ Radar review feedback is also stored on the deduplicated paper history. Mark a
 paper as `watch` to keep it visible as a known candidate, or `dismissed` to stop
 future Team Radar runs from recommending it again while still preserving the
 metadata trail.
+The CLI and browser both expose review queues: use
+`radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
+to focus the terminal output, and use the queue-count links in `/radar` or
+`/radar/papers` for the same workflow in the web UI.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, and source errors are shown in
@@ -252,11 +260,12 @@ failures, and the top stored recommendations with review state, context, and PDF
 policy. New runs snapshot the Team Interest weights used for scoring, so a
 weekly brief can still explain recommendations after the `/interests` sliders
 change. They also include a pipeline trace for collection, PDF policy,
-deduplication, scoring, summarization, storage, and report generation. Brief
-ranking is review-aware: `watch` papers are listed before unreviewed papers, and
-`dismissed` papers are pushed behind active candidates. Stored run history keeps
-collection settings such as limits, conference year, venue profiles, seed counts,
-and whether summaries, PDF caching, or auto-import were enabled.
+deduplication, scoring, context linking, summarization, storage, and report
+generation. Brief ranking is review-aware: `watch` papers are listed before
+unreviewed papers, and `dismissed` papers are pushed behind active candidates.
+Stored run history keeps collection settings such as limits, conference year,
+venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
+were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
 Brief`, so team members can review it without using the CLI.
 
@@ -266,12 +275,22 @@ For daily or weekly operation, run the one-shot script from cron or a systemd
 timer:
 
 ```bash
+team/scripts/run_literature_radar_cycle.sh
 team/scripts/run_literature_radar.sh
 team/scripts/build_literature_radar_brief.sh
 ```
 
-The script writes a Markdown report and matching JSON result into `team/logs/`.
-The brief script writes a stored-run roll-up without collecting again.
+The cycle script is the recommended team-facing scheduled command. It runs a
+collection pass and then immediately builds a stored-run brief. By default it
+sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse the sources, limits,
+authors, seed papers, venue profiles, summary settings, and PDF-cache settings
+saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
+should ignore web-saved defaults and use only explicit environment variables.
+
+The run script writes a Markdown report and matching JSON result into
+`team/logs/`. The brief script writes a stored-run roll-up without collecting
+again. The cycle script runs both in order; if collection fails, the brief step
+does not run.
 
 PDF caching is disabled by default. To cache only legal open-access PDFs for
 ranked recommendations, use:
@@ -291,6 +310,10 @@ It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
   `/radar` form, then let explicit environment variables override them.
+- `RADAR_CYCLE_RUN_COLLECTION=0`: skip collection when using
+  `run_literature_radar_cycle.sh`.
+- `RADAR_CYCLE_BUILD_BRIEF=0`: skip brief generation when using
+  `run_literature_radar_cycle.sh`.
 - `RADAR_SOURCES`: space-separated sources. Default:
   `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
   Optional seed-based sources include `semantic_scholar_recommendations`,
@@ -329,7 +352,7 @@ It reads `.env` first and supports these optional variables:
 Example cron entry for 07:30 daily:
 
 ```cron
-30 7 * * * cd /home/tianchi/workspace/ai-side-brain && team/scripts/run_literature_radar.sh >> team/logs/literature-radar-cron.log 2>&1
+30 7 * * * cd /home/tianchi/workspace/ai-side-brain && team/scripts/run_literature_radar_cycle.sh >> team/logs/literature-radar-cron.log 2>&1
 ```
 
 User-level systemd timer templates are also available under

@@ -139,6 +139,24 @@ class TeamResearchWebTest(unittest.TestCase):
             run = database.create_literature_radar_run(
                 sources=["arxiv"],
                 query_terms=["memory safety"],
+                collection_config={
+                    "max_results": 5,
+                    "recommendation_limit": 1,
+                    "conference_year": 2026,
+                    "summarize": True,
+                    "summary_provider": "local",
+                    "cache_pdfs": False,
+                    "dblp_venue_profiles": ["security"],
+                    "semantic_scholar_api_key_configured": False,
+                },
+                scoring_profile={
+                    "type": "team_interests",
+                    "name": "Team Interests",
+                    "interests": [
+                        {"keyword": "memory safety", "weight": 90},
+                        {"keyword": "system security", "weight": 80},
+                    ],
+                },
                 now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
             )
             database.complete_literature_radar_run(
@@ -184,6 +202,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Weekly Brief", html)
             self.assertIn("/radar/papers?limit=50", html)
             self.assertIn("Paper History", html)
+            self.assertIn('href="/radar/papers?limit=50">All 1</a>', html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=unreviewed">Unreviewed 1</a>', html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=watch">Watch 0</a>', html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=dismissed">Dismissed 0</a>', html)
             self.assertIn("DBLP Authors", html)
             self.assertIn("S2 Authors", html)
             self.assertIn("OpenAlex Authors", html)
@@ -204,6 +226,24 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Source stats", html)
             self.assertIn("arxiv: 1", html)
             self.assertIn("dblp: 0", html)
+            self.assertIn("Run Provenance", html)
+            self.assertIn("Collection Config", html)
+            self.assertIn("max/source: 5", html)
+            self.assertIn("recommendations: 1", html)
+            self.assertIn("conference year: 2026", html)
+            self.assertIn("summary provider: local", html)
+            self.assertIn("venue profiles: security", html)
+            self.assertIn("Semantic Scholar key: no", html)
+            self.assertIn("Team Interest Weights", html)
+            self.assertIn("memory safety: 90", html)
+            self.assertIn("system security: 80", html)
+            self.assertIn("Pipeline Trace", html)
+            self.assertIn("metadata collection: partial", html)
+            self.assertIn("source error count: 1", html)
+            self.assertIn("copyright license check: succeeded", html)
+            self.assertIn("downloadable pdf count: 1", html)
+            self.assertIn("context linking: succeeded", html)
+            self.assertIn("linked recommendation count: 1", html)
             self.assertIn("Source errors", html)
             self.assertIn("DBLP unavailable", html)
             self.assertIn(">New<", html)
@@ -228,6 +268,10 @@ class TeamResearchWebTest(unittest.TestCase):
 
             self.assertIn("Radar Papers", papers_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", papers_html)
+            self.assertIn("Latest signal:", papers_html)
+            self.assertIn("A local summary for radar review.", papers_html)
+            self.assertIn("Context:", papers_html)
+            self.assertIn("Related to existing context: Baseline Paper.", papers_html)
             self.assertIn("Seen 1 time", papers_html)
             self.assertIn("arxiv_id:2601.00006", papers_html)
             self.assertIn("Not imported", papers_html)
@@ -532,6 +576,45 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn(">Clear</button>", reviewed_html)
             history_html = render_literature_radar_papers_page(database)
             self.assertIn(">Watch</span>", history_html)
+            other_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00037",
+                title="Unreviewed Radar History Paper",
+                abstract="System security paper waiting for radar review.",
+                identifiers={"arxiv_id": "2601.00037"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00037"},
+            )
+            other_run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                other_run["id"],
+                collected_papers=[other_paper],
+                recommendations=recommend_papers([other_paper], limit=1),
+                now=datetime(2026, 7, 1, 11, 1, tzinfo=timezone.utc),
+            )
+            self.assertEqual(
+                database.literature_radar_paper_review_counts(),
+                {"all": 2, "unreviewed": 1, "watch": 1, "dismissed": 0},
+            )
+            self.assertEqual(
+                [record["dedupe_key"] for record in database.list_literature_radar_papers(review_status="watch")],
+                [paper["dedupe_key"]],
+            )
+            watch_history_html = render_literature_radar_papers_page(database, review_status="watch")
+            self.assertIn('href="/radar/papers?limit=50">All 2</a>', watch_history_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=unreviewed">Unreviewed 1</a>', watch_history_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=watch">Watch 1</a>', watch_history_html)
+            self.assertIn('href="/radar/papers?limit=50&amp;review=dismissed">Dismissed 0</a>', watch_history_html)
+            self.assertIn("Watchable Memory Safety Radar Paper", watch_history_html)
+            self.assertNotIn("Unreviewed Radar History Paper", watch_history_html)
+            self.assertIn('<option value="watch" selected>Watch</option>', watch_history_html)
+            self.assertIn('name="review_filter" value="watch"', watch_history_html)
+            unreviewed_history_html = render_literature_radar_papers_page(database, review_status="unreviewed")
+            self.assertIn("Unreviewed Radar History Paper", unreviewed_history_html)
+            self.assertNotIn("Watchable Memory Safety Radar Paper", unreviewed_history_html)
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

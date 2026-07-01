@@ -222,6 +222,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             pipeline_by_phase = {record["phase"]: record for record in stored_run["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
+            self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
+            self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["context_record_count"], 1)
+            self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 0)
             self.assertEqual(pipeline_by_phase["long_term_storage"]["metrics"]["storage_target"], "team_sqlite")
 
     def test_run_team_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
@@ -260,6 +263,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             stored_paper = database.list_literature_radar_papers(limit=1)[0]
             self.assertTrue(stored_paper["pdf_access"]["downloaded"])
             self.assertEqual(stored_paper["pdf_access"]["local_pdf_path"], pdf_access["local_pdf_path"])
+            self.assertEqual(
+                stored_paper["latest_recommendation"]["score"],
+                result["recommendations"][0]["scoring"]["score"],
+            )
+            self.assertEqual(stored_paper["latest_recommendation"]["context"]["source_trace"]["processor"], "local-radar-context-v0.1")
             stored_recommendation = database.list_literature_radar_recommendations(result["run_id"])[0]
             self.assertTrue(stored_recommendation["pdf_access"]["downloaded"])
 
@@ -376,6 +384,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Context: Matches active interests", result["report"])
             stored = database.list_literature_radar_recommendations(result["run_id"])[0]
             self.assertEqual(stored["context"]["related_items"][0]["title"], "Agentic Security Baseline")
+            stored_run = database.get_literature_radar_run(result["run_id"])
+            pipeline_by_phase = {record["phase"]: record for record in stored_run["pipeline_trace"]}
+            self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
+            self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
+            self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["related_item_count"], 1)
 
     def test_openrouter_summary_adapter_uses_structured_output(self) -> None:
         paper = create_radar_paper(
@@ -917,7 +930,16 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 history_code = research_cli.main(["radar-history", "--db-path", str(db_path), "--json"])
             papers_stdout = io.StringIO()
             with contextlib.redirect_stdout(papers_stdout):
-                papers_code = research_cli.main(["radar-papers", "--db-path", str(db_path), "--json"])
+                papers_code = research_cli.main(
+                    [
+                        "radar-papers",
+                        "--db-path",
+                        str(db_path),
+                        "--review",
+                        "unreviewed",
+                        "--json",
+                    ]
+                )
 
             report_stdout = io.StringIO()
             with contextlib.redirect_stdout(report_stdout):
@@ -952,11 +974,15 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(history[0]["id"], result["run_id"])
             self.assertEqual(history[0]["recommendation_count"], 1)
             self.assertEqual(papers_code, 0)
-            papers = json.loads(papers_stdout.getvalue())
+            papers_result = json.loads(papers_stdout.getvalue())
+            self.assertEqual(papers_result["review"], "unreviewed")
+            self.assertEqual(papers_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            papers = papers_result["papers"]
             self.assertEqual(papers[0]["title"], "Memory Safety for Agentic Security")
             self.assertEqual(papers[0]["seen_count"], 1)
             self.assertEqual(papers[0]["source_ids"], ["arxiv"])
             self.assertTrue(papers[0]["pdf_access"]["can_download"])
+            self.assertEqual(papers[0]["latest_recommendation"]["label"], "highly_relevant")
             self.assertEqual(report_code, 0)
             report = json.loads(report_stdout.getvalue())
             self.assertEqual(report["run"]["id"], result["run_id"])

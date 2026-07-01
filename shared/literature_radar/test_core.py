@@ -50,6 +50,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "copyright_license_check",
                 "deduplication",
                 "relevance_scoring",
+                "context_linking",
                 "ai_summarization",
                 "long_term_storage",
                 "recommendation_report",
@@ -80,6 +81,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "can_download": True,
             "downloaded": False,
         }
+        recommendation["context"] = {
+            "relationship_summary": "Related to existing context: Baseline Paper.",
+            "related_items": [{"id": "item_1", "title": "Baseline Paper"}],
+        }
         recommendation["summary"] = {"short_summary": "A useful memory safety paper."}
 
         trace = build_radar_pipeline_trace(
@@ -97,6 +102,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(by_phase["metadata_collection"]["metrics"]["collected_count"], 1)
         self.assertEqual(by_phase["copyright_license_check"]["metrics"]["downloadable_pdf_count"], 1)
         self.assertEqual(by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
+        self.assertEqual(by_phase["context_linking"]["status"], "succeeded")
+        self.assertEqual(by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
+        self.assertEqual(by_phase["context_linking"]["metrics"]["related_item_count"], 1)
         self.assertEqual(by_phase["ai_summarization"]["status"], "succeeded")
         self.assertEqual(by_phase["long_term_storage"]["metrics"]["storage_target"], "test_index")
         self.assertEqual(by_phase["recommendation_report"]["status"], "succeeded")
@@ -510,6 +518,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "reviewed_at": "2026-07-01T10:00:00+00:00",
             "reason": "outside current sprint",
         }
+        recommendation["context"] = {
+            "relationship_summary": "Related to existing context: Prior memory safety work.",
+            "related_items": [{"id": "item_memory", "title": "Prior memory safety work"}],
+        }
         watch_paper = create_radar_paper(
             source_id="arxiv",
             source_paper_id="2601.00032",
@@ -527,6 +539,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "status": "watch",
             "reviewed_by": "bob",
             "reviewed_at": "2026-07-01T11:00:00+00:00",
+        }
+        watch_recommendation["context"] = {
+            "relationship_summary": "Related to existing context: Agentic baseline.",
+            "related_items": [{"id": "item_agentic", "title": "Agentic baseline"}],
         }
         brief = build_radar_history_brief(
             [
@@ -598,6 +614,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Team Interests: memory safety=90, agentic security=80", brief)
         self.assertIn("Pipeline Trace", brief)
         self.assertIn("`metadata_collection`: partial=1", brief)
+        self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
         self.assertIn("`arxiv`: 2 candidate(s)", brief)
         self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)

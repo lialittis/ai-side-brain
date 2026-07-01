@@ -24,6 +24,9 @@ from personal.literature_radar import (
 from shared.literature_radar import build_radar_history_brief
 
 
+PERSONAL_RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Personal Literature Radar")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -96,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     papers = subparsers.add_parser("papers", help="list personal radar paper history")
     papers.add_argument("--root-path", type=Path, default=ROOT)
     papers.add_argument("--limit", type=int, default=20)
+    papers.add_argument("--review", choices=PERSONAL_RADAR_REVIEW_FILTERS, default="all")
     papers.add_argument("--json", action="store_true")
 
     review = subparsers.add_parser("review", help="mark one personal radar paper as watch, dismissed, or unreviewed")
@@ -164,24 +168,73 @@ def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
     )
 
 
-def print_paper_history(records: list[dict[str, Any]]) -> None:
+def print_paper_history(
+    records: list[dict[str, Any]],
+    *,
+    review_counts: dict[str, int] | None = None,
+    review: str = "all",
+) -> None:
+    if review_counts:
+        print(
+            "Review queues: "
+            + ", ".join(
+                f"{status}={int(review_counts.get(status) or 0)}"
+                for status in PERSONAL_RADAR_REVIEW_FILTERS
+            )
+        )
+    if review != "all":
+        print(f"Filter: {review}")
     if not records:
         print("No Personal Literature Radar paper history yet.")
         return
     for record in records:
+        latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+        latest_signal = (
+            f" | {latest.get('label') or 'needs_review'} {int(float(latest.get('score') or 0))}/100"
+            if latest
+            else ""
+        )
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={record.get('review_status') or 'unreviewed'} | "
-            f"latest={record.get('latest_seen_at')} | {record.get('title')}"
+            f"latest={record.get('latest_seen_at')}{latest_signal} | {record.get('title')}"
         )
 
 
-def sorted_paper_history(records: dict[str, dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+def sorted_paper_history(
+    records: dict[str, dict[str, Any]],
+    *,
+    limit: int,
+    review: str = "all",
+) -> list[dict[str, Any]]:
+    selected_review = normalize_personal_review_filter(review)
+    values = list(records.values())
+    if selected_review != "all":
+        values = [record for record in values if personal_paper_review_status(record) == selected_review]
     return sorted(
-        records.values(),
+        values,
         key=lambda record: str(record.get("latest_seen_at") or ""),
         reverse=True,
     )[:limit]
+
+
+def personal_paper_review_counts(records: dict[str, dict[str, Any]]) -> dict[str, int]:
+    counts = {status: 0 for status in PERSONAL_RADAR_REVIEW_FILTERS}
+    for record in records.values():
+        status = personal_paper_review_status(record)
+        counts["all"] += 1
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def personal_paper_review_status(record: dict[str, Any]) -> str:
+    status = str(record.get("review_status") or "unreviewed").strip().lower()
+    return status if status in PERSONAL_RADAR_REVIEW_FILTERS and status != "all" else "unreviewed"
+
+
+def normalize_personal_review_filter(value: str) -> str:
+    selected = str(value or "all").strip().lower()
+    return selected if selected in PERSONAL_RADAR_REVIEW_FILTERS else "all"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,14 +299,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "papers":
+        history_records = read_personal_radar_paper_history(args.root_path)
+        selected_review = normalize_personal_review_filter(args.review)
         records = sorted_paper_history(
-            read_personal_radar_paper_history(args.root_path),
+            history_records,
             limit=args.limit,
+            review=selected_review,
         )
+        review_counts = personal_paper_review_counts(history_records)
         if args.json:
-            print_json(records)
+            print_json(
+                {
+                    "review": selected_review,
+                    "review_counts": review_counts,
+                    "papers": records,
+                }
+            )
         else:
-            print_paper_history(records)
+            print_paper_history(records, review_counts=review_counts, review=selected_review)
         return 0
 
     if args.command == "review":

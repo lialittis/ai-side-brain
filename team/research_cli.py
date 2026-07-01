@@ -197,6 +197,12 @@ def build_parser() -> argparse.ArgumentParser:
     radar_papers = subparsers.add_parser("radar-papers", help="list deduplicated Literature Radar paper history")
     add_db_args(radar_papers)
     radar_papers.add_argument("--limit", type=int, default=20)
+    radar_papers.add_argument(
+        "--review",
+        choices=["all", "unreviewed", "watch", "dismissed"],
+        default="all",
+        help="filter by stored Radar review state",
+    )
     radar_papers.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_report = subparsers.add_parser("radar-report", help="show a stored Literature Radar report")
@@ -404,7 +410,22 @@ def print_radar_history(runs: list[dict[str, Any]]) -> None:
         )
 
 
-def print_radar_papers(records: list[dict[str, Any]]) -> None:
+def print_radar_papers(
+    records: list[dict[str, Any]],
+    *,
+    review_counts: dict[str, int] | None = None,
+    review: str = "all",
+) -> None:
+    if review_counts:
+        print(
+            "Review queues: "
+            + ", ".join(
+                f"{status}={int(review_counts.get(status) or 0)}"
+                for status in ("all", "unreviewed", "watch", "dismissed")
+            )
+        )
+    if review != "all":
+        print(f"Filter: {review}")
     if not records:
         print("No Literature Radar papers yet.")
         return
@@ -412,10 +433,18 @@ def print_radar_papers(records: list[dict[str, Any]]) -> None:
         pdf_access = record.get("pdf_access") or {}
         access = "download" if pdf_access.get("can_download") else "metadata"
         imported = record.get("imported_item_id") or "not imported"
+        review_state = (record.get("review_status") or "unreviewed")
+        latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+        latest_signal = (
+            f" | {latest.get('label') or 'needs_review'} {int(float(latest.get('score') or 0))}/100"
+            if latest
+            else ""
+        )
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
+            f"review={review_state} | "
             f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
-            f"{access} | {imported} | {record.get('title')}"
+            f"{access} | {imported}{latest_signal} | {record.get('title')}"
         )
 
 
@@ -629,11 +658,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-papers":
-        papers = database.list_literature_radar_papers(limit=args.limit)
+        review = args.review
+        review_counts = database.literature_radar_paper_review_counts()
+        papers = database.list_literature_radar_papers(
+            limit=args.limit,
+            review_status=None if review == "all" else review,
+        )
         if args.json:
-            print_json(papers)
+            print_json(
+                {
+                    "review": review,
+                    "review_counts": review_counts,
+                    "papers": papers,
+                }
+            )
         else:
-            print_radar_papers(papers)
+            print_radar_papers(papers, review_counts=review_counts, review=review)
         return 0
 
     if args.command == "radar-report":

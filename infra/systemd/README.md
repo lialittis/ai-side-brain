@@ -46,6 +46,12 @@ override the script behavior. Brief timers write Markdown and JSON roll-ups to
 `team/logs/` and `memory/06_Logs/` by default; they do not call external paper
 sources.
 
+For a simpler cron-style setup, `team/scripts/run_literature_radar_cycle.sh`
+runs Team collection and then builds the Team brief in one command. It defaults
+to `RADAR_USE_SAVED_DEFAULTS=1`, so it is usually the right command for a
+single daily team job. The separate systemd units above keep collection and
+weekly brief generation on independent schedules.
+
 PDF caching is off by default. Set `RADAR_CACHE_PDFS=1` with
 `RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs`, or
 `PERSONAL_RADAR_CACHE_PDFS=1` with `PERSONAL_RADAR_PDF_CACHE_DIR`, to cache only

@@ -22,6 +22,7 @@ RADAR_PIPELINE_PHASES = [
     "copyright_license_check",
     "deduplication",
     "relevance_scoring",
+    "context_linking",
     "ai_summarization",
     "long_term_storage",
     "recommendation_report",
@@ -1191,6 +1192,9 @@ def build_radar_pipeline_trace(
     )
     pdf_records = pipeline_pdf_access_records(collected, selected_recommendations)
     summarized_count = sum(1 for recommendation in selected_recommendations if recommendation.get("summary"))
+    context_records = pipeline_context_records(selected_recommendations)
+    linked_context_count = sum(1 for context in context_records if context.get("related_items"))
+    related_item_count = sum(len(context.get("related_items") or []) for context in context_records)
     recommendation_count = len(selected_recommendations)
     return [
         pipeline_phase(
@@ -1219,6 +1223,13 @@ def build_radar_pipeline_trace(
             "relevance_scoring",
             "succeeded" if recommendation_count else "no_matches",
             recommendation_count=recommendation_count,
+        ),
+        pipeline_phase(
+            "context_linking",
+            context_linking_phase_status(recommendation_count, context_records),
+            context_record_count=len(context_records),
+            linked_recommendation_count=linked_context_count,
+            related_item_count=related_item_count,
         ),
         pipeline_phase(
             "ai_summarization",
@@ -1301,6 +1312,27 @@ def pipeline_pdf_access_records(
         if isinstance(pdf_access, dict):
             records.append(pdf_access)
     return records
+
+
+def pipeline_context_records(recommendations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        recommendation["context"]
+        for recommendation in recommendations
+        if isinstance(recommendation.get("context"), dict)
+    ]
+
+
+def context_linking_phase_status(
+    recommendation_count: int,
+    context_records: list[dict[str, Any]],
+) -> str:
+    if recommendation_count <= 0:
+        return "skipped"
+    if not context_records:
+        return "skipped"
+    if len(context_records) < recommendation_count:
+        return "partial"
+    return "succeeded"
 
 
 def summarization_phase_status(recommendation_count: int, summarized_count: int) -> str:

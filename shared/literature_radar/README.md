@@ -26,18 +26,19 @@ Pipeline phases are explicit:
 3. copyright/license check
 4. deduplication
 5. relevance scoring
-6. AI summarization
-7. long-term storage
-8. recommendation report
+6. context linking to prior Personal or Team work
+7. AI summarization
+8. long-term storage
+9. recommendation report
 
 The shared package currently provides source definitions, default security and
-AI topic interests, deduplication, PDF access policy, deterministic scoring, and
-recommendation report generation. It also includes a product-neutral pipeline
-trace builder so Personal and Team runs can store phase-level status for the
-explicit radar pipeline. The initial arXiv, DBLP, Semantic Scholar, OpenAlex,
-Crossref, and OpenReview collectors use public metadata APIs and return
-product-neutral radar paper records. Semantic Scholar also supports seed-paper
-recommendation expansion through the official
+AI topic interests, deduplication, PDF access policy, deterministic scoring,
+context linking, and recommendation report generation. It also includes a
+product-neutral pipeline trace builder so Personal and Team runs can store
+phase-level status for the explicit radar pipeline. The initial arXiv, DBLP,
+Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors use public
+metadata APIs and return product-neutral radar paper records. Semantic Scholar
+also supports seed-paper recommendation expansion through the official
 Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
 DOI-bearing papers without downloading files. Product adapters own scheduling,
 credentials, storage, and UI.

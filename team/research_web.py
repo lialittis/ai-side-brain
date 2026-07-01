@@ -52,6 +52,12 @@ SORT_OPTIONS = [
     ("relevance", "Relevance"),
     ("importance", "Importance"),
 ]
+RADAR_REVIEW_FILTER_OPTIONS = [
+    ("all", "All"),
+    ("unreviewed", "Unreviewed"),
+    ("watch", "Watch"),
+    ("dismissed", "Dismissed"),
+]
 RADAR_WEB_SOURCE_OPTIONS = [
     ("arxiv", "arXiv"),
     ("dblp", "DBLP"),
@@ -486,6 +492,33 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 8px;
       margin-bottom: 12px;
     }}
+    .radar-provenance {{
+      display: grid;
+      gap: 10px;
+      margin: 12px 0;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }}
+    .radar-provenance-section {{
+      display: grid;
+      gap: 6px;
+    }}
+    .radar-provenance-title {{
+      font-weight: 800;
+      color: #344054;
+      font-size: 13px;
+    }}
+    .radar-pipeline {{
+      display: grid;
+      gap: 7px;
+    }}
+    .radar-pipeline-row {{
+      display: grid;
+      grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }}
     .radar-recommendation {{
       display: grid;
       grid-template-columns: 34px minmax(0, 1fr);
@@ -657,7 +690,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .shell {{ grid-template-columns: 1fr; }}
       .content {{ padding: 18px; }}
       .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
-      .radar-grid, .radar-recommendation {{ grid-template-columns: 1fr; }}
+      .radar-grid, .radar-recommendation, .radar-pipeline-row {{ grid-template-columns: 1fr; }}
       .paper-footer {{ align-items: flex-start; }}
       .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
       .interest-add {{ grid-template-columns: 1fr; }}
@@ -696,6 +729,16 @@ def render_notice(notice: str) -> str:
     return f'<div class="notice">{html_escape(notice)}</div>' if notice else ""
 
 
+def radar_papers_path(*, notice: str = "", review_filter: str = "all") -> str:
+    params = {}
+    selected_review = clean_radar_review_filter(review_filter)
+    if selected_review != "all":
+        params["review"] = selected_review
+    if notice:
+        params["notice"] = notice
+    return "/radar/papers" + (f"?{urlencode(params)}" if params else "")
+
+
 def render_literature_radar_page(
     database: TeamResearchDatabase,
     *,
@@ -718,7 +761,7 @@ def render_literature_radar_page(
       <section class="panel">
         <h2>Runs</h2>
         {render_radar_run_list(runs, selected_run)}
-        {render_radar_history_actions()}
+        {render_radar_history_actions(database)}
         {render_radar_run_form(database)}
       </section>
       <section class="panel">
@@ -764,26 +807,35 @@ def render_literature_radar_papers_page(
     database: TeamResearchDatabase,
     *,
     limit: int = 50,
+    review_status: str = "all",
     notice: str = "",
 ) -> str:
-    papers = database.list_literature_radar_papers(limit=limit)
+    selected_review = clean_radar_review_filter(review_status)
+    review_counts = database.literature_radar_paper_review_counts()
+    papers = database.list_literature_radar_papers(
+        limit=limit,
+        review_status=None if selected_review == "all" else selected_review,
+    )
     body = f"""
     {render_topline("Radar Papers", "Deduplicated paper history from stored Literature Radar runs.", "/radar", "Radar")}
     {render_notice(notice)}
     <section class="panel">
-      {render_radar_papers_form(limit=limit)}
-      {render_radar_paper_history(papers)}
+      {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=limit)}
+      {render_radar_papers_form(limit=limit, review_status=selected_review)}
+      {render_radar_paper_history(papers, review_filter=selected_review)}
     </section>
     """
     return page("Radar Papers", body, active="radar")
 
 
-def render_radar_history_actions() -> str:
-    return """
+def render_radar_history_actions(database: TeamResearchDatabase) -> str:
+    review_counts = database.literature_radar_paper_review_counts()
+    return f"""
     <div class="radar-brief-link">
       <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
     </div>
+    {render_radar_review_count_links(review_counts, selected_review="all", limit=50)}
     """
 
 
@@ -896,25 +948,60 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
     """
 
 
-def render_radar_papers_form(*, limit: int) -> str:
+def render_radar_papers_form(*, limit: int, review_status: str = "all") -> str:
     return f"""
     <form class="radar-brief-form" method="get" action="/radar/papers">
       <label>
         <span class="muted">Papers</span>
         <input type="number" name="limit" min="1" max="500" value="{limit}">
       </label>
+      <label>
+        <span class="muted">Review</span>
+        <select name="review">
+          {render_radar_review_filter_options(review_status)}
+        </select>
+      </label>
       <button class="button primary" type="submit">Show History</button>
     </form>
     """
 
 
-def render_radar_paper_history(records: list[dict[str, Any]]) -> str:
+def render_radar_review_count_links(
+    counts: dict[str, int],
+    *,
+    selected_review: str,
+    limit: int,
+) -> str:
+    selected = clean_radar_review_filter(selected_review)
+    links = []
+    for value, label in RADAR_REVIEW_FILTER_OPTIONS:
+        count = int(counts.get(value) or 0)
+        params = {"limit": str(limit)}
+        if value != "all":
+            params["review"] = value
+        class_name = "button primary" if value == selected else "button"
+        href = html_escape(f"/radar/papers?{urlencode(params)}")
+        links.append(
+            f'<a class="{class_name}" href="{href}">{html_escape(label)} {count}</a>'
+        )
+    return '<div class="radar-brief-link">' + "".join(links) + "</div>"
+
+
+def render_radar_review_filter_options(selected: str) -> str:
+    selected_review = clean_radar_review_filter(selected)
+    return "\n".join(
+        f'<option value="{html_escape(value)}"{" selected" if value == selected_review else ""}>{html_escape(label)}</option>'
+        for value, label in RADAR_REVIEW_FILTER_OPTIONS
+    )
+
+
+def render_radar_paper_history(records: list[dict[str, Any]], *, review_filter: str = "all") -> str:
     if not records:
         return '<div class="empty">No Literature Radar papers have been stored yet.</div>'
-    return "\n".join(render_radar_paper_history_item(record) for record in records)
+    return "\n".join(render_radar_paper_history_item(record, review_filter=review_filter) for record in records)
 
 
-def render_radar_paper_history_item(record: dict[str, Any]) -> str:
+def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: str = "all") -> str:
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
     source_ids = record.get("source_ids") or []
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids)
@@ -926,7 +1013,7 @@ def render_radar_paper_history_item(record: dict[str, Any]) -> str:
         else '<span class="pill">Not imported</span>'
     )
     links = render_radar_links(paper)
-    import_control = render_radar_paper_import_control(record)
+    import_control = render_radar_paper_import_control(record, review_filter=review_filter)
     return f"""
     <article class="paper">
       <div>
@@ -943,19 +1030,39 @@ def render_radar_paper_history_item(record: dict[str, Any]) -> str:
           {render_radar_review_pill(review)}
           {render_pdf_access_pill(record.get("pdf_access") or {})}
         </div>
-        <div class="radar-links">{links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review)}</div>
+        {render_radar_paper_latest_signal(record.get("latest_recommendation"))}
+        <div class="radar-links">{links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review, review_filter=review_filter)}</div>
       </div>
     </article>
     """
 
 
-def render_radar_paper_import_control(record: dict[str, Any]) -> str:
+def render_radar_paper_latest_signal(latest: Any) -> str:
+    if not isinstance(latest, dict) or not latest:
+        return ""
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    why = str(latest.get("why_relevant") or "").strip()
+    context_text = str(context.get("relationship_summary") or "").strip()
+    summary_text = str(summary.get("short_summary") or "").strip()
+    detail = summary_text or context_text or why
+    return f"""
+    <div class="radar-ai-summary">
+      <p><strong>Latest signal:</strong> {relevance_pill(str(latest.get("label") or "needs_review"))} <span class="pill">Score: {html_escape(int(float(latest.get("score") or 0)))}</span></p>
+      {f'<p>{html_escape(detail)}</p>' if detail else ''}
+      {f'<p><strong>Context:</strong> {html_escape(context_text)}</p>' if context_text and context_text != detail else ''}
+    </div>
+    """
+
+
+def render_radar_paper_import_control(record: dict[str, Any], *, review_filter: str = "all") -> str:
     imported_item_id = str(record.get("imported_item_id") or "")
     if imported_item_id:
         return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
     return f"""
     <form class="inline-form" method="post" action="/radar/papers/import">
       <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
+      <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
       <button class="mini-button primary" type="submit">Add to Library</button>
     </form>
     """
@@ -1048,6 +1155,12 @@ def radar_list_form_value(settings: dict[str, Any], key: str) -> str:
     return "\n".join(str(value) for value in settings.get(key) or [])
 
 
+def clean_radar_review_filter(value: str | None) -> str:
+    selected = str(value or "all").strip().lower()
+    allowed = {option for option, _label in RADAR_REVIEW_FILTER_OPTIONS}
+    return selected if selected in allowed else "all"
+
+
 def checked_attr(enabled: bool) -> str:
     return " checked" if enabled else ""
 
@@ -1107,6 +1220,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
     {render_radar_source_stats(run)}
+    {render_radar_run_provenance(run)}
     {render_radar_error(run)}
     {render_radar_source_errors(run)}
     {render_radar_recommendations(recommendations)}
@@ -1158,6 +1272,158 @@ def render_radar_source_stat(stat: dict[str, Any]) -> str:
         title = f' title="{html_escape(error_type + (": " + error if error else ""))}"'
     class_name = "tag warn" if status == "failed" else "tag"
     return f'<span class="{class_name}"{title}>{html_escape(source_id)}: {collected_count}</span>'
+
+
+def render_radar_run_provenance(run: dict[str, Any]) -> str:
+    sections = [
+        render_radar_collection_config(run.get("collection_config")),
+        render_radar_scoring_profile(run.get("scoring_profile")),
+        render_radar_pipeline_trace(run.get("pipeline_trace")),
+    ]
+    rendered = [section for section in sections if section]
+    if not rendered:
+        return ""
+    return '<div class="radar-provenance"><div class="radar-provenance-title">Run Provenance</div>' + "".join(rendered) + "</div>"
+
+
+def render_radar_collection_config(config: Any) -> str:
+    if not isinstance(config, dict) or not config:
+        return ""
+    chips = []
+    simple_fields = [
+        ("max_results", "max/source"),
+        ("recommendation_limit", "recommendations"),
+        ("conference_year", "conference year"),
+        ("summary_provider", "summary provider"),
+        ("summary_limit", "summary limit"),
+        ("pdf_cache_max_bytes", "PDF max bytes"),
+        ("import_limit", "import limit"),
+        ("min_import_score", "min import score"),
+    ]
+    for key, label in simple_fields:
+        if key in config:
+            chips.append(render_radar_metric_chip(label, config[key]))
+    list_fields = [
+        ("dblp_venue_profiles", "venue profiles"),
+        ("openreview_venue_profiles", "OpenReview profiles"),
+        ("usenix_security_cycles", "USENIX cycles"),
+        ("semantic_scholar_author_ids", "S2 authors"),
+        ("dblp_author_pids", "DBLP authors"),
+        ("openalex_author_ids", "OpenAlex authors"),
+        ("seed_paper_ids", "seed papers"),
+        ("negative_seed_paper_ids", "negative seeds"),
+        ("openreview_invitations", "OpenReview invitations"),
+    ]
+    for key, label in list_fields:
+        value = config.get(key)
+        if isinstance(value, list) and value:
+            chips.append(render_radar_metric_chip(label, radar_list_preview(value)))
+    bool_fields = [
+        ("summarize", "summaries"),
+        ("cache_pdfs", "cache legal PDFs"),
+        ("import_results", "auto import"),
+        ("openreview_accepted_only", "accepted OpenReview only"),
+        ("semantic_scholar_api_key_configured", "Semantic Scholar key"),
+        ("openalex_mailto_configured", "OpenAlex mailto"),
+        ("crossref_mailto_configured", "Crossref mailto"),
+        ("unpaywall_email_configured", "Unpaywall email"),
+    ]
+    for key, label in bool_fields:
+        if key in config:
+            chips.append(render_radar_metric_chip(label, "yes" if config.get(key) else "no"))
+    return render_radar_provenance_section("Collection Config", chips)
+
+
+def render_radar_scoring_profile(profile: Any) -> str:
+    if not isinstance(profile, dict) or not profile:
+        return ""
+    profile_type = str(profile.get("type") or "profile")
+    name = str(profile.get("name") or profile.get("id") or "Scoring Profile")
+    chips = [render_radar_metric_chip("type", profile_type), render_radar_metric_chip("name", name)]
+    if profile_type == "team_interests":
+        interests = profile.get("interests") if isinstance(profile.get("interests"), list) else []
+        for interest in interests[:12]:
+            if not isinstance(interest, dict) or not interest.get("keyword"):
+                continue
+            chips.append(render_radar_metric_chip(str(interest["keyword"]), interest.get("weight", "")))
+        if len(interests) > 12:
+            chips.append(render_radar_metric_chip("more interests", len(interests) - 12))
+        return render_radar_provenance_section("Team Interest Weights", chips)
+    topics = profile.get("topics") if isinstance(profile.get("topics"), list) else []
+    for topic in topics[:6]:
+        if not isinstance(topic, dict):
+            continue
+        keywords = topic.get("positive_keywords") if isinstance(topic.get("positive_keywords"), list) else []
+        chips.append(render_radar_metric_chip(str(topic.get("id") or "topic"), radar_list_preview(keywords, limit=3)))
+    if len(topics) > 6:
+        chips.append(render_radar_metric_chip("more topics", len(topics) - 6))
+    return render_radar_provenance_section("Scoring Profile", chips)
+
+
+def render_radar_pipeline_trace(trace: Any) -> str:
+    if not isinstance(trace, list) or not trace:
+        return ""
+    rows = []
+    for phase_record in trace:
+        if not isinstance(phase_record, dict):
+            continue
+        phase = str(phase_record.get("phase") or "").strip()
+        if not phase:
+            continue
+        status = str(phase_record.get("status") or "unknown")
+        metrics = phase_record.get("metrics") if isinstance(phase_record.get("metrics"), dict) else {}
+        metric_chips = "".join(
+            render_radar_metric_chip(readable_radar_metric_name(key), value)
+            for key, value in metrics.items()
+            if value not in (None, "")
+        )
+        rows.append(
+            f"""
+            <div class="radar-pipeline-row">
+              <div>{render_radar_pipeline_status(phase, status)}</div>
+              <div class="tags">{metric_chips or '<span class="muted">No metrics</span>'}</div>
+            </div>
+            """
+        )
+    if not rows:
+        return ""
+    return f"""
+    <div class="radar-provenance-section">
+      <div class="radar-provenance-title">Pipeline Trace</div>
+      <div class="radar-pipeline">{''.join(rows)}</div>
+    </div>
+    """
+
+
+def render_radar_provenance_section(title: str, chips: list[str]) -> str:
+    if not chips:
+        return ""
+    return f"""
+    <div class="radar-provenance-section">
+      <div class="radar-provenance-title">{html_escape(title)}</div>
+      <div class="tags">{''.join(chips)}</div>
+    </div>
+    """
+
+
+def render_radar_metric_chip(label: str, value: Any) -> str:
+    return f'<span class="tag">{html_escape(label)}: {html_escape(value)}</span>'
+
+
+def render_radar_pipeline_status(phase: str, status: str) -> str:
+    css = "good" if status == "succeeded" else "warn" if status in {"failed", "partial", "no_matches"} else ""
+    label = readable_radar_metric_name(phase)
+    return f'<span class="pill {css}">{html_escape(label)}: {html_escape(status)}</span>'
+
+
+def radar_list_preview(values: list[Any], *, limit: int = 4) -> str:
+    visible = [str(value) for value in values[:limit]]
+    suffix = f" +{len(values) - limit} more" if len(values) > limit else ""
+    return ", ".join(visible) + suffix
+
+
+def readable_radar_metric_name(value: Any) -> str:
+    return str(value).replace("_", " ")
 
 
 def render_radar_terms(label: str, terms: list[str]) -> str:
@@ -1278,16 +1544,33 @@ def render_radar_review_controls(
     run_id: str = "",
     return_to: str = "run",
     review: dict[str, Any],
+    review_filter: str = "all",
 ) -> str:
     if not dedupe_key:
         return ""
     status = str(review.get("status") or "unreviewed")
-    watch_button = "" if status == "watch" else render_radar_review_button(dedupe_key, "watch", "Watch", run_id, return_to)
+    watch_button = "" if status == "watch" else render_radar_review_button(
+        dedupe_key,
+        "watch",
+        "Watch",
+        run_id,
+        return_to,
+        review_filter,
+    )
     dismiss_button = (
-        "" if status == "dismissed" else render_radar_review_button(dedupe_key, "dismissed", "Dismiss", run_id, return_to)
+        ""
+        if status == "dismissed"
+        else render_radar_review_button(
+            dedupe_key,
+            "dismissed",
+            "Dismiss",
+            run_id,
+            return_to,
+            review_filter,
+        )
     )
     clear_button = (
-        render_radar_review_button(dedupe_key, "unreviewed", "Clear", run_id, return_to)
+        render_radar_review_button(dedupe_key, "unreviewed", "Clear", run_id, return_to, review_filter)
         if status in {"watch", "dismissed"}
         else ""
     )
@@ -1300,6 +1583,7 @@ def render_radar_review_button(
     label: str,
     run_id: str,
     return_to: str,
+    review_filter: str = "all",
 ) -> str:
     return f"""
     <form class="inline-form" method="post" action="/radar/review">
@@ -1307,6 +1591,7 @@ def render_radar_review_button(
       <input type="hidden" name="status" value="{html_escape(status)}">
       <input type="hidden" name="run_id" value="{html_escape(run_id)}">
       <input type="hidden" name="return_to" value="{html_escape(return_to)}">
+      <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
       <button class="mini-button" type="submit">{html_escape(label)}</button>
     </form>
     """
@@ -2097,6 +2382,7 @@ def review_radar_paper(database: TeamResearchDatabase, fields: dict[str, str]) -
         "status": str(record.get("review_status") or status),
         "run_id": fields.get("run_id") or "",
         "return_to": fields.get("return_to") or "run",
+        "review_filter": clean_radar_review_filter(fields.get("review_filter")),
     }
 
 
@@ -2367,6 +2653,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                     render_literature_radar_papers_page(
                         self.database,
                         limit=clean_positive_int(query.get("limit", [""])[0], default=50, maximum=500),
+                        review_status=query.get("review", ["all"])[0],
                         notice=notice,
                     )
                 )
@@ -2398,12 +2685,22 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
             elif parsed.path == "/radar/papers/import":
                 item_id = import_radar_paper_to_library(self.database, fields)
-                self.redirect(f"/radar/papers?notice={quote(f'Added {item_id} to the library.')}")
+                self.redirect(
+                    radar_papers_path(
+                        notice=f"Added {item_id} to the library.",
+                        review_filter=fields.get("review_filter") or "all",
+                    )
+                )
             elif parsed.path == "/radar/review":
                 result = review_radar_paper(self.database, fields)
                 status = result["status"]
                 if result.get("return_to") == "papers":
-                    self.redirect(f"/radar/papers?notice={quote(f'Marked radar paper as {status}.')}")
+                    self.redirect(
+                        radar_papers_path(
+                            notice=f"Marked radar paper as {status}.",
+                            review_filter=result.get("review_filter") or "all",
+                        )
+                    )
                 else:
                     run_id = result.get("run_id") or ""
                     suffix = f"?run={quote(run_id, safe='')}" if run_id else ""
