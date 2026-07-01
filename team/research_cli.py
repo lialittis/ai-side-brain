@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import topic_profile_by_id
+from team.literature_radar import run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -80,6 +81,19 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--limit", type=int, default=20)
     analyze.add_argument("--retry-failed", action="store_true")
     analyze.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar = subparsers.add_parser("radar-run", help="collect and rank Literature Radar recommendations")
+    add_db_args(radar)
+    radar.add_argument("--source", action="append", choices=["arxiv", "dblp"], help="source to collect; repeatable")
+    radar.add_argument("--query-term", action="append", default=[], help="interest term override; repeatable")
+    radar.add_argument("--max-results", type=int, default=25, help="maximum results per source query")
+    radar.add_argument("--limit", type=int, default=10, help="maximum recommendations to report")
+    radar.add_argument("--import-results", action="store_true", help="import recommended papers into the team library")
+    radar.add_argument("--import-limit", type=int, default=5, help="maximum recommendations to import")
+    radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
+    radar.add_argument("--project", default="team-library", help="team library project id for imported papers")
+    radar.add_argument("--output", type=Path, help="write Markdown recommendation report")
+    radar.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     return parser
 
@@ -234,6 +248,22 @@ def print_analysis_runs(runs: list[dict[str, Any]]) -> None:
         print(f"{run['item_id']} | {run['status']} | {run['provider']}:{run['model']}{suffix}")
 
 
+def print_radar_run(result: dict[str, Any]) -> None:
+    print("Team Literature Radar")
+    print(f"Sources: {', '.join(result['sources'])}")
+    print(f"Query terms: {', '.join(result['query_terms'])}")
+    print(f"Collected: {result['collected_count']}")
+    print(f"Recommendations: {result['recommendation_count']}")
+    print(f"Imported: {result['imported_count']}")
+    report_path = result.get("report_path")
+    if report_path:
+        print(f"Report: {report_path}")
+    for recommendation in result.get("recommendations", [])[:5]:
+        paper = recommendation["paper"]
+        scoring = recommendation["scoring"]
+        print(f"- {scoring['label']} {scoring['score']}/100 | {paper.get('title')}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -295,6 +325,28 @@ def main(argv: list[str] | None = None) -> int:
             print_json(runs)
         else:
             print_analysis_runs(runs)
+        return 0
+
+    if args.command == "radar-run":
+        result = run_team_literature_radar(
+            database,
+            sources=args.source or ["arxiv", "dblp"],
+            query_terms=args.query_term or None,
+            max_results=args.max_results,
+            recommendation_limit=args.limit,
+            import_results=args.import_results,
+            import_limit=args.import_limit,
+            min_import_score=args.min_score,
+            project_id=args.project,
+        )
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(result["report"], encoding="utf-8")
+            result["report_path"] = str(args.output)
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_run(result)
         return 0
 
     parser.error(f"unsupported command: {args.command}")

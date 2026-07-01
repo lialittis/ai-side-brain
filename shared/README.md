@@ -10,6 +10,8 @@ Current shared modules:
 shared/
 ├── ai/
 │   └── openrouter.py
+├── literature_radar/
+│   └── README.md
 └── research/
     ├── README.md
     ├── prompts/
@@ -18,6 +20,8 @@ shared/
 ```
 
 `shared/research/` is the product-neutral research and resource intelligence core for source intake, normalized research items, research cards, topic profiles, and relevance screening.
+
+`shared/literature_radar/` is the product-neutral discovery core for API-first paper monitoring, source definitions, deduplication, PDF access policy, relevance scoring, and recommendation reports.
 
 `shared/ai/` contains provider helpers that are product-neutral. The current OpenRouter helper exposes a structured chat-completions client used by Team Research and designed for later Personal Side-Brain reuse.
 

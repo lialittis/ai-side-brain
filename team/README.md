@@ -67,6 +67,8 @@ http://127.0.0.1:8790
 
 The local MVP runs shared source intake, OpenRouter AI analysis when configured, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation.
 
+Team Literature Radar imports product-neutral radar recommendations from `shared/literature_radar/` into the same Team Research library. See [Literature Radar](docs/LITERATURE_RADAR.md).
+
 The CLI remains the admin/local-control surface. Team members should use the web UI for the simplest daily workflows: scanning the latest relevant papers by tag, submitting a direct PDF link, uploading one PDF, or saving a promising manual link with brief notes.
 
 Useful commands:
@@ -75,6 +77,7 @@ Useful commands:
 python team/research_cli.py add-manual --title "..." --abstract "..."
 python team/research_cli.py inbox
 python team/research_cli.py analyze-pending --retry-failed
+python team/research_cli.py radar-run --source arxiv --source dblp --output team/logs/literature-radar.md
 python team/research_cli.py show ITEM_ID
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
@@ -111,3 +114,4 @@ Planning docs:
 
 - [Research Core TODO](docs/RESEARCH_CORE_TODO.md)
 - [Research Workflow Design](docs/RESEARCH_WORKFLOW_DESIGN.md)
+- [Literature Radar](docs/LITERATURE_RADAR.md)
