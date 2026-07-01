@@ -49,6 +49,18 @@ if [[ -n "${RADAR_DBLP_VENUES:-}" ]]; then
     ARGS+=("--venue-profile" "$venue_profile")
   done
 fi
+if [[ -n "${RADAR_DBLP_AUTHOR_PIDS:-}" ]]; then
+  read -r -a DBLP_AUTHOR_PIDS <<< "$RADAR_DBLP_AUTHOR_PIDS"
+  for author_pid in "${DBLP_AUTHOR_PIDS[@]}"; do
+    ARGS+=("--dblp-author-pid" "$author_pid")
+  done
+fi
+if [[ -n "${RADAR_OPENALEX_AUTHOR_IDS:-}" ]]; then
+  read -r -a OPENALEX_AUTHOR_IDS <<< "$RADAR_OPENALEX_AUTHOR_IDS"
+  for author_id in "${OPENALEX_AUTHOR_IDS[@]}"; do
+    ARGS+=("--openalex-author-id" "$author_id")
+  done
+fi
 if [[ -n "${RADAR_OPENREVIEW_VENUES:-}" ]]; then
   read -r -a OPENREVIEW_VENUES <<< "$RADAR_OPENREVIEW_VENUES"
   for venue_profile in "${OPENREVIEW_VENUES[@]}"; do

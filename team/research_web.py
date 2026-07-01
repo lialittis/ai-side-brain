@@ -53,11 +53,13 @@ RADAR_WEB_SOURCE_OPTIONS = [
     ("crossref", "Crossref"),
     ("usenix_security", "USENIX Security"),
     ("ndss", "NDSS"),
+    ("dblp_authors", "DBLP Authors"),
     ("dblp_venues", "DBLP Venues"),
     ("openalex_venues", "OpenAlex Venues"),
     ("openreview", "OpenReview"),
     ("openreview_venues", "OpenReview Venues"),
     ("semantic_scholar_authors", "S2 Authors"),
+    ("openalex_authors", "OpenAlex Authors"),
     ("semantic_scholar_recommendations", "Semantic Scholar Seeds"),
     ("semantic_scholar_references", "S2 References"),
     ("semantic_scholar_citations", "S2 Citations"),
@@ -711,6 +713,14 @@ def render_radar_run_form() -> str:
       <label>
         <span class="muted">Author IDs</span>
         <textarea name="semantic_scholar_author_ids" placeholder="Semantic Scholar author IDs"></textarea>
+      </label>
+      <label>
+        <span class="muted">DBLP author PIDs</span>
+        <textarea name="dblp_author_pids" placeholder="65/9612"></textarea>
+      </label>
+      <label>
+        <span class="muted">OpenAlex author IDs</span>
+        <textarea name="openalex_author_ids" placeholder="A123456789"></textarea>
       </label>
       <label>
         <span class="muted">Seed paper IDs</span>
@@ -1629,12 +1639,18 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
 def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     selected_sources = selected_radar_sources(fields)
     semantic_scholar_author_ids = split_form_list(fields.get("semantic_scholar_author_ids", ""))
+    dblp_author_pids = split_form_list(fields.get("dblp_author_pids", ""))
+    openalex_author_ids = split_form_list(fields.get("openalex_author_ids", ""))
     seed_paper_ids = split_form_list(fields.get("seed_paper_ids", ""))
     openreview_invitations = split_form_list(fields.get("openreview_invitations", ""))
     openreview_venue_profiles = split_form_list(fields.get("openreview_venue_profiles", ""))
     dblp_venue_profiles = split_form_list(fields.get("venue_profiles", ""))
+    if dblp_author_pids and "dblp_authors" not in selected_sources:
+        selected_sources.append("dblp_authors")
     if semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
         selected_sources.append("semantic_scholar_authors")
+    if openalex_author_ids and "openalex_authors" not in selected_sources:
+        selected_sources.append("openalex_authors")
     if seed_paper_ids and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
     if openreview_invitations and "openreview" not in selected_sources:
@@ -1653,6 +1669,8 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         summarize=checkbox_enabled(fields, "summarize"),
         summary_provider=clean_summary_provider(fields.get("summary_provider", "")),
         semantic_scholar_author_ids=semantic_scholar_author_ids,
+        dblp_author_pids=dblp_author_pids,
+        openalex_author_ids=openalex_author_ids,
         seed_paper_ids=seed_paper_ids,
         openreview_invitations=openreview_invitations,
         openreview_venue_profiles=openreview_venue_profiles,

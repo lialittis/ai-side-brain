@@ -21,6 +21,7 @@ from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_sele
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
+DBLP_PERSON_URL = "https://dblp.org/pid"
 DBLP_PUBLICATION_SEARCH_URL = "https://dblp.org/search/publ/api"
 OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
@@ -617,6 +618,36 @@ def collect_dblp_publications(
     return parse_dblp_publication_search(content, query_url=url, collected_at=now)
 
 
+def collect_dblp_author_publications(
+    *,
+    author_pids: list[str],
+    max_results: int = 50,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    papers = []
+    seen_keys = set()
+    for author_pid in author_pids:
+        selected_pid = normalize_dblp_author_pid(author_pid)
+        if not selected_pid:
+            continue
+        url = build_dblp_author_url(author_pid=selected_pid)
+        content = (fetcher or fetch_url)(url)
+        for paper in parse_dblp_author_publications(
+            content,
+            author_pid=selected_pid,
+            query_url=url,
+            max_results=max_results,
+            collected_at=now,
+        ):
+            key = paper.get("dedupe_key")
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            papers.append(paper)
+    return papers
+
+
 def collect_dblp_venue_publications(
     *,
     venue_profiles: list[str] | None = None,
@@ -654,6 +685,23 @@ def dblp_venue_profile_query(profile: dict[str, Any], year: int) -> str:
 def build_dblp_publication_search_url(*, query: str, max_results: int = 50) -> str:
     params = {"q": query, "format": "xml", "h": str(max(1, max_results))}
     return f"{DBLP_PUBLICATION_SEARCH_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
+def build_dblp_author_url(*, author_pid: str) -> str:
+    selected_pid = quote(normalize_dblp_author_pid(author_pid), safe="/-_:")
+    return f"{DBLP_PERSON_URL}/{selected_pid}.xml"
+
+
+def normalize_dblp_author_pid(value: str) -> str:
+    text = normalize_spaces(value)
+    text = re.sub(r"[?#].*$", "", text)
+    text = re.sub(r"^https?://dblp\.org/pid/", "", text, flags=re.IGNORECASE)
+    text = text.removeprefix("pid/")
+    for suffix in (".xml", ".html", ".bib", ".rss", ".rdf", ".nt", ".ris"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    return text.strip("/")
 
 
 def parse_dblp_publication_search(
@@ -703,6 +751,125 @@ def parse_dblp_publication_search(
             )
         )
     return papers
+
+
+def parse_dblp_author_publications(
+    content: bytes | str,
+    *,
+    author_pid: str,
+    query_url: str = "",
+    max_results: int = 50,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    root = ET.fromstring(content)
+    tracked_author_pid = author_pid or root.attrib.get("pid") or ""
+    tracked_author_name = root.attrib.get("name") or root.attrib.get("author") or ""
+    papers = []
+    for publication in dblp_publication_nodes(root):
+        if len(papers) >= max(1, max_results):
+            break
+        paper = dblp_publication_node_to_radar_paper(
+            publication,
+            tracked_author_pid=tracked_author_pid,
+            tracked_author_name=tracked_author_name,
+            query_url=query_url,
+            collected_at=collected_at,
+        )
+        if paper is not None:
+            papers.append(paper)
+    return papers
+
+
+def dblp_publication_nodes(root: ET.Element) -> list[ET.Element]:
+    publication_tags = {
+        "article",
+        "inproceedings",
+        "proceedings",
+        "book",
+        "incollection",
+        "phdthesis",
+        "mastersthesis",
+        "www",
+        "data",
+    }
+    nodes = []
+    for wrapper in root.findall(".//r"):
+        for child in list(wrapper):
+            if child.tag in publication_tags:
+                nodes.append(child)
+                break
+    if nodes:
+        return nodes
+    return [child for child in list(root) if child.tag in publication_tags]
+
+
+def dblp_publication_node_to_radar_paper(
+    publication: ET.Element,
+    *,
+    tracked_author_pid: str,
+    tracked_author_name: str,
+    query_url: str,
+    collected_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    key = publication.attrib.get("key") or text_of(publication, "key")
+    title = text_of(publication, "title")
+    if not title:
+        return None
+    authors = [
+        normalize_spaces(author.text or "")
+        for author in publication.findall("author")
+        if normalize_spaces(author.text or "")
+    ]
+    if not authors:
+        authors = [
+            normalize_spaces(editor.text or "")
+            for editor in publication.findall("editor")
+            if normalize_spaces(editor.text or "")
+        ]
+    year = int_or_none(text_of(publication, "year"))
+    venue = dblp_publication_venue(publication)
+    doi = clean_doi_identifier(text_of(publication, "doi"))
+    ee_url = text_of(publication, "ee")
+    dblp_url = dblp_publication_landing_url(key, text_of(publication, "url"))
+    landing_url = dblp_url or ee_url
+    return create_radar_paper(
+        source_id="dblp",
+        source_paper_id=key or title,
+        title=title,
+        authors=authors,
+        year=year,
+        venue=venue,
+        identifiers={"doi": doi} if doi else {},
+        links={"landing": landing_url, "doi": doi_url(doi), "publisher": ee_url},
+        discovered_at=collected_at,
+        source_record={
+            "source_id": "dblp_authors",
+            "source_paper_id": key or title,
+            "query_url": query_url,
+            "tracked_author_pid": tracked_author_pid,
+            "tracked_author_name": tracked_author_name,
+            "type": publication.tag,
+            "venue": venue,
+        },
+    )
+
+
+def dblp_publication_venue(publication: ET.Element) -> str:
+    for field in ("booktitle", "journal", "school", "publisher"):
+        value = text_of(publication, field)
+        if value:
+            return value
+    return ""
+
+
+def dblp_publication_landing_url(key: str, url_value: str) -> str:
+    if key:
+        return f"https://dblp.org/rec/{key}"
+    if not url_value:
+        return ""
+    if re.match(r"^https?://", url_value, flags=re.IGNORECASE):
+        return url_value
+    return urljoin("https://dblp.org/", url_value.lstrip("/"))
 
 
 def dblp_paper_matches_venue_profile(paper: dict[str, Any], profile: dict[str, Any], year: int) -> bool:
@@ -762,6 +929,42 @@ def collect_openalex_works(
     )
     content = (fetcher or fetch_url)(url)
     return parse_openalex_works(content, query_url=url, collected_at=now)
+
+
+def collect_openalex_author_works(
+    *,
+    author_ids: list[str],
+    max_results: int = 50,
+    page: int = 1,
+    mailto: str | None = None,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected_fetcher = fetcher or fetch_url
+    papers = []
+    seen_keys = set()
+    for author_id in author_ids:
+        selected_author_id = openalex_id_from_url(author_id)
+        if not selected_author_id:
+            continue
+        url = build_openalex_author_works_url(
+            author_id=selected_author_id,
+            max_results=max_results,
+            page=page,
+            mailto=mailto,
+        )
+        candidates = parse_openalex_works(
+            selected_fetcher(url),
+            query_url=url,
+            collected_at=now,
+        )
+        for paper in candidates:
+            key = paper.get("dedupe_key")
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            papers.append(annotate_openalex_author_paper(paper, author_id=selected_author_id, query_url=url))
+    return papers
 
 
 def collect_openalex_venue_publications(
@@ -865,6 +1068,27 @@ def build_openalex_sources_url(
     return f"{OPENALEX_SOURCES_URL}?{urlencode(params, quote_via=quote_plus)}"
 
 
+def build_openalex_author_works_url(
+    *,
+    author_id: str,
+    max_results: int = 50,
+    page: int = 1,
+    mailto: str | None = None,
+    select_fields: list[str] | None = None,
+) -> str:
+    selected_author_id = openalex_id_from_url(author_id)
+    params = {
+        "filter": f"author.id:{selected_author_id}",
+        "per-page": str(max(1, min(200, max_results))),
+        "page": str(max(1, page)),
+        "sort": "publication_date:desc",
+        "select": ",".join(select_fields or OPENALEX_SELECT_FIELDS),
+    }
+    if mailto:
+        params["mailto"] = mailto
+    return f"{OPENALEX_WORKS_URL}?{urlencode(params, quote_via=quote_plus)}"
+
+
 def build_openalex_venue_works_url(
     *,
     source_id: str,
@@ -948,6 +1172,7 @@ def parse_openalex_works(
             "query_url": query_url,
             "publication_date": normalize_spaces(record.get("publication_date") or ""),
             "type": normalize_spaces(record.get("type") or ""),
+            "authorships": record.get("authorships") or [],
             "open_access": open_access,
             "cited_by_count": int_or_none(record.get("cited_by_count")),
             "concepts": record.get("concepts") or [],
@@ -1033,6 +1258,32 @@ def annotate_openalex_venue_paper(
         for source_record in paper.get("source_records") or []
     ]
     return updated
+
+
+def annotate_openalex_author_paper(paper: dict[str, Any], *, author_id: str, query_url: str) -> dict[str, Any]:
+    tracked_author_id = openalex_id_from_url(author_id)
+    tracked_author_name = openalex_tracked_author_name(paper, tracked_author_id)
+    updated = dict(paper)
+    updated["source_records"] = [
+        {
+            **source_record,
+            "source_id": "openalex_authors",
+            "tracked_author_id": tracked_author_id,
+            "tracked_author_name": tracked_author_name,
+            "author_query_url": query_url,
+        }
+        for source_record in paper.get("source_records") or []
+    ]
+    return updated
+
+
+def openalex_tracked_author_name(paper: dict[str, Any], author_id: str) -> str:
+    for source_record in paper.get("source_records") or []:
+        for authorship in source_record.get("authorships") or []:
+            author = authorship.get("author") or {}
+            if openalex_id_from_url(author.get("id") or "") == author_id:
+                return normalize_spaces(author.get("display_name") or "")
+    return ""
 
 
 def openalex_identifiers(record: dict[str, Any]) -> dict[str, str]:

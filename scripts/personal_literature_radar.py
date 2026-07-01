@@ -13,7 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from personal.literature_radar import DEFAULT_PERSONAL_RADAR_SOURCES, read_personal_radar_index, run_personal_literature_radar
+from personal.literature_radar import (
+    DEFAULT_PERSONAL_RADAR_SOURCES,
+    ensure_personal_radar_topic_profile,
+    read_personal_radar_index,
+    run_personal_literature_radar,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source", action="append", choices=[
         "arxiv",
         "dblp",
+        "dblp_authors",
         "dblp_venues",
         "semantic_scholar",
         "semantic_scholar_authors",
@@ -31,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
         "semantic_scholar_references",
         "semantic_scholar_recommendations",
         "openalex",
+        "openalex_authors",
         "openalex_venues",
         "openreview",
         "openreview_venues",
@@ -42,12 +49,20 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-results", type=int, default=25)
     run.add_argument("--limit", type=int, default=10)
     run.add_argument("--summarize", action="store_true")
+    run.add_argument(
+        "--summary-provider",
+        choices=["local", "openrouter"],
+        default="local",
+        help="summary provider; openrouter requires OPENROUTER_API_KEY",
+    )
     run.add_argument("--summary-limit", type=int)
     run.add_argument("--semantic-scholar-api-key")
+    run.add_argument("--dblp-author-pid", action="append", default=[])
     run.add_argument("--semantic-scholar-author-id", action="append", default=[])
     run.add_argument("--seed-paper-id", action="append", default=[])
     run.add_argument("--negative-seed-paper-id", action="append", default=[])
     run.add_argument("--openalex-mailto")
+    run.add_argument("--openalex-author-id", action="append", default=[])
     run.add_argument("--openreview-invitation", action="append", default=[])
     run.add_argument("--openreview-venue-profile", action="append", default=[])
     run.add_argument("--include-openreview-unaccepted", action="store_true")
@@ -56,9 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--conference-year", type=int)
     run.add_argument("--venue-profile", action="append", default=[])
     run.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    run.add_argument("--topic-profile", type=Path, help="JSON topic profile path; defaults to indexes/literature-radar-topic-profile.json")
     run.add_argument("--root-path", type=Path, default=ROOT)
     run.add_argument("--no-report", action="store_true", help="do not write memory/06_Logs report")
     run.add_argument("--json", action="store_true")
+
+    profile_init = subparsers.add_parser("profile-init", help="write an editable personal radar topic profile")
+    profile_init.add_argument("--root-path", type=Path, default=ROOT)
+    profile_init.add_argument("--path", type=Path, help="profile path; defaults to indexes/literature-radar-topic-profile.json")
+    profile_init.add_argument("--force", action="store_true", help="overwrite an existing profile")
+    profile_init.add_argument("--json", action="store_true")
 
     history = subparsers.add_parser("history", help="list personal radar runs")
     history.add_argument("--root-path", type=Path, default=ROOT)
@@ -110,21 +132,25 @@ def main(argv: list[str] | None = None) -> int:
             query_terms=args.query_term or None,
             max_results=args.max_results,
             recommendation_limit=args.limit,
-            summarize=args.summarize,
+            summarize=args.summarize or args.summary_provider == "openrouter",
+            summary_provider=args.summary_provider,
             summary_limit=args.summary_limit,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
             semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
             seed_paper_ids=args.seed_paper_id or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
+            openalex_author_ids=args.openalex_author_id or None,
             openreview_invitations=args.openreview_invitation or None,
             openreview_venue_profiles=args.openreview_venue_profile or None,
             openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,
+            dblp_author_pids=args.dblp_author_pid or None,
             dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
+            topic_profile_path=args.topic_profile,
             write_report=not args.no_report,
             root_path=args.root_path,
         )
@@ -132,6 +158,18 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_run(result)
+        return 0
+
+    if args.command == "profile-init":
+        path = ensure_personal_radar_topic_profile(
+            args.root_path,
+            topic_profile_path=args.path,
+            force=args.force,
+        )
+        if args.json:
+            print_json({"topic_profile_path": str(path)})
+        else:
+            print(str(path))
         return 0
 
     if args.command == "history":

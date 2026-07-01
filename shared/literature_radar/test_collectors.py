@@ -9,8 +9,10 @@ from shared.literature_radar import (
     build_semantic_scholar_author_batch_body,
     build_semantic_scholar_author_batch_url,
     build_crossref_works_url,
+    build_dblp_author_url,
     build_dblp_publication_search_url,
     build_openalex_sources_url,
+    build_openalex_author_works_url,
     build_openalex_venue_works_url,
     build_openalex_works_url,
     build_openreview_notes_url,
@@ -24,9 +26,11 @@ from shared.literature_radar import (
     collect_arxiv,
     collect_semantic_scholar_author_papers,
     collect_crossref_works,
+    collect_dblp_author_publications,
     collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
+    collect_openalex_author_works,
     collect_openalex_venue_publications,
     collect_openalex_works,
     collect_openreview_notes,
@@ -42,6 +46,7 @@ from shared.literature_radar import (
     parse_arxiv_atom,
     parse_semantic_scholar_author_papers,
     parse_crossref_works,
+    parse_dblp_author_publications,
     parse_dblp_publication_search,
     parse_ndss_accepted_papers,
     parse_openalex_sources,
@@ -97,6 +102,33 @@ DBLP_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
     </hit>
   </hits>
 </dblp>
+"""
+
+
+DBLP_AUTHOR_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
+<dblpperson pid="65/9612" name="Alice Example">
+  <r>
+    <inproceedings key="conf/ccs/AuthorPaper2026" mdate="2026-01-01">
+      <author pid="65/9612">Alice Example</author>
+      <author>Bob Example</author>
+      <title>Author Tracked Memory Safety for System Security</title>
+      <booktitle>CCS</booktitle>
+      <year>2026</year>
+      <doi>10.1145/author-example</doi>
+      <ee>https://doi.org/10.1145/author-example</ee>
+      <url>db/conf/ccs/AuthorPaper2026.html</url>
+    </inproceedings>
+  </r>
+  <r>
+    <article key="journals/tosem/Author2025">
+      <author pid="65/9612">Alice Example</author>
+      <title>Older Software Security Work</title>
+      <journal>TOSEM</journal>
+      <year>2025</year>
+      <url>db/journals/tosem/Author2025.html</url>
+    </article>
+  </r>
+</dblpperson>
 """
 
 
@@ -392,8 +424,8 @@ OPENALEX_FIXTURE = """
       "publication_date": "2026-02-03",
       "type": "article",
       "authorships": [
-        {"author": {"display_name": "Alice Example"}},
-        {"author": {"display_name": "Bob Example"}}
+        {"author": {"id": "https://openalex.org/A123456789", "display_name": "Alice Example"}},
+        {"author": {"id": "https://openalex.org/A987654321", "display_name": "Bob Example"}}
       ],
       "primary_location": {
         "landing_page_url": "https://doi.org/10.1145/example",
@@ -735,6 +767,50 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(papers[0]["source_id"], "dblp")
         self.assertEqual(len(seen_urls), 1)
 
+    def test_builds_and_parses_dblp_author_publications(self) -> None:
+        url = build_dblp_author_url(author_pid="https://dblp.org/pid/65/9612.html")
+        papers = parse_dblp_author_publications(
+            DBLP_AUTHOR_FIXTURE,
+            author_pid="65/9612",
+            query_url=url,
+            max_results=1,
+            collected_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(url, "https://dblp.org/pid/65/9612.xml")
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "dblp")
+        self.assertEqual(paper["source_paper_id"], "conf/ccs/AuthorPaper2026")
+        self.assertEqual(paper["title"], "Author Tracked Memory Safety for System Security")
+        self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
+        self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["venue"], "CCS")
+        self.assertEqual(paper["identifiers"]["doi"], "10.1145/author-example")
+        self.assertEqual(paper["links"]["landing"], "https://dblp.org/rec/conf/ccs/AuthorPaper2026")
+        self.assertEqual(paper["source_records"][0]["source_id"], "dblp_authors")
+        self.assertEqual(paper["source_records"][0]["tracked_author_pid"], "65/9612")
+        self.assertEqual(paper["source_records"][0]["tracked_author_name"], "Alice Example")
+
+    def test_collect_dblp_author_publications_uses_pid_fetcher(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return DBLP_AUTHOR_FIXTURE.encode("utf-8")
+
+        papers = collect_dblp_author_publications(
+            author_pids=["65/9612"],
+            max_results=2,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(papers), 2)
+        self.assertEqual(seen_urls, ["https://dblp.org/pid/65/9612.xml"])
+        self.assertEqual(papers[1]["title"], "Older Software Security Work")
+        self.assertEqual(papers[1]["venue"], "TOSEM")
+
     def test_collect_dblp_venue_publications_filters_and_annotates_profiles(self) -> None:
         seen_urls = []
 
@@ -807,6 +883,37 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(len(papers), 1)
         self.assertEqual(papers[0]["source_id"], "openalex")
         self.assertEqual(len(seen_urls), 1)
+
+    def test_collect_openalex_author_works_filters_by_author_id(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return OPENALEX_FIXTURE.encode("utf-8")
+
+        url = build_openalex_author_works_url(
+            author_id="https://openalex.org/A123456789",
+            max_results=2,
+            mailto="radar@example.com",
+        )
+        papers = collect_openalex_author_works(
+            author_ids=["https://openalex.org/A123456789"],
+            max_results=2,
+            mailto="radar@example.com",
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        self.assertIn("filter=author.id%3AA123456789", url)
+        self.assertIn("sort=publication_date%3Adesc", url)
+        self.assertEqual(seen_urls, [url])
+        self.assertEqual(len(papers), 1)
+        paper = papers[0]
+        self.assertEqual(paper["source_id"], "openalex")
+        self.assertEqual(paper["title"], "Open Metadata for Memory Safety Research")
+        self.assertEqual(paper["source_records"][0]["source_id"], "openalex_authors")
+        self.assertEqual(paper["source_records"][0]["tracked_author_id"], "A123456789")
+        self.assertEqual(paper["source_records"][0]["tracked_author_name"], "Alice Example")
 
     def test_builds_and_parses_openalex_sources(self) -> None:
         url = build_openalex_sources_url(

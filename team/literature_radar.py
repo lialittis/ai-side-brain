@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from shared.literature_radar import (
     add_local_recommendation_summaries,
@@ -13,9 +13,11 @@ from shared.literature_radar import (
     build_recommendation_report,
     collect_arxiv,
     collect_crossref_works,
+    collect_dblp_author_publications,
     collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
+    collect_openalex_author_works,
     collect_openalex_venue_publications,
     collect_openalex_works,
     collect_openreview_notes,
@@ -32,9 +34,16 @@ from shared.literature_radar import (
 from shared.research.core import iso_timestamp
 from team.research_adapter import TeamResearchRunResult, build_team_research_run
 from team.research_db import DEFAULT_LIBRARY_PROJECT_ID, TeamResearchDatabase
+from team.research_interests import (
+    clean_interest_weight,
+    label_for_score,
+    normalize_interest_keyword,
+    score_team_interests,
+)
 from team.literature_radar_ai import summarize_radar_recommendations_with_openrouter
 
 
+TEAM_RADAR_SCORER_PROCESSOR = "team-interest-radar-scorer-v0.1"
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "team-literature-radar",
     "name": "Team Literature Radar",
@@ -98,6 +107,8 @@ def run_team_literature_radar(
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
+    dblp_author_pids: list[str] | None = None,
+    openalex_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
@@ -131,6 +142,8 @@ def run_team_literature_radar(
             crossref_mailto=crossref_mailto,
             unpaywall_email=unpaywall_email,
             semantic_scholar_author_ids=semantic_scholar_author_ids,
+            dblp_author_pids=dblp_author_pids,
+            openalex_author_ids=openalex_author_ids,
             conference_year=conference_year,
             dblp_venue_profiles=dblp_venue_profiles,
             openreview_venue_profiles=openreview_venue_profiles,
@@ -140,7 +153,7 @@ def run_team_literature_radar(
         )
         recommendations = recommend_papers(
             collected,
-            topic_profile=default_radar_topic_profile(),
+            scorer=build_team_radar_scorer(database.list_team_interest_keywords()),
             limit=recommendation_limit,
         )
         recommendations = database.annotate_literature_radar_recommendation_novelty(
@@ -276,6 +289,96 @@ def team_radar_query_terms(database: TeamResearchDatabase, *, limit: int = 8) ->
     return fallback_terms[:limit]
 
 
+def build_team_radar_scorer(interests: list[dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    selected_interests = [
+        interest
+        for interest in interests
+        if normalize_interest_keyword(str(interest.get("keyword") or ""))
+        and clean_interest_weight(interest.get("weight")) > 0
+    ]
+    return lambda paper: score_team_radar_paper(paper, selected_interests)
+
+
+def score_team_radar_paper(paper: dict[str, Any], interests: list[dict[str, Any]]) -> dict[str, Any]:
+    item = {
+        "id": paper.get("id") or paper.get("dedupe_key") or "",
+        "title": paper.get("title") or "",
+        "abstract": paper.get("abstract") or "",
+        "venue": paper.get("venue") or "",
+    }
+    scored = score_team_interests(
+        item,
+        None,
+        tags_from_radar_paper(paper),
+        interests,
+    )
+    score = int(scored["score"])
+    matched_terms = unique_preserving_order(scored.get("matched_terms") or [])
+    reasons = list(scored.get("reasons") or [])
+    if matched_terms:
+        reasons.append("Ranked with editable Team Interest weights.")
+    return {
+        "paper_id": paper.get("id"),
+        "score": score,
+        "label": label_for_score(score, bool(scored.get("text"))),
+        "topic_scores": team_radar_topic_scores(matched_terms, interests),
+        "matched_positive_keywords": matched_terms,
+        "matched_negative_keywords": [],
+        "reasons": reasons,
+        "source_trace": {
+            "processor": TEAM_RADAR_SCORER_PROCESSOR,
+            "team_interest_weights": team_interest_weights(interests),
+        },
+    }
+
+
+def team_radar_topic_scores(matched_terms: list[str], interests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    interests_by_keyword = {
+        normalize_interest_keyword(str(interest.get("keyword") or "")): interest
+        for interest in interests
+    }
+    topic_scores = []
+    for term in matched_terms:
+        normalized_term = normalize_interest_keyword(term)
+        weight = clean_interest_weight((interests_by_keyword.get(normalized_term) or {}).get("weight"))
+        topic_scores.append(
+            {
+                "topic_id": f"team_interest_{team_interest_topic_id(normalized_term)}",
+                "score": weight,
+                "positive_matches": [term],
+                "negative_matches": [],
+                "weight": weight,
+            }
+        )
+    return topic_scores
+
+
+def team_interest_weights(interests: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        normalize_interest_keyword(str(interest.get("keyword") or "")): clean_interest_weight(
+            interest.get("weight")
+        )
+        for interest in interests
+        if normalize_interest_keyword(str(interest.get("keyword") or ""))
+    }
+
+
+def team_interest_topic_id(keyword: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", keyword).strip("_") or "keyword"
+
+
+def unique_preserving_order(values: list[str]) -> list[str]:
+    unique = []
+    seen = set()
+    for value in values:
+        key = normalize_interest_keyword(value)
+        if not key or key in seen:
+            continue
+        unique.append(key)
+        seen.add(key)
+    return unique
+
+
 def collect_team_radar_candidates(
     *,
     sources: list[str],
@@ -289,6 +392,8 @@ def collect_team_radar_candidates(
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
+    dblp_author_pids: list[str] | None = None,
+    openalex_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
@@ -299,6 +404,7 @@ def collect_team_radar_candidates(
     supported_sources = {
         "arxiv",
         "dblp",
+        "dblp_authors",
         "dblp_venues",
         "semantic_scholar",
         "semantic_scholar_authors",
@@ -306,6 +412,7 @@ def collect_team_radar_candidates(
         "semantic_scholar_references",
         "semantic_scholar_recommendations",
         "openalex",
+        "openalex_authors",
         "openalex_venues",
         "openreview",
         "openreview_venues",
@@ -331,6 +438,13 @@ def collect_team_radar_candidates(
     if "dblp" in sources:
         for term in query_terms:
             papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+    if "dblp_authors" in sources:
+        papers.extend(
+            collect_dblp_author_publications(
+                author_pids=required_dblp_author_pids(dblp_author_pids),
+                max_results=max_results,
+            )
+        )
     if "dblp_venues" in sources:
         papers.extend(
             collect_dblp_venue_publications(
@@ -386,6 +500,14 @@ def collect_team_radar_candidates(
         papers.extend(
             collect_openalex_works(
                 query_terms=query_terms,
+                max_results=max_results,
+                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+            )
+        )
+    if "openalex_authors" in sources:
+        papers.extend(
+            collect_openalex_author_works(
+                author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
             )
@@ -461,6 +583,24 @@ def required_semantic_scholar_author_ids(author_ids: list[str] | None = None) ->
     if not selected_author_ids:
         raise ValueError(
             "Semantic Scholar author tracking requires --semantic-scholar-author-id or RADAR_AUTHOR_IDS."
+        )
+    return selected_author_ids
+
+
+def required_dblp_author_pids(author_pids: list[str] | None = None) -> list[str]:
+    selected_author_pids = author_pids or env_list("RADAR_DBLP_AUTHOR_PIDS")
+    if not selected_author_pids:
+        raise ValueError(
+            "DBLP author tracking requires --dblp-author-pid or RADAR_DBLP_AUTHOR_PIDS."
+        )
+    return selected_author_pids
+
+
+def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[str]:
+    selected_author_ids = author_ids or env_list("RADAR_OPENALEX_AUTHOR_IDS")
+    if not selected_author_ids:
+        raise ValueError(
+            "OpenAlex author tracking requires --openalex-author-id or RADAR_OPENALEX_AUTHOR_IDS."
         )
     return selected_author_ids
 

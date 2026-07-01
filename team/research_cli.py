@@ -90,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[
             "arxiv",
             "dblp",
+            "dblp_authors",
             "dblp_venues",
             "semantic_scholar",
             "semantic_scholar_authors",
@@ -97,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
             "semantic_scholar_references",
             "semantic_scholar_recommendations",
             "openalex",
+            "openalex_authors",
             "openalex_venues",
             "openreview",
             "openreview_venues",
@@ -123,6 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
     radar.add_argument("--project", default="team-library", help="team library project id for imported papers")
     radar.add_argument("--semantic-scholar-api-key", help="optional Semantic Scholar API key")
     radar.add_argument(
+        "--dblp-author-pid",
+        action="append",
+        default=[],
+        help="DBLP author PID to track; repeatable, e.g. 65/9612",
+    )
+    radar.add_argument(
         "--semantic-scholar-author-id",
         action="append",
         default=[],
@@ -136,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="negative Semantic Scholar seed paper id; repeatable",
     )
     radar.add_argument("--openalex-mailto", help="optional email for OpenAlex polite-pool requests")
+    radar.add_argument(
+        "--openalex-author-id",
+        action="append",
+        default=[],
+        help="OpenAlex author ID to track; repeatable, e.g. A123456789",
+    )
     radar.add_argument("--openreview-invitation", action="append", default=[], help="OpenReview invitation id; repeatable")
     radar.add_argument(
         "--openreview-venue-profile",
@@ -447,12 +461,14 @@ def main(argv: list[str] | None = None) -> int:
             seed_paper_ids=args.seed_paper_id or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
+            openalex_author_ids=args.openalex_author_id or None,
             openreview_invitations=args.openreview_invitation or None,
             openreview_venue_profiles=args.openreview_venue_profile or None,
             openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,
+            dblp_author_pids=args.dblp_author_pid or None,
             dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
         )

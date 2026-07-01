@@ -14,8 +14,9 @@ into the existing Team Research database:
    entry through the existing Team adapter;
 3. preserve radar provenance under item metadata;
 4. set team tags from radar tags and source records;
-5. apply Team Interest relevance scoring so the paper appears in the same Latest
-   Papers workflow as manually submitted papers;
+5. rank Radar recommendations with the editable Team Interest weights, then
+   apply the same Team Interest relevance scoring again when a paper is imported
+   so it appears in the Latest Papers workflow consistently;
 6. deduplicate against existing Team Research items by DOI, arXiv ID, Semantic
    Scholar ID, OpenAlex ID, or landing URL.
 
@@ -53,11 +54,14 @@ pages.
 
 The Radar page also has a `Run Radar` form for ad hoc team usage. It uses the
 same Team Interest keywords as the CLI, keeps review-first import behavior, and
-can optionally enable local or OpenRouter summaries. Entering Semantic Scholar
-seed IDs without selecting a seed-based source enables recommendations; selecting
-references or citations uses the same seed IDs for graph expansion. OpenReview
-invitation IDs, OpenReview venue profiles, Semantic Scholar author IDs, and DBLP
-venue profiles automatically enable their matching collectors for that run.
+can optionally enable local or OpenRouter summaries. Recommendation ranking uses
+the current Team Interest weights from the `/interests` sliders, so changing
+those weights affects both new Radar runs and later imported library relevance.
+Entering Semantic Scholar seed IDs without selecting a seed-based source enables
+recommendations; selecting references or citations uses the same seed IDs for
+graph expansion. OpenReview invitation IDs, OpenReview venue profiles, Semantic
+Scholar author IDs, and DBLP venue profiles automatically enable their matching
+collectors for that run.
 
 ## CLI Runner
 
@@ -82,6 +86,10 @@ Useful options:
 - `--min-score`: minimum score required before import.
 - `--semantic-scholar-api-key`: optional API key for higher Semantic Scholar
   API rate limits; `SEMANTIC_SCHOLAR_API_KEY` is also supported.
+- `--dblp-author-pid`: DBLP person PID to track; repeatable. Use with the
+  `dblp_authors` source to collect recent DBLP-indexed publications from authors
+  the team already follows. DBLP PIDs look like `65/9612` and can be copied from
+  DBLP person export URLs.
 - `--semantic-scholar-author-id`: Semantic Scholar author ID to track; repeatable.
   Use with the `semantic_scholar_authors` source to collect recent papers from
   authors the team already follows.
@@ -94,6 +102,9 @@ Useful options:
   recommendations away from; repeatable.
 - `--openalex-mailto`: optional email for OpenAlex polite-pool requests;
   `OPENALEX_MAILTO` is also supported.
+- `--openalex-author-id`: OpenAlex author ID to track; repeatable. Use with the
+  `openalex_authors` source to collect recent works through OpenAlex's
+  `author.id` filter. IDs look like `A123456789`.
 - `--openreview-invitation`: OpenReview invitation ID to collect, such as a
   venue submission invitation; repeatable. `OPENREVIEW_INVITATIONS` can also
   provide comma-separated IDs. The `openreview` source requires at least one
@@ -142,6 +153,8 @@ python team/research_cli.py radar-run --source semantic_scholar_citations --seed
 Example author tracking:
 
 ```bash
+python team/research_cli.py radar-run --source dblp_authors --dblp-author-pid 65/9612
+python team/research_cli.py radar-run --source openalex_authors --openalex-author-id A123456789
 python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id 2281351310
 ```
 
@@ -204,8 +217,9 @@ It reads `.env` first and supports these optional variables:
   `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
   Optional seed-based sources include `semantic_scholar_recommendations`,
   `semantic_scholar_references`, and `semantic_scholar_citations`; author
-  tracking uses `semantic_scholar_authors`; venue cross-checking can use
-  `openalex_venues`; OpenReview venue presets use `openreview_venues`.
+  tracking uses `semantic_scholar_authors`, `dblp_authors`, or
+  `openalex_authors`; venue cross-checking can use `openalex_venues`;
+  OpenReview venue presets use `openreview_venues`.
 - `RADAR_MAX_RESULTS`, `RADAR_RECOMMENDATION_LIMIT`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
@@ -213,6 +227,10 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_CONFERENCE_YEAR`, `RADAR_USENIX_CYCLES`.
 - `RADAR_DBLP_VENUES`: space-separated DBLP venue profile/group selectors for
   the `dblp_venues` source.
+- `RADAR_DBLP_AUTHOR_PIDS`: space-separated DBLP person PIDs for the
+  `dblp_authors` source.
+- `RADAR_OPENALEX_AUTHOR_IDS`: space-separated OpenAlex author IDs for the
+  `openalex_authors` source.
 - `RADAR_OPENREVIEW_VENUES`: space-separated OpenReview venue profile/group
   selectors for the `openreview_venues` source.
 - `RADAR_OPENREVIEW_INCLUDE_UNACCEPTED=1`: include non-accepted OpenReview
@@ -238,7 +256,9 @@ Current implemented shared collectors:
 
 - arXiv API collector for configured categories and interest terms;
 - DBLP publication search API collector;
+- DBLP author-publication collector for configured person PIDs;
 - DBLP venue-profile collector for the required top conference groups;
+- OpenAlex author-works collector for configured author IDs;
 - OpenAlex venue-profile collector that resolves Sources and fetches Works by
   source ID/year;
 - Semantic Scholar Academic Graph paper search collector;

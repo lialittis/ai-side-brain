@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import re
-from typing import Any
+from typing import Any, Callable
 
 from shared.research.core import iso_timestamp, stable_id
 
@@ -325,6 +325,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
 
 LOCAL_RADAR_SUMMARY_PROCESSOR = "local-radar-summary-v0.1"
 LOCAL_RADAR_CONTEXT_PROCESSOR = "local-radar-context-v0.1"
+RadarScorer = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def source_registry() -> list[dict[str, Any]]:
@@ -678,11 +679,13 @@ def recommend_papers(
     papers: list[dict[str, Any]],
     *,
     topic_profile: dict[str, Any] | None = None,
+    scorer: RadarScorer | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     recommendations = []
+    selected_scorer = scorer or (lambda paper: score_paper_against_profile(paper, topic_profile))
     for paper in merge_duplicate_papers(papers):
-        scoring = score_paper_against_profile(paper, topic_profile)
+        scoring = selected_scorer(paper)
         if scoring["label"] == "low_relevance":
             continue
         pdf_access = assess_pdf_access(paper)

@@ -9,9 +9,24 @@ import tempfile
 import unittest
 from unittest import mock
 
-from personal.literature_radar import read_personal_radar_index, run_personal_literature_radar
+from personal.literature_radar import (
+    ensure_personal_radar_topic_profile,
+    read_personal_radar_index,
+    read_personal_radar_topic_profile,
+    run_personal_literature_radar,
+)
 from scripts import personal_literature_radar
 from shared.literature_radar import create_radar_paper
+
+
+class FakeSummaryClient:
+    def __init__(self, response: dict[str, object]) -> None:
+        self.response = response
+        self.calls: list[dict[str, object]] = []
+
+    def chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return self.response
 
 
 class PersonalLiteratureRadarTest(unittest.TestCase):
@@ -102,6 +117,87 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Context: Matches active interests", second["report"])
             self.assertIn("Novelty: new this run", second["report"])
 
+    def test_run_personal_literature_radar_uses_configured_topic_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            profile_path = root / "indexes" / "literature-radar-topic-profile.json"
+            profile_path.parent.mkdir(parents=True)
+            profile = {
+                "id": "personal-radiative-radar",
+                "name": "Personal Radiative Radar",
+                "topics": {
+                    "radiative_cooling": {
+                        "positive_keywords": ["radiative cooling", "building control"],
+                        "negative_keywords": ["memory safety"],
+                    }
+                },
+            }
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00021",
+                title="Radiative Cooling for Building Control",
+                abstract="This paper studies radiative cooling envelopes.",
+                identifiers={"arxiv_id": "2601.00021"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00021"},
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]) as arxiv:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["query_terms"], ["radiative cooling", "building control"])
+            self.assertEqual(arxiv.call_args.kwargs["query_terms"], ["radiative cooling", "building control"])
+            scoring = result["recommendations"][0]["scoring"]
+            self.assertEqual(scoring["matched_positive_keywords"], ["building control", "radiative cooling"])
+            self.assertEqual(scoring["score"], 36)
+            runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["topic_profile_id"], "personal-radiative-radar")
+            self.assertEqual(runs[0]["topic_profile_name"], "Personal Radiative Radar")
+
+    def test_run_personal_literature_radar_uses_openrouter_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00022",
+                title="Memory Safety for Personal Agents",
+                abstract="This paper studies memory safety and LLM security for personal agents.",
+                identifiers={"arxiv_id": "2601.00022"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00022"},
+            )
+            client = FakeSummaryClient(
+                {
+                    "short_summary": "A personal AI summary.",
+                    "relationship_to_interests": "Connects to memory safety.",
+                    "why_attention": "Worth reading for personal research.",
+                    "suggested_next_step": "read_metadata_and_open_link",
+                    "confidence": "high",
+                }
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    summarize=True,
+                    summary_provider="openrouter",
+                    summary_client=client,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            summary = result["recommendations"][0]["summary"]
+            self.assertEqual(summary["short_summary"], "A personal AI summary.")
+            self.assertEqual(summary["source_trace"]["processor"], "openrouter-personal-literature-radar-summary-v0.1")
+            self.assertEqual(summary["source_trace"]["prompt_version"], "personal-openrouter-literature-radar-summary-v0.1")
+            self.assertEqual(client.calls[0]["schema_name"], "personal_literature_radar_summary")
+            self.assertIn("personal researcher", str(client.calls[0]["messages"]))
+            self.assertIn("A personal AI summary.", result["report"])
+
     def test_personal_literature_radar_cli_reads_history_from_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -130,6 +226,21 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             history = json.loads(stdout.getvalue())
             self.assertEqual(history[0]["recommendation_count"], 1)
             self.assertEqual(history[0]["recommendations"][0]["title"], "Agentic Security for Memory Safety")
+
+    def test_personal_literature_radar_profile_init_writes_default_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = personal_literature_radar.main(["profile-init", "--root-path", str(root), "--json"])
+
+            self.assertEqual(code, 0)
+            output = json.loads(stdout.getvalue())
+            profile_path = Path(output["topic_profile_path"])
+            self.assertTrue(profile_path.exists())
+            profile = read_personal_radar_topic_profile(root)
+            self.assertIn("memory_safety", profile["topics"])
+            self.assertEqual(profile_path, ensure_personal_radar_topic_profile(root))
 
     def test_personal_literature_radar_collects_semantic_scholar_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -265,6 +376,35 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
             self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
 
+    def test_personal_literature_radar_collects_dblp_author_publications(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="dblp",
+                source_paper_id="conf/ccs/AuthorPaper2026",
+                title="Author Tracked Memory Safety for Personal Radar",
+                abstract="Memory safety and system security from a tracked DBLP author.",
+                year=2026,
+                venue="CCS",
+                links={"landing": "https://dblp.org/rec/conf/ccs/AuthorPaper2026"},
+            )
+            with mock.patch("personal.literature_radar.collect_dblp_author_publications", return_value=[paper]) as authors:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["dblp_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    dblp_author_pids=["65/9612"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["dblp_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_pids"], ["65/9612"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+
     def test_personal_literature_radar_collects_openalex_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -298,6 +438,36 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(venues.call_args.kwargs["year"], 2026)
             self.assertEqual(venues.call_args.kwargs["max_results"], 2)
             self.assertEqual(venues.call_args.kwargs["mailto"], "radar@example.com")
+
+    def test_personal_literature_radar_collects_openalex_author_works(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W1234567890",
+                title="OpenAlex Author Memory Safety Paper",
+                abstract="Memory safety and system security from a tracked OpenAlex author.",
+                identifiers={"openalex_id": "W1234567890"},
+                links={"landing": "https://openalex.org/W1234567890"},
+            )
+            with mock.patch("personal.literature_radar.collect_openalex_author_works", return_value=[paper]) as authors:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["openalex_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    openalex_mailto="radar@example.com",
+                    openalex_author_ids=["A123456789"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["openalex_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_ids"], ["A123456789"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+            self.assertEqual(authors.call_args.kwargs["mailto"], "radar@example.com")
 
     def test_personal_literature_radar_collects_openreview_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -353,6 +523,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "run",
                         "--source",
                         "semantic_scholar_recommendations",
+                        "--dblp-author-pid",
+                        "65/9612",
+                        "--openalex-author-id",
+                        "A123456789",
                         "--semantic-scholar-author-id",
                         "author-1",
                         "--seed-paper-id",
@@ -364,7 +538,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "--openreview-venue-profile",
                         "iclr",
                         "--include-openreview-unaccepted",
+                        "--topic-profile",
+                        "indexes/custom-radar-profile.json",
                         "--summarize",
+                        "--summary-provider",
+                        "openrouter",
                         "--summary-limit",
                         "1",
                         "--json",
@@ -374,12 +552,16 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(code, 0)
         runner.assert_called_once()
         self.assertEqual(runner.call_args.kwargs["semantic_scholar_author_ids"], ["author-1"])
+        self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["65/9612"])
+        self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
         self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
         self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
         self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
         self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
         self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
+        self.assertEqual(runner.call_args.kwargs["topic_profile_path"], Path("indexes/custom-radar-profile.json"))
         self.assertTrue(runner.call_args.kwargs["summarize"])
+        self.assertEqual(runner.call_args.kwargs["summary_provider"], "openrouter")
         self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
         self.assertEqual(json.loads(stdout.getvalue())["run_id"], "personalradar_example")
 

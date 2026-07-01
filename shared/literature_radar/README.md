@@ -42,9 +42,15 @@ credentials, storage, and UI.
 
 The core also provides product-neutral recommendation summaries. The local
 summary path uses only stored metadata, scoring reasons, and PDF-access policy;
-Team adapters can optionally replace that phase with OpenRouter summaries.
+Personal and Team adapters can optionally replace that phase with shared
+OpenRouter structured summaries.
 Recommendation reports can include novelty metadata supplied by Personal or
 Team storage, keeping "new this run" separate from relevance score.
+Product adapters can also pass a custom recommendation scorer when their local
+interest model is richer than the default shared topic profile; Team Side-Brain
+uses this to rank Radar candidates with its editable weighted interests.
+Personal Side-Brain can load an editable JSON topic profile from `indexes/`
+while still keeping accepted-paper writes manual.
 
 ## Primary Sources
 
@@ -69,6 +75,9 @@ Current implemented collectors:
   search terms, then parses Atom metadata into radar papers.
 - `collect_dblp_publications(...)` calls DBLP publication search XML and parses
   bibliographic metadata into radar papers.
+- `collect_dblp_author_publications(...)` tracks configured DBLP person PIDs
+  through DBLP XML person exports and preserves author-profile provenance with
+  each returned paper.
 - `collect_dblp_venue_publications(...)` uses DBLP publication search with
   configured venue profiles for security, systems, PL/memory-safety, and
   software-engineering conferences, then filters by venue aliases and year.
@@ -91,6 +100,9 @@ Current implemented collectors:
 - `collect_openalex_works(...)` calls the OpenAlex Works API and preserves DOI,
   venue, citation count, topic/concept, OA status, and OA PDF metadata when
   available.
+- `collect_openalex_author_works(...)` tracks configured OpenAlex author IDs
+  through the Works `author.id` filter and preserves author-profile provenance
+  with each returned paper.
 - `collect_openalex_venue_publications(...)` resolves configured venue profiles
   through OpenAlex Sources, then filters Works by source ID and publication year
   to cross-check top-conference metadata without scraping.

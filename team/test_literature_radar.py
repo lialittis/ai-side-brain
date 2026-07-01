@@ -102,6 +102,47 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp.call_count, 3)
             self.assertEqual(len(database.list_latest_relevant_papers()), 1)
 
+    def test_run_team_literature_radar_scores_with_team_interest_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.upsert_team_interest_keyword(keyword="radiative cooling", weight=100)
+            database.upsert_team_interest_keyword(keyword="memory safety", weight=20)
+            memory_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00030",
+                title="A Systems Paper",
+                abstract="This paper studies memory safety in low-level systems.",
+                identifiers={"arxiv_id": "2601.00030"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00030"},
+            )
+            radiative_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00031",
+                title="Radiative Cooling Priority for Buildings",
+                abstract="A building energy paper outside the shared default radar profile.",
+                identifiers={"arxiv_id": "2601.00031"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00031"},
+            )
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[memory_paper, radiative_paper]):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["radiative cooling", "memory safety"],
+                    max_results=2,
+                    now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["recommendation_count"], 1)
+            scoring = result["recommendations"][0]["scoring"]
+            self.assertEqual(result["recommendations"][0]["paper"]["title"], "Radiative Cooling Priority for Buildings")
+            self.assertEqual(scoring["score"], 100)
+            self.assertEqual(scoring["label"], "highly_relevant")
+            self.assertEqual(scoring["matched_positive_keywords"], ["radiative cooling"])
+            self.assertEqual(scoring["topic_scores"][0]["weight"], 100)
+            self.assertEqual(scoring["source_trace"]["processor"], "team-interest-radar-scorer-v0.1")
+            self.assertIn("Ranked with editable Team Interest weights.", result["recommendations"][0]["why_relevant"])
+
     def test_run_team_literature_radar_attaches_local_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -337,6 +378,34 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
             self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
 
+    def test_run_team_literature_radar_collects_dblp_author_publications(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="dblp",
+                source_paper_id="conf/ccs/AuthorPaper2026",
+                title="Author Tracked Memory Safety for System Security",
+                abstract="Memory safety and system security from a tracked DBLP author.",
+                year=2026,
+                venue="CCS",
+                links={"landing": "https://dblp.org/rec/conf/ccs/AuthorPaper2026"},
+            )
+            with mock.patch("team.literature_radar.collect_dblp_author_publications", return_value=[paper]) as authors:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["dblp_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    dblp_author_pids=["65/9612"],
+                )
+
+            self.assertEqual(result["sources"], ["dblp_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_pids"], ["65/9612"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+
     def test_run_team_literature_radar_collects_semantic_scholar_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -462,6 +531,35 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(openalex.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(openalex.call_args.kwargs["max_results"], 2)
             self.assertEqual(openalex.call_args.kwargs["mailto"], "radar@example.com")
+
+    def test_run_team_literature_radar_collects_openalex_author_works(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W1234567890",
+                title="OpenAlex Author Memory Safety Paper",
+                abstract="Memory safety and system security from a tracked OpenAlex author.",
+                identifiers={"openalex_id": "W1234567890"},
+                links={"landing": "https://openalex.org/W1234567890"},
+            )
+            with mock.patch("team.literature_radar.collect_openalex_author_works", return_value=[paper]) as authors:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["openalex_authors"],
+                    query_terms=["memory safety"],
+                    max_results=2,
+                    openalex_mailto="radar@example.com",
+                    openalex_author_ids=["A123456789"],
+                )
+
+            self.assertEqual(result["sources"], ["openalex_authors"])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            authors.assert_called_once()
+            self.assertEqual(authors.call_args.kwargs["author_ids"], ["A123456789"])
+            self.assertEqual(authors.call_args.kwargs["max_results"], 2)
+            self.assertEqual(authors.call_args.kwargs["mailto"], "radar@example.com")
 
     def test_run_team_literature_radar_collects_openalex_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -708,6 +806,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "arxiv",
                             "--query-term",
                             "memory safety",
+                            "--dblp-author-pid",
+                            "65/9612",
+                            "--openalex-author-id",
+                            "A123456789",
                             "--semantic-scholar-author-id",
                             "author-1",
                             "--seed-paper-id",
@@ -743,6 +845,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["summary_limit"], 1)
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
+            self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["65/9612"])
+            self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
             self.assertEqual(runner.call_args.kwargs["semantic_scholar_author_ids"], ["author-1"])
             self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
             self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])

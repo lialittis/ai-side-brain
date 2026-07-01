@@ -150,7 +150,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Scheduled recommendations", html)
             self.assertIn('action="/radar/run"', html)
             self.assertIn("Run Radar", html)
+            self.assertIn("DBLP Authors", html)
             self.assertIn("S2 Authors", html)
+            self.assertIn("OpenAlex Authors", html)
             self.assertIn("S2 References", html)
             self.assertIn("S2 Citations", html)
             self.assertIn("OpenAlex Venues", html)
@@ -188,6 +190,8 @@ class TeamResearchWebTest(unittest.TestCase):
                         "summarize": "1",
                         "summary_provider": "local",
                         "semantic_scholar_author_ids": "author-1",
+                        "dblp_author_pids": "65/9612",
+                        "openalex_author_ids": "A123456789",
                         "seed_paper_ids": "seed-1\nseed-2",
                         "openreview_invitations": "ICLR.cc/2026/Conference/-/Submission",
                         "openreview_venue_profiles": "iclr ai_ml",
@@ -202,7 +206,9 @@ class TeamResearchWebTest(unittest.TestCase):
             kwargs["sources"],
             [
                 "arxiv",
+                "dblp_authors",
                 "semantic_scholar_authors",
+                "openalex_authors",
                 "semantic_scholar_recommendations",
                 "openreview",
                 "openreview_venues",
@@ -214,6 +220,8 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertTrue(kwargs["summarize"])
         self.assertEqual(kwargs["summary_provider"], "local")
         self.assertEqual(kwargs["semantic_scholar_author_ids"], ["author-1"])
+        self.assertEqual(kwargs["dblp_author_pids"], ["65/9612"])
+        self.assertEqual(kwargs["openalex_author_ids"], ["A123456789"])
         self.assertEqual(kwargs["seed_paper_ids"], ["seed-1", "seed-2"])
         self.assertEqual(kwargs["openreview_invitations"], ["ICLR.cc/2026/Conference/-/Submission"])
         self.assertEqual(kwargs["openreview_venue_profiles"], ["iclr", "ai_ml"])

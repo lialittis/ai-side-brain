@@ -82,6 +82,8 @@ python team/research_cli.py radar-run --source dblp_venues --venue-profile secur
 python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 python team/research_cli.py radar-run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+python team/research_cli.py radar-run --source dblp_authors --dblp-author-pid DBLP_PERSON_PID
+python team/research_cli.py radar-run --source openalex_authors --openalex-author-id OPENALEX_AUTHOR_ID
 python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
 python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
@@ -104,7 +106,9 @@ Web UI surfaces:
 For daily radar usage, run `team/scripts/run_literature_radar.sh` from cron, or
 open `/radar` and use `Run Radar` for an ad hoc check. Scan the latest
 recommendations and import only the papers the team wants to track in the main
-library.
+library. Radar ranking follows the editable Team Interests weights from
+`/interests`, so those sliders control both recommendation priority and imported
+paper relevance.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

@@ -21,9 +21,11 @@ from shared.literature_radar import (
     build_recommendation_report,
     collect_arxiv,
     collect_crossref_works,
+    collect_dblp_author_publications,
     collect_dblp_venue_publications,
     collect_dblp_publications,
     collect_ndss_accepted_papers,
+    collect_openalex_author_works,
     collect_openalex_venue_publications,
     collect_openalex_works,
     collect_openreview_notes,
@@ -36,6 +38,7 @@ from shared.literature_radar import (
     default_radar_topic_profile,
     enrich_paper_with_unpaywall,
     recommend_papers,
+    summarize_radar_recommendations_with_openrouter,
 )
 from shared.research.core import iso_timestamp, stable_id
 
@@ -55,6 +58,7 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
     "semantic_scholar_recommendations",
 }
 PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
+PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
 
 
 def run_personal_literature_radar(
@@ -65,7 +69,9 @@ def run_personal_literature_radar(
     max_results: int = 25,
     recommendation_limit: int = 10,
     summarize: bool = False,
+    summary_provider: str = "local",
     summary_limit: int | None = None,
+    summary_client: Any | None = None,
     semantic_scholar_api_key: str | None = None,
     seed_paper_ids: list[str] | None = None,
     negative_seed_paper_ids: list[str] | None = None,
@@ -74,21 +80,29 @@ def run_personal_literature_radar(
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
+    dblp_author_pids: list[str] | None = None,
+    openalex_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    topic_profile: dict[str, Any] | None = None,
+    topic_profile_path: Path | None = None,
     write_report: bool = True,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_now = now or datetime.now(timezone.utc)
+    root = root_path or repo_root()
+    selected_topic_profile = topic_profile or read_personal_radar_topic_profile(
+        root,
+        topic_profile_path=topic_profile_path,
+    )
     selected_sources = list(sources or DEFAULT_PERSONAL_RADAR_SOURCES)
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
-    selected_terms = query_terms or default_personal_radar_query_terms()
+    selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     run_id = personal_radar_run_id(selected_sources, selected_terms, selected_now)
-    root = root_path or repo_root()
     collected = collect_personal_radar_candidates(
         sources=selected_sources,
         query_terms=selected_terms,
@@ -101,6 +115,8 @@ def run_personal_literature_radar(
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
         semantic_scholar_author_ids=semantic_scholar_author_ids,
+        dblp_author_pids=dblp_author_pids,
+        openalex_author_ids=openalex_author_ids,
         conference_year=conference_year,
         dblp_venue_profiles=dblp_venue_profiles,
         openreview_venue_profiles=openreview_venue_profiles,
@@ -110,7 +126,7 @@ def run_personal_literature_radar(
     )
     recommendations = recommend_papers(
         collected,
-        topic_profile=default_radar_topic_profile(),
+        topic_profile=selected_topic_profile,
         limit=recommendation_limit,
     )
     recommendations = annotate_personal_recommendation_novelty(
@@ -127,7 +143,10 @@ def run_personal_literature_radar(
     if summarize:
         recommendations = summarize_personal_recommendations(
             recommendations,
+            provider=summary_provider,
             limit=summary_limit,
+            client=summary_client,
+            query_terms=selected_terms,
             now=selected_now,
         )
     report = build_recommendation_report(
@@ -142,6 +161,7 @@ def run_personal_literature_radar(
         run_id=run_id,
         sources=selected_sources,
         query_terms=selected_terms,
+        topic_profile=selected_topic_profile,
         collected_count=len(collected),
         recommendations=recommendations,
         report_path=report_path,
@@ -164,16 +184,34 @@ def run_personal_literature_radar(
 def summarize_personal_recommendations(
     recommendations: list[dict[str, Any]],
     *,
+    provider: str = "local",
     limit: int | None = None,
+    client: Any | None = None,
+    query_terms: list[str] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    summarized = add_local_recommendation_summaries(recommendations, now=now)
-    if limit is None:
-        return summarized
-    return [
-        summarized[index] if index < max(0, limit) else recommendation
-        for index, recommendation in enumerate(recommendations)
-    ]
+    selected_provider = provider.strip().lower()
+    if selected_provider == "local":
+        summarized = add_local_recommendation_summaries(recommendations, now=now)
+        if limit is None:
+            return summarized
+        return [
+            summarized[index] if index < max(0, limit) else recommendation
+            for index, recommendation in enumerate(recommendations)
+        ]
+    if selected_provider == "openrouter":
+        return summarize_radar_recommendations_with_openrouter(
+            recommendations,
+            client=client,
+            limit=limit,
+            query_terms=query_terms or [],
+            audience="personal researcher",
+            processor="openrouter-personal-literature-radar-summary-v0.1",
+            prompt_version="personal-openrouter-literature-radar-summary-v0.1",
+            schema_name="personal_literature_radar_summary",
+            now=now,
+        )
+    raise ValueError("Unsupported personal radar summary provider.")
 
 
 def annotate_personal_recommendation_novelty(
@@ -256,6 +294,8 @@ def collect_personal_radar_candidates(
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
+    dblp_author_pids: list[str] | None = None,
+    openalex_author_ids: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
@@ -266,6 +306,7 @@ def collect_personal_radar_candidates(
     supported_sources = {
         "arxiv",
         "dblp",
+        "dblp_authors",
         "dblp_venues",
         "semantic_scholar",
         "semantic_scholar_authors",
@@ -273,6 +314,7 @@ def collect_personal_radar_candidates(
         "semantic_scholar_references",
         "semantic_scholar_recommendations",
         "openalex",
+        "openalex_authors",
         "openalex_venues",
         "openreview",
         "openreview_venues",
@@ -299,6 +341,13 @@ def collect_personal_radar_candidates(
     if "dblp" in sources:
         for term in query_terms:
             papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+    if "dblp_authors" in sources:
+        papers.extend(
+            collect_dblp_author_publications(
+                author_pids=required_dblp_author_pids(dblp_author_pids),
+                max_results=max_results,
+            )
+        )
     if "dblp_venues" in sources:
         papers.extend(
             collect_dblp_venue_publications(
@@ -354,6 +403,14 @@ def collect_personal_radar_candidates(
         papers.extend(
             collect_openalex_works(
                 query_terms=query_terms,
+                max_results=max_results,
+                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+            )
+        )
+    if "openalex_authors" in sources:
+        papers.extend(
+            collect_openalex_author_works(
+                author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
             )
@@ -420,6 +477,34 @@ def required_semantic_scholar_author_ids(author_ids: list[str] | None = None) ->
     return selected_author_ids
 
 
+def required_dblp_author_pids(author_pids: list[str] | None = None) -> list[str]:
+    selected_author_pids = (
+        author_pids
+        or env_list("PERSONAL_RADAR_DBLP_AUTHOR_PIDS")
+        or env_list("RADAR_DBLP_AUTHOR_PIDS")
+    )
+    if not selected_author_pids:
+        raise ValueError(
+            "DBLP author tracking requires --dblp-author-pid, PERSONAL_RADAR_DBLP_AUTHOR_PIDS, "
+            "or RADAR_DBLP_AUTHOR_PIDS."
+        )
+    return selected_author_pids
+
+
+def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[str]:
+    selected_author_ids = (
+        author_ids
+        or env_list("PERSONAL_RADAR_OPENALEX_AUTHOR_IDS")
+        or env_list("RADAR_OPENALEX_AUTHOR_IDS")
+    )
+    if not selected_author_ids:
+        raise ValueError(
+            "OpenAlex author tracking requires --openalex-author-id, PERSONAL_RADAR_OPENALEX_AUTHOR_IDS, "
+            "or RADAR_OPENALEX_AUTHOR_IDS."
+        )
+    return selected_author_ids
+
+
 def enrich_personal_radar_paper_with_unpaywall(
     paper: dict[str, Any],
     *,
@@ -447,11 +532,62 @@ def enrich_personal_radar_paper_with_unpaywall(
 
 
 def default_personal_radar_query_terms(*, limit: int = 8) -> list[str]:
-    profile = default_radar_topic_profile()
+    return personal_radar_query_terms(default_radar_topic_profile(), limit=limit)
+
+
+def personal_radar_query_terms(topic_profile: dict[str, Any], *, limit: int = 8) -> list[str]:
     terms = []
-    for topic in (profile.get("topics") or {}).values():
+    for topic in (topic_profile.get("topics") or {}).values():
         terms.extend(topic.get("positive_keywords") or [])
     return terms[:limit]
+
+
+def read_personal_radar_topic_profile(
+    root: Path | None = None,
+    *,
+    topic_profile_path: Path | None = None,
+) -> dict[str, Any]:
+    path = personal_radar_topic_profile_path(root or repo_root(), topic_profile_path=topic_profile_path)
+    if not path.exists():
+        return default_radar_topic_profile()
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    validate_personal_radar_topic_profile(profile, path=path)
+    return profile
+
+
+def ensure_personal_radar_topic_profile(
+    root: Path | None = None,
+    *,
+    topic_profile_path: Path | None = None,
+    force: bool = False,
+) -> Path:
+    selected_root = root or repo_root()
+    path = personal_radar_topic_profile_path(selected_root, topic_profile_path=topic_profile_path)
+    if path.exists() and not force:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(default_radar_topic_profile(), ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def validate_personal_radar_topic_profile(profile: dict[str, Any], *, path: Path) -> None:
+    if not isinstance(profile, dict):
+        raise ValueError(f"Personal radar topic profile must be a JSON object: {path}")
+    topics = profile.get("topics")
+    if not isinstance(topics, dict) or not topics:
+        raise ValueError(f"Personal radar topic profile must define non-empty topics: {path}")
+    for topic_id, topic in topics.items():
+        if not isinstance(topic, dict):
+            raise ValueError(f"Personal radar topic `{topic_id}` must be an object: {path}")
+        positive_keywords = topic.get("positive_keywords")
+        negative_keywords = topic.get("negative_keywords")
+        if not isinstance(positive_keywords, list) or not positive_keywords:
+            raise ValueError(f"Personal radar topic `{topic_id}` must define positive_keywords: {path}")
+        if negative_keywords is not None and not isinstance(negative_keywords, list):
+            raise ValueError(f"Personal radar topic `{topic_id}` negative_keywords must be a list: {path}")
 
 
 def build_personal_radar_run_record(
@@ -459,6 +595,7 @@ def build_personal_radar_run_record(
     run_id: str,
     sources: list[str],
     query_terms: list[str],
+    topic_profile: dict[str, Any],
     collected_count: int,
     recommendations: list[dict[str, Any]],
     report_path: Path | None,
@@ -471,6 +608,8 @@ def build_personal_radar_run_record(
         "completed_at": iso_timestamp(now),
         "sources": sources,
         "query_terms": query_terms,
+        "topic_profile_id": topic_profile.get("id") or "personal-literature-radar",
+        "topic_profile_name": topic_profile.get("name") or "",
         "collected_count": collected_count,
         "recommendation_count": len(recommendations),
         "report_path": str(report_path) if report_path else None,
@@ -518,6 +657,14 @@ def read_personal_radar_index(root: Path | None = None) -> list[dict[str, Any]]:
 
 def personal_radar_index_path(root: Path) -> Path:
     return root / "indexes" / PERSONAL_RADAR_INDEX_NAME
+
+
+def personal_radar_topic_profile_path(root: Path, *, topic_profile_path: Path | None = None) -> Path:
+    if topic_profile_path is None:
+        return root / "indexes" / PERSONAL_RADAR_TOPIC_PROFILE_NAME
+    if topic_profile_path.is_absolute():
+        return topic_profile_path
+    return root / topic_profile_path
 
 
 def personal_radar_run_id(sources: list[str], query_terms: list[str], now: datetime) -> str:

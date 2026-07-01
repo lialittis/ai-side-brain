@@ -177,6 +177,32 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Memory Safety for Agentic Security", report)
         self.assertIn("Relevance: highly_relevant", report)
 
+    def test_recommend_papers_accepts_custom_scorer(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00020",
+            title="Domain-Specific Team Priority",
+            abstract="A paper that only a product adapter knows how to score.",
+            links={"landing": "https://arxiv.org/abs/2601.00020"},
+        )
+
+        recommendations = recommend_papers(
+            [paper],
+            scorer=lambda selected_paper: {
+                "paper_id": selected_paper["id"],
+                "score": 88,
+                "label": "highly_relevant",
+                "topic_scores": [],
+                "matched_positive_keywords": ["team priority"],
+                "matched_negative_keywords": [],
+                "reasons": ["Matched adapter-specific team priority."],
+            },
+        )
+
+        self.assertEqual(recommendations[0]["scoring"]["score"], 88)
+        self.assertEqual(recommendations[0]["scoring"]["matched_positive_keywords"], ["team priority"])
+        self.assertIn("adapter-specific", recommendations[0]["why_relevant"])
+
     def test_local_summary_attaches_attention_and_relationship_context(self) -> None:
         paper = create_radar_paper(
             source_id="semantic_scholar",
