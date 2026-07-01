@@ -18,6 +18,13 @@ It answers:
 The core is API-first and source-stable. Collectors should prefer official APIs,
 RSS feeds, public accepted-paper pages, and open metadata sources. Google Scholar
 style scraping is intentionally out of scope.
+The source registry classifies authoritative metadata/API sources, official
+accepted-paper pages, OA enrichment, and optional trend-signal feeds separately.
+Trend-signal sources are modeled as secondary context, not authoritative
+bibliographic records.
+Derived collector paths such as DBLP venue profiles, Semantic Scholar
+recommendations, OpenAlex venue profiles, and OpenReview venue profiles are
+explicit registry entries so reports can name the actual source path used.
 
 Pipeline phases are explicit:
 
@@ -60,9 +67,10 @@ The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
 it carries stored review state such as `watch` or `dismissed` plus the scoring
 profile snapshot, non-secret collection settings, and phase trace used for the
-run. It also carries venue coverage for DBLP, OpenAlex, and OpenReview venue
-profile runs. Brief ranking is review-aware: `watch` papers are surfaced before
-unreviewed papers, while `dismissed` papers fall behind active candidates.
+run. It also carries source policy and venue coverage for DBLP, OpenAlex, and
+OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers
+are surfaced before unreviewed papers, while `dismissed` papers fall behind
+active candidates.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
@@ -152,6 +160,13 @@ Current implemented collectors:
 - `radar_source_readiness_summary(...)` checks whether selected sources have
   the required seeds, author IDs, or invitations before/after a scheduled run,
   and records optional API/contact warnings separately from blocking config.
+  Personal and Team adapters use the same readiness data to skip blocked
+  sources as `not_run` instead of attempting doomed collector calls. Runs with
+  only blocked sources are reported as `blocked`; mixed successful and skipped
+  sources are reported as `partial`.
+- `radar_run_health_action(...)` turns latest-run status, source readiness,
+  source coverage, errors, and freshness into one machine-readable next step for
+  daily queue JSON, CLI output, and Team web health chips.
 
 Collector parsers are pure functions and are tested with offline fixtures. This
 keeps scheduling and network failure handling outside the core.

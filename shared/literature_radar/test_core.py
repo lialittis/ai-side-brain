@@ -11,6 +11,7 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    append_radar_source_policy_to_report,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
     append_radar_source_readiness_to_report,
@@ -35,20 +36,26 @@ from shared.literature_radar import (
     merge_duplicate_papers,
     mvp_source_ids,
     pdf_access_report_text,
+    radar_source_policy_summary,
+    radar_source_blocked_readiness,
     radar_source_preset,
     radar_source_presets,
     radar_source_readiness_summary,
+    radar_source_skip_stat,
     radar_history_source_coverage_summary,
     radar_pdf_access_summary,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
     radar_run_freshness,
+    radar_run_health_action,
+    radar_run_status_from_source_health,
     radar_source_coverage_summary,
     radar_source_error,
     recommend_papers,
     score_paper_against_profile,
     source_registry,
+    trend_signal_source_registry,
 )
 
 
@@ -58,12 +65,38 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
 
         self.assertIn("arxiv", sources)
         self.assertEqual(sources["arxiv"]["access"], "api_or_rss")
+        self.assertEqual(sources["arxiv"]["source_class"], "primary_metadata")
+        self.assertTrue(sources["arxiv"]["authoritative_metadata"])
         self.assertEqual(sources["arxiv"]["categories"], ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"])
         self.assertIn("semantic_scholar", sources)
+        self.assertEqual(sources["semantic_scholar_recommendations"]["derived_from"], "semantic_scholar")
         self.assertIn("dblp", sources)
+        self.assertEqual(sources["dblp_venues"]["derived_from"], "dblp")
+        self.assertEqual(sources["openalex_venues"]["derived_from"], "openalex")
         self.assertIn("openreview", sources)
+        self.assertEqual(sources["openreview_venues"]["derived_from"], "openreview")
         self.assertIn("usenix_security", mvp_source_ids())
         self.assertIn("ndss", mvp_source_ids())
+        supported_adapter_sources = {
+            "arxiv",
+            "dblp",
+            "dblp_authors",
+            "dblp_venues",
+            "semantic_scholar",
+            "semantic_scholar_authors",
+            "semantic_scholar_citations",
+            "semantic_scholar_references",
+            "semantic_scholar_recommendations",
+            "openalex",
+            "openalex_authors",
+            "openalex_venues",
+            "openreview",
+            "openreview_venues",
+            "crossref",
+            "usenix_security",
+            "ndss",
+        }
+        self.assertTrue(supported_adapter_sources.issubset(sources))
         self.assertEqual(
             RADAR_PIPELINE_PHASES,
             [
@@ -78,6 +111,28 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "recommendation_report",
             ],
         )
+
+    def test_source_policy_distinguishes_authoritative_sources_from_trend_signals(self) -> None:
+        trend_sources = {source["id"]: source for source in trend_signal_source_registry()}
+        self.assertFalse(trend_sources["hugging_face_papers"]["authoritative_metadata"])
+        self.assertEqual(trend_sources["hugging_face_papers"]["source_class"], "trend_signal")
+
+        summary = radar_source_policy_summary(
+            ["arxiv", "dblp_venues", "usenix_security", "hugging_face_papers", "unknown_feed"]
+        )
+
+        self.assertEqual(summary["source_count"], 5)
+        self.assertEqual(summary["authoritative_count"], 3)
+        self.assertEqual(summary["trend_signal_count"], 1)
+        self.assertEqual(summary["unknown_count"], 1)
+        self.assertEqual(summary["class_counts"]["primary_metadata"], 2)
+        self.assertEqual(summary["class_counts"]["official_accepted_page"], 1)
+        self.assertEqual(summary["trend_signal_source_ids"], ["hugging_face_papers"])
+        self.assertEqual(summary["unknown_source_ids"], ["unknown_feed"])
+        report = append_radar_source_policy_to_report("# Radar", ["arxiv", "hugging_face_papers"])
+        self.assertIn("## Source Policy", report)
+        self.assertIn("trend_signals=1", report)
+        self.assertIn("secondary context", report)
 
     def test_shared_source_presets_cover_daily_and_top_venue_workflows(self) -> None:
         presets = {preset["id"]: preset for preset in radar_source_presets()}
@@ -146,6 +201,87 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("## Source Readiness", report)
         self.assertIn("status=blocked", report)
         self.assertIn("Semantic Scholar seed paper ID", report)
+
+    def test_blocked_source_skip_stat_keeps_missing_config_actionable(self) -> None:
+        readiness = radar_source_blocked_readiness("semantic_scholar_recommendations", {})
+
+        self.assertIsNotNone(readiness)
+        stat = radar_source_skip_stat(
+            "semantic_scholar_recommendations",
+            reason="missing_required_config",
+            readiness_record=readiness,
+            now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(stat["status"], "not_run")
+        self.assertEqual(stat["skip_reason"], "missing_required_config")
+        self.assertEqual(stat["missing_required_config_keys"], ["seed_paper_ids"])
+        self.assertEqual(
+            format_radar_source_stats([stat]),
+            "semantic_scholar_recommendations: 0 not_run "
+            "(skip=missing_required_config, missing=seed_paper_ids)",
+        )
+        report = append_radar_source_stats_to_report("# Radar", [stat])
+        self.assertIn("missing required config", report)
+        self.assertIn("Semantic Scholar positive seed paper ID", report)
+        coverage = radar_source_coverage_summary([stat], [], ["semantic_scholar_recommendations"])
+        self.assertEqual(coverage["status"], "partial")
+        self.assertEqual(coverage["not_run_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(
+            radar_run_status_from_source_health(
+                source_stats=[stat],
+                expected_sources=["semantic_scholar_recommendations"],
+                collection_config={},
+            ),
+            "blocked",
+        )
+        self.assertEqual(
+            radar_run_status_from_source_health(
+                source_stats=[
+                    {"source_id": "arxiv", "status": "succeeded", "collected_count": 1},
+                    stat,
+                ],
+                expected_sources=["arxiv", "semantic_scholar_recommendations"],
+                collection_config={},
+            ),
+            "partial",
+        )
+
+    def test_run_health_action_prioritizes_blocked_degraded_and_review_ready(self) -> None:
+        blocked = radar_run_health_action(
+            {
+                "status": "blocked",
+                "source_readiness": {
+                    "status": "blocked",
+                    "blocked_source_ids": ["semantic_scholar_recommendations"],
+                },
+                "source_coverage": {"status": "partial", "not_run_source_ids": ["semantic_scholar_recommendations"]},
+            }
+        )
+        self.assertEqual(blocked["action"], "configure_blocked_sources")
+        self.assertEqual(blocked["source_ids"], ["semantic_scholar_recommendations"])
+
+        degraded = radar_run_health_action(
+            {
+                "status": "partial",
+                "source_errors": [{"source_id": "dblp", "error": "unavailable"}],
+                "source_coverage": {"status": "partial", "failed_source_ids": ["dblp"]},
+            }
+        )
+        self.assertEqual(degraded["action"], "inspect_source_errors")
+        self.assertEqual(degraded["severity"], "warning")
+
+        healthy = radar_run_health_action(
+            {
+                "status": "succeeded",
+                "recommendation_count": 2,
+                "source_coverage": {"status": "succeeded"},
+                "source_readiness": {"status": "ready"},
+                "freshness": {"status": "fresh"},
+            }
+        )
+        self.assertEqual(healthy["action"], "review_queue")
+        self.assertEqual(healthy["severity"], "good")
 
     def test_default_topic_profile_contains_security_memory_and_ai_topics(self) -> None:
         profile = default_radar_topic_profile()
@@ -1139,7 +1275,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 {
                     "id": "run_recent",
                     "status": "partial",
-                    "sources": ["arxiv", "dblp", "openreview"],
+                    "sources": ["arxiv", "dblp", "openreview", "hugging_face_papers"],
                     "started_at": "2026-07-01T09:00:00+00:00",
                     "collected_count": 2,
                     "recommendation_count": 2,
@@ -1218,10 +1354,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`metadata_collection`: partial=1", brief)
         self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
+        self.assertIn("Source Policy", brief)
+        self.assertIn("authoritative=3", brief)
+        self.assertIn("trend_signals=1", brief)
+        self.assertIn("Trend signals are secondary context", brief)
+        self.assertIn("`hugging_face_papers`", brief)
         self.assertIn("Source Coverage", brief)
-        self.assertIn("status=partial; sources=2/3", brief)
+        self.assertIn("status=partial; sources=2/4", brief)
         self.assertIn("failed=dblp", brief)
-        self.assertIn("missing=openreview", brief)
+        self.assertIn("missing=hugging_face_papers, openreview", brief)
         self.assertIn("`arxiv`: 2 candidate(s)", brief)
         self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)
         self.assertIn("Venue Coverage", brief)

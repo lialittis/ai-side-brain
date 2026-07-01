@@ -20,6 +20,7 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_source_policy_to_report,
     append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
     append_radar_venue_coverage_to_report,
@@ -53,13 +54,19 @@ from shared.literature_radar import (
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
     radar_history_source_coverage_summary,
+    radar_history_source_policy_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_review_counts,
     radar_run_freshness,
+    radar_run_health_action,
+    radar_run_status_from_source_health,
     radar_source_coverage_summary,
+    radar_source_blocked_readiness,
+    radar_source_policy_summary,
     radar_source_preset,
     radar_source_readiness_summary,
+    radar_source_skip_stat,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -201,6 +208,7 @@ def run_personal_literature_radar(
         usenix_security_cycles=selected_usenix_security_cycles,
         source_errors=source_errors,
         source_stats=source_stats,
+        collection_config=collection_config,
         now=selected_now,
     )
     recommendations = recommend_papers(
@@ -248,6 +256,7 @@ def run_personal_literature_radar(
         recommendations=recommendations,
     )
     report = append_radar_venue_coverage_to_report(report, venue_coverage)
+    report = append_radar_source_policy_to_report(report, selected_sources)
     report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
     report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
     report = append_radar_source_stats_to_report(report, source_stats)
@@ -424,6 +433,11 @@ def build_personal_literature_radar_brief_payload(
             generated_at=now,
             days=selected_days,
         ),
+        "source_policy": radar_history_source_policy_summary(
+            runs,
+            generated_at=now,
+            days=selected_days,
+        ),
         "queue": {
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
@@ -454,8 +468,9 @@ def personal_literature_radar_run_summary(
     source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
     venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
     sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+    source_policy = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
     collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
-    return {
+    summary = {
         "id": run.get("id") or "",
         "status": run.get("status") or "unknown",
         "started_at": run.get("started_at") or "",
@@ -465,6 +480,7 @@ def personal_literature_radar_run_summary(
         "source_error_count": len(source_errors),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "source_policy": source_policy or radar_source_policy_summary(sources),
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
@@ -475,6 +491,8 @@ def personal_literature_radar_run_summary(
         "report_path": run.get("report_path") or "",
         "freshness": radar_run_freshness(run, now=now, max_age_hours=freshness_max_age_hours),
     }
+    summary["health_action"] = radar_run_health_action(summary)
+    return summary
 
 
 def annotate_personal_recommendation_novelty(
@@ -666,6 +684,7 @@ def collect_personal_radar_candidates(
     usenix_security_cycles: list[int] | None = None,
     source_errors: list[dict[str, Any]] | None = None,
     source_stats: list[dict[str, Any]] | None = None,
+    collection_config: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     supported_sources = {
@@ -696,8 +715,58 @@ def collect_personal_radar_candidates(
     selected_crossref_mailto = personal_crossref_mailto(crossref_mailto)
     selected_openalex_mailto = personal_openalex_mailto(openalex_mailto)
     selected_unpaywall_email = personal_unpaywall_email(unpaywall_email)
+    readiness_config = collection_config if isinstance(collection_config, dict) else build_radar_collection_config(
+        seed_paper_ids=personal_resolved_source_list(
+            sources,
+            SEMANTIC_SCHOLAR_SEED_SOURCES,
+            seed_paper_ids,
+            ["RADAR_SEED_PAPER_IDS"],
+        ),
+        semantic_scholar_author_ids=personal_resolved_source_list(
+            sources,
+            {"semantic_scholar_authors"},
+            semantic_scholar_author_ids,
+            ["RADAR_AUTHOR_IDS"],
+        ),
+        dblp_author_pids=personal_resolved_source_list(
+            sources,
+            {"dblp_authors"},
+            dblp_author_pids,
+            ["PERSONAL_RADAR_DBLP_AUTHOR_PIDS", "RADAR_DBLP_AUTHOR_PIDS"],
+        ),
+        openalex_author_ids=personal_resolved_source_list(
+            sources,
+            {"openalex_authors"},
+            openalex_author_ids,
+            ["PERSONAL_RADAR_OPENALEX_AUTHOR_IDS", "RADAR_OPENALEX_AUTHOR_IDS"],
+        ),
+        openreview_invitations=personal_resolved_source_list(
+            sources,
+            {"openreview"},
+            openreview_invitations,
+            ["OPENREVIEW_INVITATIONS"],
+        ),
+        semantic_scholar_api_key_configured=bool(
+            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        ),
+        openalex_mailto_configured=bool(selected_openalex_mailto),
+        crossref_mailto_configured=bool(selected_crossref_mailto),
+        unpaywall_email_configured=bool(selected_unpaywall_email),
+    )
 
     def collect_source(source_id: str, collector: Callable[[], list[dict[str, Any]]]) -> None:
+        blocked_readiness = radar_source_blocked_readiness(source_id, readiness_config)
+        if blocked_readiness:
+            if source_stats is not None:
+                source_stats.append(
+                    radar_source_skip_stat(
+                        source_id,
+                        reason="missing_required_config",
+                        now=now,
+                        readiness_record=blocked_readiness,
+                    )
+                )
+            return
         papers.extend(
             collect_radar_source(
                 source_id=source_id,
@@ -995,9 +1064,15 @@ def build_personal_radar_run_record(
     now: datetime,
 ) -> dict[str, Any]:
     errors = source_errors or []
+    selected_status = radar_run_status_from_source_health(
+        source_stats=source_stats,
+        source_errors=errors,
+        expected_sources=sources,
+        collection_config=collection_config,
+    )
     return {
         "id": run_id,
-        "status": "partial" if errors else "succeeded",
+        "status": selected_status,
         "started_at": iso_timestamp(now),
         "completed_at": iso_timestamp(now),
         "sources": sources,
@@ -1007,7 +1082,7 @@ def build_personal_radar_run_record(
         "collection_config": collection_config,
         "scoring_profile": personal_radar_scoring_profile(topic_profile),
         "pipeline_trace": build_radar_pipeline_trace(
-            status="partial" if errors else "succeeded",
+            status=selected_status,
             collected_papers=collected_papers,
             recommendations=recommendations,
             source_errors=errors,
@@ -1018,6 +1093,7 @@ def build_personal_radar_run_record(
         "recommendation_count": len(recommendations),
         "source_errors": errors,
         "source_stats": source_stats or [],
+        "source_policy": radar_source_policy_summary(sources),
         "venue_coverage": build_venue_coverage_summary(
             collected_papers=collected_papers,
             recommendations=recommendations,

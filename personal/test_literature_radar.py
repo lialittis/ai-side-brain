@@ -271,6 +271,40 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runs[0]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(runs[0]["source_stats"][1]["status"], "failed")
 
+    def test_run_personal_literature_radar_skips_sources_missing_required_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with mock.patch("personal.literature_radar.collect_semantic_scholar_recommendations") as collector:
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["semantic_scholar_recommendations"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            collector.assert_not_called()
+            self.assertEqual(result["run"]["status"], "blocked")
+            self.assertEqual(result["collected_count"], 0)
+            self.assertEqual(result["source_errors"], [])
+            self.assertEqual(len(result["source_stats"]), 1)
+            stat = result["source_stats"][0]
+            self.assertEqual(stat["source_id"], "semantic_scholar_recommendations")
+            self.assertEqual(stat["status"], "not_run")
+            self.assertEqual(stat["skip_reason"], "missing_required_config")
+            self.assertEqual(stat["missing_required_config_keys"], ["seed_paper_ids"])
+            self.assertIn("status=blocked", result["report"])
+            self.assertIn("## Source Policy", result["report"])
+            self.assertIn("Missing: `semantic_scholar_recommendations`", result["report"])
+            self.assertIn("missing required config", result["report"])
+            runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["status"], "blocked")
+            self.assertEqual(runs[0]["source_errors"], [])
+            self.assertEqual(runs[0]["source_stats"][0]["status"], "not_run")
+            summary = build_personal_literature_radar_queue_payload(root)["latest_run"]
+            self.assertEqual(summary["health_action"]["action"], "configure_blocked_sources")
+            self.assertEqual(summary["health_action"]["source_ids"], ["semantic_scholar_recommendations"])
+
     def test_run_personal_literature_radar_marks_seen_before_and_links_prior_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -476,6 +510,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 runs[0]["scoring_profile"]["topics"][0]["positive_keywords"],
                 ["radiative cooling", "building control"],
             )
+            self.assertEqual(runs[0]["source_policy"]["authoritative_count"], 1)
+            self.assertEqual(runs[0]["source_policy"]["class_counts"], {"primary_metadata": 1})
             pipeline_by_phase = {record["phase"]: record for record in runs[0]["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
@@ -592,7 +628,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
+            self.assertEqual(queue_result["latest_run"]["source_policy"]["authoritative_count"], 1)
+            self.assertEqual(queue_result["latest_run"]["source_policy"]["trend_signal_count"], 0)
             self.assertEqual(queue_result["latest_run"]["source_readiness"]["status"], "ready")
+            self.assertEqual(queue_result["latest_run"]["health_action"]["action"], "review_queue")
+            self.assertEqual(queue_result["latest_run"]["health_action"]["severity"], "good")
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             direct_queue = build_personal_literature_radar_queue_payload(
                 root,
@@ -601,6 +641,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             )
             self.assertEqual(direct_queue["latest_run"]["freshness"]["status"], "fresh")
             self.assertEqual(direct_queue["latest_run"]["freshness"]["max_age_hours"], 1)
+            self.assertEqual(direct_queue["latest_run"]["health_action"]["action"], "review_queue")
+            self.assertEqual(direct_queue["latest_run"]["health_action"]["severity"], "good")
             self.assertIn("literature-radar-runs.json", queue_result["paths"]["run_index"])
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -613,6 +655,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Latest run:", queue_text)
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("source_errors=0", queue_text)
+            self.assertIn("Health action:", queue_text)
+            self.assertIn("action=review_queue", queue_text)
+            self.assertIn("Source policy:", queue_text)
+            self.assertIn("authoritative=1", queue_text)
             self.assertIn("freshness=", queue_text)
             self.assertIn("Source coverage:", queue_text)
             self.assertIn("Source readiness:", queue_text)
@@ -707,6 +753,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["source_coverage"]["status_counts"], {"succeeded": 1})
             self.assertEqual(brief["source_coverage"]["sources"][0]["source_id"], "arxiv")
             self.assertEqual(brief["source_coverage"]["sources"][0]["collected_count"], 1)
+            self.assertEqual(brief["source_policy"]["run_count"], 1)
+            self.assertEqual(brief["source_policy"]["authoritative_count"], 1)
+            self.assertEqual(brief["source_policy"]["trend_signal_count"], 0)
+            self.assertEqual(brief["source_policy"]["class_counts"], {"primary_metadata": 1})
             self.assertIn("literature-radar-runs.json", brief["paths"]["run_index"])
             self.assertIn("literature-radar-papers.json", brief["paths"]["paper_history"])
             self.assertIn("Personal Literature Radar Brief", brief["brief"])

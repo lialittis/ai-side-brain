@@ -29,7 +29,9 @@ from shared.literature_radar import (
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_run_freshness,
+    radar_run_health_action,
     radar_source_coverage_summary,
+    radar_source_policy_summary,
     radar_source_readiness_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
@@ -970,6 +972,7 @@ def render_radar_brief_form(*, days: int, limit: int) -> str:
 def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     source_coverage = payload.get("source_coverage") if isinstance(payload.get("source_coverage"), dict) else {}
+    source_policy = payload.get("source_policy") if isinstance(payload.get("source_policy"), dict) else {}
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
     access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
@@ -1003,6 +1006,12 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">runs: {int(source_coverage.get("run_count") or 0)}</span>
         <span class="tag">sources: {int(source_coverage.get("source_count") or 0)}</span>
         {problem_chip}
+      </div>
+      <div class="tags">
+        <span class="muted">Source policy:</span>
+        <span class="tag">authoritative: {int(source_policy.get("authoritative_count") or 0)}</span>
+        <span class="tag">trend: {int(source_policy.get("trend_signal_count") or 0)}</span>
+        <span class="tag">unknown: {int(source_policy.get("unknown_count") or 0)}</span>
       </div>
       <div class="tags">
         <span class="muted">Review queue:</span>
@@ -1579,7 +1588,18 @@ def render_radar_source_stat(stat: dict[str, Any]) -> str:
         error = str(stat.get("error") or "").strip()
         error_type = str(stat.get("error_type") or "Error").strip()
         title = f' title="{html_escape(error_type + (": " + error if error else ""))}"'
-    class_name = "tag warn" if status == "failed" else "tag"
+    if status == "not_run":
+        reason = str(stat.get("skip_reason") or "not run").replace("_", " ")
+        missing = stat.get("missing_required_config") if isinstance(stat.get("missing_required_config"), list) else []
+        missing_labels = [
+            str(item.get("label") or item.get("key") or "").strip()
+            for item in missing
+            if isinstance(item, dict) and str(item.get("label") or item.get("key") or "").strip()
+        ]
+        if missing_labels:
+            reason += f": {', '.join(missing_labels[:3])}"
+        title = f' title="{html_escape(reason)}"'
+    class_name = "tag warn" if status in {"failed", "not_run"} else "tag"
     return f'<span class="{class_name}"{title}>{html_escape(source_id)}: {collected_count}</span>'
 
 
@@ -2158,6 +2178,15 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         run.get("sources") if isinstance(run.get("sources"), list) else [],
         run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {},
     )
+    source_policy = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
+    if not source_policy:
+        source_policy = radar_source_policy_summary(
+            run.get("sources") if isinstance(run.get("sources"), list) else []
+        )
+    source_policy_label = (
+        f'<span class="pill">Policy: {int(source_policy.get("authoritative_count") or 0)} authoritative'
+        f' / {int(source_policy.get("trend_signal_count") or 0)} trend</span>'
+    )
     readiness_status = str(source_readiness.get("status") or "unknown")
     readiness_css = "warn" if readiness_status == "blocked" else "good" if readiness_status == "ready" else ""
     readiness_label = (
@@ -2168,12 +2197,37 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
     freshness = radar_run_freshness(run)
     freshness_css = "warn" if freshness.get("status") == "stale" else "good" if freshness.get("status") == "fresh" else ""
     freshness_label = f'<span class="pill {freshness_css}">Freshness: {html_escape(freshness.get("status") or "unknown")}</span>'
+    health_action = run.get("health_action") if isinstance(run.get("health_action"), dict) else {}
+    if not health_action:
+        health_action = radar_run_health_action(
+            {
+                **run,
+                "source_errors": source_errors,
+                "source_coverage": source_coverage,
+                "source_readiness": source_readiness,
+                "freshness": freshness,
+            }
+        )
+    health_severity = str(health_action.get("severity") or "")
+    health_css = (
+        "warn"
+        if health_severity in {"warning", "error"}
+        else "good"
+        if health_severity == "good"
+        else ""
+    )
+    health_label = (
+        f'<span class="pill {health_css}">Action: '
+        f'{html_escape(str(health_action.get("action") or "inspect").replace("_", " "))}</span>'
+    )
     return f"""
     <div class="tags">
       <span class="muted">Latest run health:</span>
       {run_link}
       {status_pill(str(run.get("status") or "unknown"))}
+      {health_label}
       {freshness_label}
+      {source_policy_label}
       {coverage_label}
       {readiness_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>

@@ -324,14 +324,16 @@ the terminal; the same state can be changed from `/radar/papers` in the web UI.
 For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
 `python team/research_cli.py radar-queue --json` return the same active queue
 shape with review counts, latest-run health/freshness/source stats, compact
-source coverage status, persisted signal lines, active-queue PDF access summary,
-paper records, and links back to the HTML review surfaces.
+source coverage status, `source_policy` authoritative/trend-signal counts, a
+`health_action` next step, persisted signal lines, active-queue PDF access
+summary, paper records, and links back to the HTML review surfaces.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
-latest-run health/source stats, structured `source_coverage` for every run in
-the brief window, review counts, active queue preview, the Markdown brief, and
-links back to the HTML brief, Radar page, JSON endpoint, and queue JSON.
+latest-run health/source stats, structured `source_policy` and `source_coverage`
+for every run in the brief window, review counts, active queue preview, the
+Markdown brief, and links back to the HTML brief, Radar page, JSON endpoint,
+and queue JSON.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
@@ -339,7 +341,11 @@ succeeded, failed, partial, missing, and empty sources for daily review, and
 the Radar page shows that coverage on the selected run detail before raw source
 stats. Source readiness checks whether selected sources have required seeds,
 author IDs, or OpenReview invitations and separates those blocking issues from
-optional API/contact warnings. Source errors are shown in the Radar page and
+optional API/contact warnings. Sources missing required config are skipped as
+`not_run` before collection, so they do not spend API calls or appear as
+collector failures. If every selected source is skipped this way, the stored
+run status is `blocked`; if other sources still collect, the run is `partial`.
+Source errors are shown in the Radar page and
 report. Generated Markdown reports include `Source Readiness` and `Source
 Coverage` before detailed `Source Stats`, so a daily or weekly review can tell
 whether the radar was misconfigured, quiet, or under-collected. Venue-profile runs also show `Venue Coverage` in the report
@@ -348,7 +354,7 @@ profile/year.
 
 Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
 without collecting again. It aggregates run status, per-source counts, venue
-coverage, failures, and the top stored recommendations with review state,
+coverage, source policy, failures, and the top stored recommendations with review state,
 stored signal lines, context from watched papers and library comments, and PDF
 policy. Context lines include the matched related-item details, such as shared
 tags, shared interests, or discussion terms from team comments. New runs

@@ -33,6 +33,8 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "arxiv",
         "name": "arXiv",
         "access": "api_or_rss",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "fast_preprint_discovery",
         "categories": ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
         "mvp_collector": True,
@@ -41,27 +43,115 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "dblp",
         "name": "DBLP",
         "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "computer_science_bibliography",
+        "mvp_collector": True,
+    },
+    {
+        "id": "dblp_authors",
+        "name": "DBLP author tracking",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "computer_science_author_publication_tracking",
+        "derived_from": "dblp",
+        "mvp_collector": True,
+    },
+    {
+        "id": "dblp_venues",
+        "name": "DBLP venue profiles",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "computer_science_venue_publication_tracking",
+        "derived_from": "dblp",
         "mvp_collector": True,
     },
     {
         "id": "semantic_scholar",
         "name": "Semantic Scholar",
         "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "citation_graph_related_papers_author_tracking",
+        "mvp_collector": True,
+    },
+    {
+        "id": "semantic_scholar_authors",
+        "name": "Semantic Scholar author tracking",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "citation_graph_author_tracking",
+        "derived_from": "semantic_scholar",
+        "mvp_collector": True,
+    },
+    {
+        "id": "semantic_scholar_citations",
+        "name": "Semantic Scholar citation graph",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "seed_paper_citation_expansion",
+        "derived_from": "semantic_scholar",
+        "mvp_collector": True,
+    },
+    {
+        "id": "semantic_scholar_references",
+        "name": "Semantic Scholar reference graph",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "seed_paper_reference_expansion",
+        "derived_from": "semantic_scholar",
+        "mvp_collector": True,
+    },
+    {
+        "id": "semantic_scholar_recommendations",
+        "name": "Semantic Scholar recommendations",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "seed_paper_recommendation_expansion",
+        "derived_from": "semantic_scholar",
         "mvp_collector": True,
     },
     {
         "id": "openalex",
         "name": "OpenAlex",
         "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "large_scale_metadata_topics_citations_doi_resolution",
+        "mvp_collector": True,
+    },
+    {
+        "id": "openalex_authors",
+        "name": "OpenAlex author tracking",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "large_scale_author_publication_tracking",
+        "derived_from": "openalex",
+        "mvp_collector": True,
+    },
+    {
+        "id": "openalex_venues",
+        "name": "OpenAlex venue profiles",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "large_scale_venue_publication_tracking",
+        "derived_from": "openalex",
         "mvp_collector": True,
     },
     {
         "id": "crossref",
         "name": "Crossref",
         "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "doi_publisher_metadata_publication_status",
         "mvp_collector": True,
     },
@@ -69,13 +159,27 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "openreview",
         "name": "OpenReview",
         "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
         "primary_role": "ai_ml_venues_workshops_reviews",
+        "mvp_collector": True,
+    },
+    {
+        "id": "openreview_venues",
+        "name": "OpenReview venue profiles",
+        "access": "api",
+        "source_class": "primary_metadata",
+        "authoritative_metadata": True,
+        "primary_role": "ai_ml_venue_submission_tracking",
+        "derived_from": "openreview",
         "mvp_collector": True,
     },
     {
         "id": "unpaywall",
         "name": "Unpaywall",
         "access": "api",
+        "source_class": "oa_enrichment",
+        "authoritative_metadata": False,
         "primary_role": "open_access_pdf_license_resolution",
         "mvp_collector": False,
     },
@@ -83,6 +187,8 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "usenix_security",
         "name": "USENIX Security accepted papers",
         "access": "official_accepted_papers_page",
+        "source_class": "official_accepted_page",
+        "authoritative_metadata": True,
         "primary_role": "security_venue_accepted_papers",
         "mvp_collector": True,
     },
@@ -90,6 +196,8 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "id": "ndss",
         "name": "NDSS accepted papers",
         "access": "official_accepted_papers_page",
+        "source_class": "official_accepted_page",
+        "authoritative_metadata": True,
         "primary_role": "security_venue_accepted_papers",
         "mvp_collector": True,
     },
@@ -300,16 +408,65 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
     },
 ]
 
-TREND_SIGNAL_SOURCES = [
-    "Scholar Inbox",
-    "Hugging Face Papers",
-    "DAIR.AI AI Papers of the Week",
-    "Alignment Forum",
-    "AI Safety newsletters",
-    "Feedly cybersecurity feeds",
-    "ResearchRabbit exports",
-    "Connected Papers exports",
+TREND_SIGNAL_SOURCE_REGISTRY: list[dict[str, Any]] = [
+    {
+        "id": "scholar_inbox",
+        "name": "Scholar Inbox",
+        "access": "export_or_feed",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "hugging_face_papers",
+        "name": "Hugging Face Papers",
+        "access": "community_feed",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "dair_ai_papers_of_the_week",
+        "name": "DAIR.AI AI Papers of the Week",
+        "access": "community_digest",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "alignment_forum",
+        "name": "Alignment Forum",
+        "access": "community_feed",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "ai_safety_newsletters",
+        "name": "AI Safety newsletters",
+        "access": "community_digest",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "feedly_cybersecurity_feeds",
+        "name": "Feedly cybersecurity feeds",
+        "access": "feed",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "researchrabbit_exports",
+        "name": "ResearchRabbit exports",
+        "access": "export",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
+    {
+        "id": "connected_papers_exports",
+        "name": "Connected Papers exports",
+        "access": "export",
+        "source_class": "trend_signal",
+        "authoritative_metadata": False,
+    },
 ]
+TREND_SIGNAL_SOURCES = [source["name"] for source in TREND_SIGNAL_SOURCE_REGISTRY]
 RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
 RADAR_ACTIVE_REVIEW_STATUSES = ("unreviewed", "watch")
 
@@ -404,6 +561,102 @@ RadarScorer = Callable[[dict[str, Any]], dict[str, Any]]
 
 def source_registry() -> list[dict[str, Any]]:
     return [dict(source) for source in SOURCE_REGISTRY]
+
+
+def trend_signal_source_registry() -> list[dict[str, Any]]:
+    return [dict(source) for source in TREND_SIGNAL_SOURCE_REGISTRY]
+
+
+def combined_source_registry() -> list[dict[str, Any]]:
+    return [*source_registry(), *trend_signal_source_registry()]
+
+
+def radar_source_policy_record(source_id: str) -> dict[str, Any]:
+    selected_source_id = clean_radar_source_id(source_id)
+    registry = {source["id"]: source for source in combined_source_registry()}
+    if selected_source_id in registry:
+        return dict(registry[selected_source_id])
+    # Future derived collectors still get sensible policy metadata before they
+    # are promoted to explicit registry entries.
+    for prefix, base_source_id in (
+        ("dblp_", "dblp"),
+        ("semantic_scholar_", "semantic_scholar"),
+        ("openalex_", "openalex"),
+        ("openreview_", "openreview"),
+    ):
+        if selected_source_id.startswith(prefix) and base_source_id in registry:
+            record = dict(registry[base_source_id])
+            record["id"] = selected_source_id
+            record["name"] = selected_source_id.replace("_", " ")
+            record["derived_from"] = base_source_id
+            return record
+    return {
+        "id": selected_source_id,
+        "name": selected_source_id.replace("_", " ") if selected_source_id else "unknown",
+        "access": "unknown",
+        "source_class": "unknown",
+        "authoritative_metadata": False,
+    }
+
+
+def radar_source_policy_summary(sources: list[str] | tuple[str, ...] | None) -> dict[str, Any]:
+    records = [radar_source_policy_record(source_id) for source_id in unique_source_ids(list(sources or []))]
+    class_counts: dict[str, int] = {}
+    for record in records:
+        source_class = str(record.get("source_class") or "unknown")
+        class_counts[source_class] = int(class_counts.get(source_class) or 0) + 1
+    authoritative_records = [record for record in records if record.get("authoritative_metadata")]
+    trend_records = [record for record in records if record.get("source_class") == "trend_signal"]
+    unknown_records = [record for record in records if record.get("source_class") == "unknown"]
+    return {
+        "source_count": len(records),
+        "authoritative_count": len(authoritative_records),
+        "trend_signal_count": len(trend_records),
+        "unknown_count": len(unknown_records),
+        "class_counts": class_counts,
+        "authoritative_source_ids": [record["id"] for record in authoritative_records],
+        "trend_signal_source_ids": [record["id"] for record in trend_records],
+        "unknown_source_ids": [record["id"] for record in unknown_records],
+        "sources": records,
+    }
+
+
+def format_radar_source_policy(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    class_counts = summary.get("class_counts") if isinstance(summary.get("class_counts"), dict) else {}
+    class_text = ", ".join(
+        f"{source_class}={int(count)}"
+        for source_class, count in sorted(class_counts.items())
+        if int(count or 0) > 0
+    )
+    parts = [
+        "Source policy:",
+        f"sources={int(summary.get('source_count') or 0)}",
+        f"authoritative={int(summary.get('authoritative_count') or 0)}",
+        f"trend_signals={int(summary.get('trend_signal_count') or 0)}",
+        f"unknown={int(summary.get('unknown_count') or 0)}",
+    ]
+    if class_text:
+        parts.append(f"classes={class_text}")
+    return " | ".join(parts)
+
+
+def append_radar_source_policy_to_report(
+    report: str,
+    sources: list[str] | tuple[str, ...] | None,
+) -> str:
+    summary = radar_source_policy_summary(sources)
+    if int(summary.get("source_count") or 0) == 0:
+        return report
+    lines = [report.rstrip(), "", "## Source Policy", "", f"- {format_radar_source_policy(summary)}"]
+    if int(summary.get("trend_signal_count") or 0) > 0:
+        lines.append("- Trend signal sources are secondary context, not authoritative bibliographic records.")
+    if int(summary.get("unknown_count") or 0) > 0:
+        values = summary.get("unknown_source_ids") if isinstance(summary.get("unknown_source_ids"), list) else []
+        lines.append(f"- Unknown source classification: {', '.join(f'`{value}`' for value in values)}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def mvp_source_ids() -> list[str]:
@@ -745,6 +998,61 @@ def radar_source_stat(
     return stat
 
 
+def radar_source_readiness_record(
+    source_id: str,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    selected_source_id = clean_radar_source_id(source_id)
+    if not selected_source_id:
+        return None
+    summary = radar_source_readiness_summary([selected_source_id], collection_config)
+    records = summary.get("sources") if isinstance(summary.get("sources"), list) else []
+    if not records:
+        return None
+    record = records[0]
+    return record if isinstance(record, dict) else None
+
+
+def radar_source_blocked_readiness(
+    source_id: str,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    record = radar_source_readiness_record(source_id, collection_config)
+    if record and record.get("status") == "blocked":
+        return record
+    return None
+
+
+def radar_source_skip_stat(
+    source_id: str,
+    *,
+    reason: str,
+    now: datetime | None = None,
+    readiness_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stat = radar_source_stat(
+        source_id,
+        status="not_run",
+        collected_count=0,
+        now=now,
+    )
+    stat["skip_reason"] = str(reason or "skipped").strip() or "skipped"
+    if readiness_record:
+        missing_required = readiness_record.get("missing_required_config")
+        if isinstance(missing_required, list) and missing_required:
+            stat["missing_required_config"] = [
+                dict(item)
+                for item in missing_required
+                if isinstance(item, dict)
+            ]
+            stat["missing_required_config_keys"] = [
+                str(item.get("key") or "").strip()
+                for item in stat["missing_required_config"]
+                if str(item.get("key") or "").strip()
+            ]
+    return stat
+
+
 def collect_radar_source(
     *,
     source_id: str,
@@ -910,6 +1218,10 @@ def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str
         line = f"- `{stat.get('source_id')}`: {collected_count} candidate(s) ({status})"
         if status == "failed" and stat.get("error_type"):
             line += f" - {stat.get('error_type')}"
+        if status == "not_run":
+            skip_detail = radar_source_skip_detail_text(stat)
+            if skip_detail:
+                line += f" - {skip_detail}"
         lines.append(line)
     lines.append("")
     return "\n".join(lines)
@@ -967,9 +1279,32 @@ def format_radar_source_stat(stat: dict[str, Any]) -> str:
     ]:
         if key in stat:
             details.append(f"{label}={int(stat.get(key) or 0)}")
+    skip_reason = str(stat.get("skip_reason") or "").strip()
+    if skip_reason:
+        details.append(f"skip={skip_reason}")
+    missing_keys = stat.get("missing_required_config_keys")
+    if isinstance(missing_keys, list) and missing_keys:
+        details.append(f"missing={', '.join(str(value) for value in missing_keys[:3])}")
     if details:
         line += f" ({', '.join(details)})"
     return line
+
+
+def radar_source_skip_detail_text(stat: dict[str, Any]) -> str:
+    reason = str(stat.get("skip_reason") or "").strip()
+    if not reason:
+        return ""
+    text = reason.replace("_", " ")
+    missing = stat.get("missing_required_config")
+    if isinstance(missing, list) and missing:
+        labels = [
+            str(item.get("label") or item.get("key") or "").strip()
+            for item in missing
+            if isinstance(item, dict) and str(item.get("label") or item.get("key") or "").strip()
+        ]
+        if labels:
+            text += f": {', '.join(labels[:3])}"
+    return text
 
 
 def radar_source_coverage_summary(
@@ -1092,6 +1427,141 @@ def radar_source_coverage_summary(
         "empty_source_ids": empty_ids,
         "sources": sources,
     }
+
+
+def radar_run_status_from_source_health(
+    *,
+    source_stats: list[dict[str, Any]] | None,
+    source_errors: list[dict[str, Any]] | None = None,
+    expected_sources: list[str] | tuple[str, ...] | None = None,
+    collection_config: dict[str, Any] | None = None,
+    fallback: str = "succeeded",
+) -> str:
+    if source_errors:
+        return "partial"
+    coverage = radar_source_coverage_summary(source_stats, source_errors, expected_sources)
+    readiness = radar_source_readiness_summary(expected_sources, collection_config)
+    coverage_status = str(coverage.get("status") or "").strip().lower()
+    if coverage_status == "failed":
+        return "failed"
+    if (
+        readiness.get("status") == "blocked"
+        and int(coverage.get("reported_count") or 0) == 0
+        and int(coverage.get("not_run_count") or 0) > 0
+    ):
+        return "blocked"
+    if coverage_status == "partial":
+        return "partial"
+    if coverage_status == "succeeded":
+        return "succeeded"
+    return str(fallback or "succeeded").strip() or "succeeded"
+
+
+def radar_run_health_action(run_summary: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(run_summary, dict) or not run_summary:
+        return {
+            "status": "no_run",
+            "severity": "info",
+            "action": "run_literature_radar",
+            "reason": "no_latest_run",
+            "message": "No Literature Radar run has been recorded yet.",
+            "source_ids": [],
+        }
+    status = str(run_summary.get("status") or "unknown").strip().lower()
+    readiness = run_summary.get("source_readiness") if isinstance(run_summary.get("source_readiness"), dict) else {}
+    coverage = run_summary.get("source_coverage") if isinstance(run_summary.get("source_coverage"), dict) else {}
+    freshness = run_summary.get("freshness") if isinstance(run_summary.get("freshness"), dict) else {}
+    source_errors = run_summary.get("source_errors") if isinstance(run_summary.get("source_errors"), list) else []
+    if status == "blocked" or readiness.get("status") == "blocked":
+        source_ids = readiness.get("blocked_source_ids") if isinstance(readiness.get("blocked_source_ids"), list) else []
+        if not source_ids:
+            source_ids = coverage.get("not_run_source_ids") if isinstance(coverage.get("not_run_source_ids"), list) else []
+        return {
+            "status": "blocked",
+            "severity": "error",
+            "action": "configure_blocked_sources",
+            "reason": "missing_required_source_config",
+            "message": "Selected Radar sources are missing required seeds, author IDs, or invitations.",
+            "source_ids": [str(source_id) for source_id in source_ids],
+        }
+    if status == "failed":
+        return {
+            "status": "failed",
+            "severity": "error",
+            "action": "inspect_failed_run",
+            "reason": "run_failed",
+            "message": "The latest Radar run failed before producing a usable result.",
+            "source_ids": [],
+        }
+    if source_errors:
+        source_ids = [
+            str(error.get("source_id") or "source")
+            for error in source_errors
+            if isinstance(error, dict)
+        ]
+        return {
+            "status": "degraded",
+            "severity": "warning",
+            "action": "inspect_source_errors",
+            "reason": "source_errors_present",
+            "message": "One or more selected Radar sources failed during collection.",
+            "source_ids": source_ids,
+        }
+    coverage_status = str(coverage.get("status") or "").strip().lower()
+    if coverage_status == "partial":
+        source_ids = []
+        for key in ("failed_source_ids", "partial_source_ids", "not_run_source_ids"):
+            values = coverage.get(key) if isinstance(coverage.get(key), list) else []
+            source_ids.extend(str(value) for value in values)
+        return {
+            "status": "degraded",
+            "severity": "warning",
+            "action": "inspect_source_coverage",
+            "reason": "partial_source_coverage",
+            "message": "The latest Radar run completed with incomplete source coverage.",
+            "source_ids": source_ids,
+        }
+    if freshness.get("status") == "stale":
+        return {
+            "status": "stale",
+            "severity": "warning",
+            "action": "run_literature_radar",
+            "reason": "latest_run_stale",
+            "message": "The latest Radar run is older than the configured freshness window.",
+            "source_ids": [],
+        }
+    if int(run_summary.get("recommendation_count") or 0) == 0:
+        return {
+            "status": "quiet",
+            "severity": "info",
+            "action": "review_sources_or_interests",
+            "reason": "no_recommendations",
+            "message": "The latest Radar run found no active recommendations.",
+            "source_ids": [],
+        }
+    return {
+        "status": "healthy",
+        "severity": "good",
+        "action": "review_queue",
+        "reason": "ready_for_review",
+        "message": "The latest Radar run is ready for daily review.",
+        "source_ids": [],
+    }
+
+
+def format_radar_run_health_action(action: dict[str, Any]) -> str:
+    if not isinstance(action, dict) or not action:
+        return ""
+    parts = [
+        "Health action:",
+        f"status={action.get('status') or 'unknown'}",
+        f"action={action.get('action') or 'inspect'}",
+        f"reason={action.get('reason') or 'unknown'}",
+    ]
+    source_ids = action.get("source_ids") if isinstance(action.get("source_ids"), list) else []
+    if source_ids:
+        parts.append(f"sources={', '.join(str(source_id) for source_id in source_ids[:3])}")
+    return " | ".join(parts)
 
 
 def format_radar_source_coverage(summary: dict[str, Any]) -> str:
@@ -2197,6 +2667,9 @@ def build_radar_history_brief(
     pipeline_lines = radar_brief_pipeline_trace_lines([bundle["run"] for bundle in bundles])
     if pipeline_lines:
         lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
+    source_policy_lines = radar_brief_source_policy_lines([bundle["run"] for bundle in bundles])
+    if source_policy_lines:
+        lines.extend(["## Source Policy", "", *source_policy_lines, ""])
     source_coverage_lines = radar_brief_source_coverage_lines([bundle["run"] for bundle in bundles])
     if source_coverage_lines:
         lines.extend(["## Source Coverage", "", *source_coverage_lines, ""])
@@ -2349,6 +2822,55 @@ def radar_history_source_coverage_summary(
         "status_counts": dict(sorted(status_counts.items())),
         "source_count": len(source_totals),
         "sources": sorted(source_totals.values(), key=lambda source: str(source.get("source_id") or "")),
+        "runs": run_summaries,
+    }
+
+
+def radar_history_source_policy_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    combined_source_ids: list[str] = []
+    run_summaries = []
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        source_ids = unique_source_ids([str(source) for source in sources])
+        if not source_ids:
+            continue
+        stored_summary = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
+        summary = stored_summary or radar_source_policy_summary(source_ids)
+        combined_source_ids.extend(source_ids)
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "source_count": int(summary.get("source_count") or 0),
+                "authoritative_count": int(summary.get("authoritative_count") or 0),
+                "trend_signal_count": int(summary.get("trend_signal_count") or 0),
+                "unknown_count": int(summary.get("unknown_count") or 0),
+                "class_counts": summary.get("class_counts") or {},
+                "trend_signal_source_ids": list(summary.get("trend_signal_source_ids") or []),
+                "unknown_source_ids": list(summary.get("unknown_source_ids") or []),
+            }
+        )
+    summary = radar_source_policy_summary(combined_source_ids)
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        **summary,
+        "run_count": len(run_summaries),
         "runs": run_summaries,
     }
 
@@ -2562,6 +3084,26 @@ def radar_brief_scoring_profile_text(profile: dict[str, Any]) -> str:
         suffix = f"; +{len(topics) - 4} more" if len(topics) > 4 else ""
         return f"{name}: {'; '.join(topic_parts) if topic_parts else 'no topics'}{suffix}"
     return name
+
+
+def radar_brief_source_policy_lines(runs: list[dict[str, Any]]) -> list[str]:
+    combined_source_ids: list[str] = []
+    run_count = 0
+    for run in runs:
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        if not sources:
+            continue
+        run_count += 1
+        combined_source_ids.extend(str(source) for source in sources)
+    if not combined_source_ids:
+        return []
+    summary = radar_source_policy_summary(combined_source_ids)
+    lines = [f"- {format_radar_source_policy(summary)}; runs={run_count}"]
+    if int(summary.get("trend_signal_count") or 0) > 0:
+        trend_ids = summary.get("trend_signal_source_ids") if isinstance(summary.get("trend_signal_source_ids"), list) else []
+        suffix = f": {', '.join(f'`{source_id}`' for source_id in trend_ids[:5])}" if trend_ids else ""
+        lines.append(f"- Trend signals are secondary context, not authoritative bibliographic records{suffix}")
+    return lines
 
 
 def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:

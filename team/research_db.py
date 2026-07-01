@@ -16,6 +16,7 @@ from shared.literature_radar import (
     build_venue_coverage_summary,
     dedupe_key as radar_dedupe_key,
     radar_latest_signal_lines,
+    radar_source_policy_summary,
 )
 from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import (
@@ -1207,6 +1208,9 @@ class TeamResearchDatabase:
                     "error": error,
                     "source_errors": source_errors or [],
                     "source_stats": source_stats or [],
+                    "source_policy": radar_source_policy_summary(
+                        run.get("sources") if isinstance(run.get("sources"), list) else []
+                    ),
                     "venue_coverage": build_venue_coverage_summary(
                         collected_papers=collected_papers,
                         recommendations=recommendations,

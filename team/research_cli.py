@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.literature_radar import (
+    format_radar_run_health_action,
+    format_radar_source_policy,
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
@@ -502,6 +504,20 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     latest_run = result.get("latest_run") if isinstance(result.get("latest_run"), dict) else {}
     if latest_run:
         print(format_radar_queue_latest_run(latest_run))
+        health_action = (
+            latest_run.get("health_action")
+            if isinstance(latest_run.get("health_action"), dict)
+            else {}
+        )
+        if health_action:
+            print(format_radar_run_health_action(health_action))
+        source_policy = (
+            latest_run.get("source_policy")
+            if isinstance(latest_run.get("source_policy"), dict)
+            else {}
+        )
+        if source_policy:
+            print(format_radar_source_policy(source_policy))
         source_coverage = (
             latest_run.get("source_coverage")
             if isinstance(latest_run.get("source_coverage"), dict)
