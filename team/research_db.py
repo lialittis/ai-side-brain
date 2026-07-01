@@ -454,6 +454,25 @@ class TeamResearchDatabase:
                 return item
         return None
 
+    def update_item_radar_metadata(
+        self,
+        item_id: str,
+        radar_metadata: dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        bundle = self.get_bundle(item_id)
+        item = dict(bundle["item"])
+        item["radar"] = merge_radar_item_metadata(item.get("radar"), radar_metadata)
+        if item["radar"].get("pdf_access"):
+            item["pdf_access"] = item["radar"]["pdf_access"]
+        item["updated_at"] = timestamp
+        with self.connect() as connection:
+            self._upsert_item(connection, item)
+        return item
+
     def mark_item_rejected_by_ai(
         self,
         item_id: str,
@@ -654,6 +673,33 @@ class TeamResearchDatabase:
         self.initialize()
         with self.connect() as connection:
             connection.execute("DELETE FROM team_interest_keywords WHERE id = ?", (interest_id,))
+
+    def get_team_setting(self, key: str, default: Any = None) -> Any:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT value_json FROM team_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return loads(row["value_json"]) if row else default
+
+    def set_team_setting(
+        self,
+        key: str,
+        value: Any,
+        *,
+        now: datetime | None = None,
+    ) -> None:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO team_settings (key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, dumps(value), timestamp),
+            )
 
     def build_team_interest_screening_for_records(
         self,
@@ -1066,6 +1112,7 @@ class TeamResearchDatabase:
         report: str = "",
         status: str = "succeeded",
         error: str = "",
+        source_errors: list[dict[str, Any]] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
@@ -1139,6 +1186,7 @@ class TeamResearchDatabase:
                     "imported_count": len(imported_results),
                     "report": report,
                     "error": error,
+                    "source_errors": source_errors or [],
                 }
             )
             self._upsert_literature_radar_run(connection, run)
@@ -1953,6 +2001,40 @@ def radar_paper_source_ids(paper: dict[str, Any]) -> list[str]:
         if source_id:
             source_ids.add(str(source_id))
     return sorted(source_ids)
+
+
+def merge_radar_item_metadata(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+    current = dict(existing) if isinstance(existing, dict) else {}
+    merged = {**current, **incoming}
+    merged["links"] = {**(current.get("links") or {}), **(incoming.get("links") or {})}
+    merged["source_records"] = merge_source_records(
+        current.get("source_records") or [],
+        incoming.get("source_records") or [],
+    )
+    current_recommendation = current.get("recommendation") or {}
+    incoming_recommendation = incoming.get("recommendation") or {}
+    merged["recommendation"] = {**current_recommendation, **incoming_recommendation}
+    return merged
+
+
+def merge_source_records(*record_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged = []
+    seen = set()
+    for records in record_lists:
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            key = (
+                str(record.get("source_id") or ""),
+                str(record.get("source_paper_id") or ""),
+                str(record.get("query_url") or ""),
+                str(record.get("collected_at") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+    return merged
 
 
 def build_literature_radar_recommendation_record(

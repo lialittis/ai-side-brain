@@ -63,6 +63,12 @@ graph expansion. OpenReview invitation IDs, OpenReview venue profiles, Semantic
 Scholar author IDs, and DBLP venue profiles automatically enable their matching
 collectors for that run.
 
+The form can save source choices, limits, summary provider, tracked authors,
+seed papers, and venue profiles as Team defaults. Saved defaults live in the
+existing `team_settings` table under `literature_radar_defaults`, so the team
+can configure daily-use radar settings once and reuse them for later ad hoc
+runs.
+
 ## CLI Runner
 
 The current runnable Team entry point is:
@@ -197,9 +203,18 @@ Every `radar-run` creates durable Team-side history in SQLite:
   run, including score, label, novelty, PDF-access decision metadata, summary,
   imported item ID, and the full recommendation JSON.
 
+When a recommendation is imported, the Team library item also keeps a compact
+`radar` object and top-level `pdf_access` object. This lets the Latest Papers UI
+show the same access-policy decision as the Radar page and lets duplicate radar
+hits refresh provenance on an existing library item instead of creating another
+paper.
+
 This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
 imported, and show whether a candidate is new this run or has appeared before.
+If one source fails during a multi-source run, the run is stored as `partial`;
+successful source results are still ranked and reported, and source errors are
+shown in the Radar page and report.
 
 ## Scheduling
 
@@ -213,6 +228,8 @@ team/scripts/run_literature_radar.sh
 The script writes a Markdown report and matching JSON result into `team/logs/`.
 It reads `.env` first and supports these optional variables:
 
+- `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
+  `/radar` form, then let explicit environment variables override them.
 - `RADAR_SOURCES`: space-separated sources. Default:
   `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
   Optional seed-based sources include `semantic_scholar_recommendations`,
@@ -248,6 +265,11 @@ Example cron entry for 07:30 daily:
 ```cron
 30 7 * * * cd /home/tianchi/workspace/ai-side-brain && team/scripts/run_literature_radar.sh >> team/logs/literature-radar-cron.log 2>&1
 ```
+
+User-level systemd timer templates are also available under
+`infra/systemd/user/`; see `infra/systemd/README.md`. The Team timer runs
+`team/scripts/run_literature_radar.sh` with `RADAR_USE_SAVED_DEFAULTS=1`, so it
+can reuse the source/author/seed defaults saved from the `/radar` page.
 
 ## Next Collector Work
 

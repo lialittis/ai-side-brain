@@ -11,6 +11,7 @@ from unittest import mock
 from shared.literature_radar import create_radar_paper, recommend_papers
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
+    RADAR_SETTINGS_KEY,
     add_paper_comment,
     add_paper_tag,
     add_team_interest,
@@ -141,6 +142,15 @@ class TeamResearchWebTest(unittest.TestCase):
                 collected_papers=[paper],
                 recommendations=recommendations,
                 report="# test",
+                status="partial",
+                source_errors=[
+                    {
+                        "source_id": "dblp",
+                        "error_type": "RuntimeError",
+                        "error": "DBLP unavailable",
+                        "occurred_at": "2026-07-01T10:01:00+00:00",
+                    }
+                ],
                 now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
             )
 
@@ -166,6 +176,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Baseline Paper", html)
             self.assertIn("shared interests: memory safety", html)
             self.assertIn("local-radar-summary-v0.1", html)
+            self.assertIn("Status: partial", html)
+            self.assertIn("Source errors", html)
+            self.assertIn("DBLP unavailable", html)
             self.assertIn(">New<", html)
             self.assertIn("license: unknown", html)
             self.assertIn("accessed:", html)
@@ -226,6 +239,46 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(kwargs["openreview_invitations"], ["ICLR.cc/2026/Conference/-/Submission"])
         self.assertEqual(kwargs["openreview_venue_profiles"], ["iclr", "ai_ml"])
         self.assertEqual(kwargs["dblp_venue_profiles"], ["security", "systems"])
+        self.assertIsNone(database.get_team_setting(RADAR_SETTINGS_KEY))
+
+    def test_literature_radar_web_run_can_save_and_render_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch(
+                "team.research_web.run_team_literature_radar",
+                return_value={"run_id": "radar_run_saved_defaults"},
+            ):
+                run_id = run_literature_radar_from_web(
+                    database,
+                    {
+                        "source_openalex_authors": "1",
+                        "max_results": "7",
+                        "limit": "3",
+                        "summary_provider": "openrouter",
+                        "openalex_author_ids": "A123456789",
+                        "venue_profiles": "security",
+                        "save_defaults": "1",
+                    },
+                )
+
+            self.assertEqual(run_id, "radar_run_saved_defaults")
+            settings = database.get_team_setting(RADAR_SETTINGS_KEY)
+            self.assertEqual(settings["sources"], ["openalex_authors", "dblp_venues"])
+            self.assertEqual(settings["max_results"], 7)
+            self.assertEqual(settings["limit"], 3)
+            self.assertFalse(settings["summarize"])
+            self.assertEqual(settings["summary_provider"], "openrouter")
+            self.assertEqual(settings["openalex_author_ids"], ["A123456789"])
+            self.assertEqual(settings["venue_profiles"], ["security"])
+
+            html = render_literature_radar_page(database)
+            self.assertIn('name="source_openalex_authors" value="1" checked', html)
+            self.assertIn('name="max_results" min="1" max="100" value="7"', html)
+            self.assertIn('name="limit" min="1" max="50" value="3"', html)
+            self.assertIn('<option value="openrouter" selected>OpenRouter</option>', html)
+            self.assertIn(">A123456789</textarea>", html)
+            self.assertIn('name="venue_profiles" placeholder="security, systems" value="security"', html)
+            self.assertIn("Save as defaults", html)
 
     def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -321,6 +374,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(len(latest), 1)
             self.assertEqual(latest[0]["item"]["id"], item_id)
             self.assertEqual(latest[0]["item"]["title"], "System Security for Memory Safe Agents")
+            self.assertEqual(latest[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
+            self.assertEqual(latest[0]["item"]["pdf_access"]["reason"], "metadata_only_no_legal_pdf_found")
             stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
             self.assertEqual(stored_recommendation["imported_item_id"], item_id)
             self.assertEqual(stored_recommendation["import_result"]["status"], "imported")
@@ -328,6 +383,8 @@ class TeamResearchWebTest(unittest.TestCase):
             html = render_literature_radar_page(database, run_id=run["id"])
             self.assertIn("In Library", html)
             self.assertNotIn("Add to Library", html)
+            latest_html = render_latest_papers_page(database)
+            self.assertIn("PDF: metadata_only_no_legal_pdf_found", latest_html)
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

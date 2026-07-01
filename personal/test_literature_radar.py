@@ -12,6 +12,7 @@ from unittest import mock
 from personal.literature_radar import (
     ensure_personal_radar_topic_profile,
     read_personal_radar_index,
+    read_personal_radar_paper_history,
     read_personal_radar_topic_profile,
     run_personal_literature_radar,
 )
@@ -67,9 +68,88 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 runs[0]["recommendations"][0]["summary"]["source_trace"]["processor"],
                 "local-radar-summary-v0.1",
             )
+            paper_history = read_personal_radar_paper_history(root)
+            history_record = paper_history[paper["dedupe_key"]]
+            self.assertEqual(history_record["title"], "Memory Safety for Agentic Security")
+            self.assertEqual(history_record["first_seen_at"], "2026-07-01T12:00:00+00:00")
+            self.assertEqual(history_record["latest_seen_at"], "2026-07-01T12:00:00+00:00")
+            self.assertEqual(history_record["seen_count"], 1)
+            self.assertEqual(history_record["source_ids"], ["arxiv"])
+            self.assertTrue(history_record["pdf_access"]["can_download"])
+            self.assertEqual(history_record["latest_recommendation"]["rank"], 1)
             self.assertIn("Novelty: new this run", report_path.read_text(encoding="utf-8"))
             self.assertIn("Summary: Memory safety and LLM security", report_path.read_text(encoding="utf-8"))
             self.assertEqual(arxiv.call_args.kwargs["query_terms"], ["memory safety"])
+
+    def test_run_personal_literature_radar_tracks_seen_before_paper_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00009",
+                title="Memory Safety Radar History",
+                abstract="Memory safety and system security for repeated radar tracking.",
+                identifiers={"arxiv_id": "2601.00009"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00009"},
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                first = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                second = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertTrue(first["recommendations"][0]["novelty"]["is_new"])
+            self.assertFalse(second["recommendations"][0]["novelty"]["is_new"])
+            self.assertEqual(second["recommendations"][0]["novelty"]["seen_count_before_run"], 1)
+            history_record = read_personal_radar_paper_history(root)[paper["dedupe_key"]]
+            self.assertEqual(history_record["first_seen_at"], "2026-07-01T12:00:00+00:00")
+            self.assertEqual(history_record["latest_seen_at"], "2026-07-02T12:00:00+00:00")
+            self.assertEqual(history_record["seen_count"], 2)
+            self.assertEqual(history_record["latest_recommendation"]["novelty"]["seen_count_before_run"], 1)
+            self.assertIn("Novelty: seen before", second["report"])
+
+    def test_run_personal_literature_radar_records_partial_source_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00012",
+                title="Personal Partial Radar",
+                abstract="Memory safety and LLM security.",
+                identifiers={"arxiv_id": "2601.00012"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00012"},
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
+                with mock.patch("personal.literature_radar.collect_dblp_publications", side_effect=RuntimeError("DBLP unavailable")):
+                    result = run_personal_literature_radar(
+                        root_path=root,
+                        sources=["arxiv", "dblp"],
+                        query_terms=["memory safety"],
+                        max_results=1,
+                        now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                    )
+
+            self.assertEqual(result["run"]["status"], "partial")
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(result["source_errors"][0]["source_id"], "dblp")
+            self.assertEqual(result["source_errors"][0]["error_type"], "RuntimeError")
+            self.assertIn("DBLP unavailable", result["source_errors"][0]["error"])
+            self.assertIn("## Source Errors", result["report"])
+            runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["status"], "partial")
+            self.assertEqual(runs[0]["source_errors"][0]["source_id"], "dblp")
 
     def test_run_personal_literature_radar_marks_seen_before_and_links_prior_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -226,6 +306,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             history = json.loads(stdout.getvalue())
             self.assertEqual(history[0]["recommendation_count"], 1)
             self.assertEqual(history[0]["recommendations"][0]["title"], "Agentic Security for Memory Safety")
+
+            papers_stdout = io.StringIO()
+            with contextlib.redirect_stdout(papers_stdout):
+                papers_code = personal_literature_radar.main(["papers", "--root-path", str(root), "--json"])
+
+            self.assertEqual(papers_code, 0)
+            papers = json.loads(papers_stdout.getvalue())
+            self.assertEqual(papers[0]["title"], "Agentic Security for Memory Safety")
+            self.assertEqual(papers[0]["seen_count"], 1)
 
     def test_personal_literature_radar_profile_init_writes_default_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

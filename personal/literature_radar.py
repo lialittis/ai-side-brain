@@ -12,12 +12,13 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    assess_pdf_access,
     build_recommendation_report,
     collect_arxiv,
     collect_crossref_works,
@@ -36,6 +37,7 @@ from shared.literature_radar import (
     collect_semantic_scholar_search,
     collect_usenix_security_accepted_papers,
     default_radar_topic_profile,
+    dedupe_key as radar_dedupe_key,
     enrich_paper_with_unpaywall,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
@@ -58,6 +60,7 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
     "semantic_scholar_recommendations",
 }
 PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
+PERSONAL_RADAR_PAPER_HISTORY_NAME = "literature-radar-papers.json"
 PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
 
 
@@ -103,6 +106,7 @@ def run_personal_literature_radar(
         selected_sources.append("semantic_scholar_recommendations")
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     run_id = personal_radar_run_id(selected_sources, selected_terms, selected_now)
+    source_errors: list[dict[str, Any]] = []
     collected = collect_personal_radar_candidates(
         sources=selected_sources,
         query_terms=selected_terms,
@@ -122,6 +126,7 @@ def run_personal_literature_radar(
         openreview_venue_profiles=openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=usenix_security_cycles,
+        source_errors=source_errors,
         now=selected_now,
     )
     recommendations = recommend_papers(
@@ -154,6 +159,7 @@ def run_personal_literature_radar(
         title="Personal Literature Radar Report",
         generated_at=selected_now,
     )
+    report = append_radar_source_errors_to_report(report, source_errors)
     report_path = None
     if write_report:
         report_path = write_personal_radar_report(root, report, selected_now)
@@ -164,7 +170,14 @@ def run_personal_literature_radar(
         topic_profile=selected_topic_profile,
         collected_count=len(collected),
         recommendations=recommendations,
+        source_errors=source_errors,
         report_path=report_path,
+        now=selected_now,
+    )
+    update_personal_radar_paper_history(
+        root,
+        collected_papers=collected,
+        recommendations=recommendations,
         now=selected_now,
     )
     append_personal_radar_index(root, run_record)
@@ -175,6 +188,7 @@ def run_personal_literature_radar(
         "query_terms": selected_terms,
         "collected_count": len(collected),
         "recommendation_count": len(recommendations),
+        "source_errors": source_errors,
         "recommendations": recommendations,
         "report": report,
         "report_path": str(report_path) if report_path else None,
@@ -228,6 +242,13 @@ def annotate_personal_recommendation_novelty(
 
 
 def personal_radar_history_by_dedupe_key(root: Path) -> dict[str, dict[str, Any]]:
+    paper_history = read_personal_radar_paper_history(root)
+    if paper_history:
+        return paper_history
+    return personal_radar_history_from_run_index(root)
+
+
+def personal_radar_history_from_run_index(root: Path) -> dict[str, dict[str, Any]]:
     histories: dict[str, dict[str, Any]] = {}
     for run in reversed(read_personal_radar_index(root)):
         timestamp = run.get("completed_at") or run.get("started_at")
@@ -281,6 +302,41 @@ def personal_radar_context_items(root: Path, *, limit: int = 120) -> list[dict[s
     return context_items
 
 
+def collect_radar_source(
+    *,
+    source_id: str,
+    source_errors: list[dict[str, Any]] | None,
+    now: datetime | None,
+    collector: Callable[[], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    try:
+        return collector()
+    except Exception as error:
+        if source_errors is None:
+            raise
+        source_errors.append(radar_source_error(source_id, error, now=now))
+        return []
+
+
+def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
+    return {
+        "source_id": source_id,
+        "error_type": error.__class__.__name__,
+        "error": str(error),
+        "occurred_at": iso_timestamp(now or datetime.now(timezone.utc)),
+    }
+
+
+def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
+    if not source_errors:
+        return report
+    lines = [report.rstrip(), "", "## Source Errors", ""]
+    for error in source_errors:
+        lines.append(f"- `{error.get('source_id')}`: {error.get('error_type')}: {error.get('error')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def collect_personal_radar_candidates(
     *,
     sources: list[str],
@@ -301,6 +357,7 @@ def collect_personal_radar_candidates(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    source_errors: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     supported_sources = {
@@ -328,127 +385,162 @@ def collect_personal_radar_candidates(
 
     papers = []
     selected_year = conference_year or radar_year(now)
-    if "arxiv" in sources:
-        papers.extend(collect_arxiv(query_terms=query_terms, max_results=max_results))
-    if "crossref" in sources:
+    def collect_source(source_id: str, collector: Callable[[], list[dict[str, Any]]]) -> None:
         papers.extend(
-            collect_crossref_works(
+            collect_radar_source(
+                source_id=source_id,
+                source_errors=source_errors,
+                now=now,
+                collector=collector,
+            )
+        )
+
+    if "arxiv" in sources:
+        collect_source("arxiv", lambda: collect_arxiv(query_terms=query_terms, max_results=max_results))
+    if "crossref" in sources:
+        collect_source(
+            "crossref",
+            lambda: collect_crossref_works(
                 query_terms=query_terms,
                 max_results=max_results,
                 mailto=crossref_mailto or os.environ.get("CROSSREF_MAILTO"),
-            )
+            ),
         )
     if "dblp" in sources:
-        for term in query_terms:
-            papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+        collect_source(
+            "dblp",
+            lambda: [
+                paper
+                for term in query_terms
+                for paper in collect_dblp_publications(query=term, max_results=max_results)
+            ],
+        )
     if "dblp_authors" in sources:
-        papers.extend(
-            collect_dblp_author_publications(
+        collect_source(
+            "dblp_authors",
+            lambda: collect_dblp_author_publications(
                 author_pids=required_dblp_author_pids(dblp_author_pids),
                 max_results=max_results,
-            )
+            ),
         )
     if "dblp_venues" in sources:
-        papers.extend(
-            collect_dblp_venue_publications(
+        collect_source(
+            "dblp_venues",
+            lambda: collect_dblp_venue_publications(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_year,
                 max_results=max_results,
-            )
+            ),
         )
     if "semantic_scholar" in sources:
-        papers.extend(
-            collect_semantic_scholar_search(
+        collect_source(
+            "semantic_scholar",
+            lambda: collect_semantic_scholar_search(
                 query_terms=query_terms,
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_authors" in sources:
-        papers.extend(
-            collect_semantic_scholar_author_papers(
+        collect_source(
+            "semantic_scholar_authors",
+            lambda: collect_semantic_scholar_author_papers(
                 author_ids=required_semantic_scholar_author_ids(semantic_scholar_author_ids),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_references" in sources:
-        papers.extend(
-            collect_semantic_scholar_related_papers(
+        collect_source(
+            "semantic_scholar_references",
+            lambda: collect_semantic_scholar_related_papers(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="references",
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_citations" in sources:
-        papers.extend(
-            collect_semantic_scholar_related_papers(
+        collect_source(
+            "semantic_scholar_citations",
+            lambda: collect_semantic_scholar_related_papers(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="citations",
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_recommendations" in sources:
-        papers.extend(
-            collect_semantic_scholar_recommendations(
+        collect_source(
+            "semantic_scholar_recommendations",
+            lambda: collect_semantic_scholar_recommendations(
                 positive_paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "openalex" in sources:
-        papers.extend(
-            collect_openalex_works(
+        collect_source(
+            "openalex",
+            lambda: collect_openalex_works(
                 query_terms=query_terms,
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openalex_authors" in sources:
-        papers.extend(
-            collect_openalex_author_works(
+        collect_source(
+            "openalex_authors",
+            lambda: collect_openalex_author_works(
                 author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openalex_venues" in sources:
-        papers.extend(
-            collect_openalex_venue_publications(
+        collect_source(
+            "openalex_venues",
+            lambda: collect_openalex_venue_publications(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_year,
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openreview" in sources:
-        selected_invitations = openreview_invitations or env_list("OPENREVIEW_INVITATIONS")
-        if not selected_invitations:
-            raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
-        papers.extend(collect_openreview_notes(invitations=selected_invitations, max_results=max_results))
+        collect_source(
+            "openreview",
+            lambda: collect_openreview_notes(
+                invitations=required_openreview_invitations(openreview_invitations),
+                max_results=max_results,
+            ),
+        )
     if "openreview_venues" in sources:
-        papers.extend(
-            collect_openreview_venue_submissions(
+        collect_source(
+            "openreview_venues",
+            lambda: collect_openreview_venue_submissions(
                 venue_profiles=openreview_venue_profiles or env_list("RADAR_OPENREVIEW_VENUES"),
                 year=selected_year,
                 accepted_only=openreview_accepted_only,
                 max_results=max_results,
-            )
+            ),
         )
     if "usenix_security" in sources:
-        for cycle in usenix_security_cycles or [1]:
-            papers.extend(
-                collect_usenix_security_accepted_papers(
+        collect_source(
+            "usenix_security",
+            lambda: [
+                paper
+                for cycle in usenix_security_cycles or [1]
+                for paper in collect_usenix_security_accepted_papers(
                     year=selected_year,
                     cycle=cycle,
                     max_results=max_results,
                 )
-            )
+            ],
+        )
     if "ndss" in sources:
-        papers.extend(collect_ndss_accepted_papers(year=selected_year, max_results=max_results))
+        collect_source("ndss", lambda: collect_ndss_accepted_papers(year=selected_year, max_results=max_results))
 
     selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
     if selected_unpaywall_email:
@@ -503,6 +595,13 @@ def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[st
             "or RADAR_OPENALEX_AUTHOR_IDS."
         )
     return selected_author_ids
+
+
+def required_openreview_invitations(invitations: list[str] | None = None) -> list[str]:
+    selected_invitations = invitations or env_list("OPENREVIEW_INVITATIONS")
+    if not selected_invitations:
+        raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
+    return selected_invitations
 
 
 def enrich_personal_radar_paper_with_unpaywall(
@@ -598,12 +697,14 @@ def build_personal_radar_run_record(
     topic_profile: dict[str, Any],
     collected_count: int,
     recommendations: list[dict[str, Any]],
+    source_errors: list[dict[str, Any]] | None = None,
     report_path: Path | None,
     now: datetime,
 ) -> dict[str, Any]:
+    errors = source_errors or []
     return {
         "id": run_id,
-        "status": "succeeded",
+        "status": "partial" if errors else "succeeded",
         "started_at": iso_timestamp(now),
         "completed_at": iso_timestamp(now),
         "sources": sources,
@@ -612,6 +713,7 @@ def build_personal_radar_run_record(
         "topic_profile_name": topic_profile.get("name") or "",
         "collected_count": collected_count,
         "recommendation_count": len(recommendations),
+        "source_errors": errors,
         "report_path": str(report_path) if report_path else None,
         "recommendations": [
             {
@@ -629,6 +731,105 @@ def build_personal_radar_run_record(
             for index, recommendation in enumerate(recommendations, start=1)
         ],
     }
+
+
+def update_personal_radar_paper_history(
+    root: Path,
+    *,
+    collected_papers: list[dict[str, Any]],
+    recommendations: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, dict[str, Any]]:
+    histories = read_personal_radar_paper_history(root)
+    timestamp = iso_timestamp(now)
+    seen_this_run: set[str] = set()
+    for paper in collected_papers:
+        dedupe_key = personal_radar_paper_key(paper)
+        if not dedupe_key:
+            continue
+        histories[dedupe_key] = build_personal_radar_paper_history_record(
+            existing=histories.get(dedupe_key),
+            paper=paper,
+            timestamp=timestamp,
+            access_time=now,
+            count_seen=True,
+        )
+        seen_this_run.add(dedupe_key)
+    for rank, recommendation in enumerate(recommendations, start=1):
+        paper = recommendation.get("paper") or {}
+        dedupe_key = personal_radar_paper_key(paper)
+        if not dedupe_key:
+            continue
+        histories[dedupe_key] = build_personal_radar_paper_history_record(
+            existing=histories.get(dedupe_key),
+            paper=paper,
+            recommendation=recommendation,
+            rank=rank,
+            timestamp=timestamp,
+            access_time=now,
+            count_seen=dedupe_key not in seen_this_run,
+        )
+        seen_this_run.add(dedupe_key)
+    write_personal_radar_paper_history(root, histories)
+    return histories
+
+
+def build_personal_radar_paper_history_record(
+    *,
+    existing: dict[str, Any] | None,
+    paper: dict[str, Any],
+    timestamp: str,
+    access_time: datetime,
+    recommendation: dict[str, Any] | None = None,
+    rank: int | None = None,
+    count_seen: bool = True,
+) -> dict[str, Any]:
+    current = existing or {}
+    dedupe_key = personal_radar_paper_key(paper)
+    source_ids = sorted(set(current.get("source_ids") or []) | set(personal_radar_paper_source_ids(paper)))
+    record = {
+        "dedupe_key": dedupe_key,
+        "title": paper.get("title") or current.get("title") or dedupe_key,
+        "first_seen_at": current.get("first_seen_at") or timestamp,
+        "latest_seen_at": timestamp,
+        "seen_count": int(current.get("seen_count") or 0) + (1 if count_seen else 0),
+        "source_ids": source_ids,
+        "imported_item_id": current.get("imported_item_id"),
+        "pdf_access": (recommendation or {}).get("pdf_access") or assess_pdf_access(paper, now=access_time),
+        "paper": paper,
+    }
+    if recommendation:
+        scoring = recommendation.get("scoring") or {}
+        record["latest_recommendation"] = {
+            "rank": rank,
+            "score": scoring.get("score"),
+            "label": scoring.get("label"),
+            "novelty": recommendation.get("novelty"),
+            "context": recommendation.get("context"),
+            "summary": recommendation.get("summary"),
+            "why_relevant": recommendation.get("why_relevant"),
+            "recommended_action": recommendation.get("recommended_action"),
+        }
+    elif current.get("latest_recommendation"):
+        record["latest_recommendation"] = current["latest_recommendation"]
+    return record
+
+
+def personal_radar_paper_key(paper: dict[str, Any]) -> str:
+    if paper.get("dedupe_key"):
+        return str(paper["dedupe_key"])
+    return radar_dedupe_key(paper)
+
+
+def personal_radar_paper_source_ids(paper: dict[str, Any]) -> list[str]:
+    source_ids = set()
+    if paper.get("source_id"):
+        source_ids.add(str(paper["source_id"]))
+    for source_record in paper.get("source_records") or []:
+        source_id = source_record.get("source_id")
+        if source_id:
+            source_ids.add(str(source_id))
+    return sorted(source_ids)
 
 
 def write_personal_radar_report(root: Path, report: str, now: datetime) -> Path:
@@ -657,6 +858,26 @@ def read_personal_radar_index(root: Path | None = None) -> list[dict[str, Any]]:
 
 def personal_radar_index_path(root: Path) -> Path:
     return root / "indexes" / PERSONAL_RADAR_INDEX_NAME
+
+
+def read_personal_radar_paper_history(root: Path | None = None) -> dict[str, dict[str, Any]]:
+    path = personal_radar_paper_history_path(root or repo_root())
+    if not path.exists():
+        return {}
+    records = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(records, dict):
+        raise ValueError(f"Personal radar paper history must be a JSON object: {path}")
+    return {str(key): value for key, value in records.items() if isinstance(value, dict)}
+
+
+def write_personal_radar_paper_history(root: Path, records: dict[str, dict[str, Any]]) -> None:
+    path = personal_radar_paper_history_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(records, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def personal_radar_paper_history_path(root: Path) -> Path:
+    return root / "indexes" / PERSONAL_RADAR_PAPER_HISTORY_NAME
 
 
 def personal_radar_topic_profile_path(root: Path, *, topic_profile_path: Path | None = None) -> Path:

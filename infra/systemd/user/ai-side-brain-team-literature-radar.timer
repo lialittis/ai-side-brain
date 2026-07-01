@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Side-Brain Team Literature Radar daily
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=ai-side-brain-team-literature-radar.service
+
+[Install]
+WantedBy=timers.target

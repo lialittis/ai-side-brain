@@ -22,20 +22,37 @@ REPORT_PATH="$OUTPUT_DIR/literature-radar-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/literature-radar-$STAMP.json"
 mkdir -p "$OUTPUT_DIR"
 
-read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+USE_SAVED_DEFAULTS="${RADAR_USE_SAVED_DEFAULTS:-0}"
 
 ARGS=(
   "team/research_cli.py"
   "radar-run"
-  "--max-results" "${RADAR_MAX_RESULTS:-25}"
-  "--limit" "${RADAR_RECOMMENDATION_LIMIT:-10}"
   "--output" "$REPORT_PATH"
   "--json"
 )
 
-for source in "${SOURCES[@]}"; do
-  ARGS+=("--source" "$source")
-done
+if [[ "$USE_SAVED_DEFAULTS" == "1" ]]; then
+  ARGS+=("--use-saved-defaults")
+fi
+
+if [[ -n "${RADAR_MAX_RESULTS:-}" ]]; then
+  ARGS+=("--max-results" "$RADAR_MAX_RESULTS")
+elif [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
+  ARGS+=("--max-results" "25")
+fi
+
+if [[ -n "${RADAR_RECOMMENDATION_LIMIT:-}" ]]; then
+  ARGS+=("--limit" "$RADAR_RECOMMENDATION_LIMIT")
+elif [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
+  ARGS+=("--limit" "10")
+fi
+
+if [[ -n "${RADAR_SOURCES:-}" || "$USE_SAVED_DEFAULTS" != "1" ]]; then
+  read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+  for source in "${SOURCES[@]}"; do
+    ARGS+=("--source" "$source")
+  done
+fi
 
 if [[ -n "${RADAR_DB_PATH:-}" ]]; then
   ARGS+=("--db-path" "$RADAR_DB_PATH")

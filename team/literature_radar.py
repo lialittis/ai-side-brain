@@ -10,6 +10,7 @@ from typing import Any, Callable
 from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
+    assess_pdf_access,
     build_recommendation_report,
     collect_arxiv,
     collect_crossref_works,
@@ -44,6 +45,7 @@ from team.literature_radar_ai import summarize_radar_recommendations_with_openro
 
 
 TEAM_RADAR_SCORER_PROCESSOR = "team-interest-radar-scorer-v0.1"
+TEAM_RADAR_SETTINGS_KEY = "literature_radar_defaults"
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "team-literature-radar",
     "name": "Team Literature Radar",
@@ -128,6 +130,7 @@ def run_team_literature_radar(
     collected: list[dict[str, Any]] = []
     recommendations: list[dict[str, Any]] = []
     imported: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
     report = ""
     try:
         collected = collect_team_radar_candidates(
@@ -149,6 +152,7 @@ def run_team_literature_radar(
             openreview_venue_profiles=openreview_venue_profiles,
             openreview_accepted_only=openreview_accepted_only,
             usenix_security_cycles=usenix_security_cycles,
+            source_errors=source_errors,
             now=now,
         )
         recommendations = recommend_papers(
@@ -193,6 +197,7 @@ def run_team_literature_radar(
             title="Team Literature Radar Report",
             generated_at=now,
         )
+        report = append_radar_source_errors_to_report(report, source_errors)
     except Exception as error:
         database.complete_literature_radar_run(
             run["id"],
@@ -202,6 +207,7 @@ def run_team_literature_radar(
             report=report,
             status="failed",
             error=str(error),
+            source_errors=source_errors,
             now=now,
         )
         raise
@@ -211,6 +217,8 @@ def run_team_literature_radar(
         recommendations=recommendations,
         imported=imported,
         report=report,
+        status="partial" if source_errors else "succeeded",
+        source_errors=source_errors,
         now=now,
     )
     return {
@@ -221,6 +229,7 @@ def run_team_literature_radar(
         "collected_count": len(collected),
         "recommendation_count": len(recommendations),
         "imported_count": len(imported),
+        "source_errors": source_errors,
         "recommendations": recommendations,
         "imported": imported,
         "report": report,
@@ -379,6 +388,41 @@ def unique_preserving_order(values: list[str]) -> list[str]:
     return unique
 
 
+def collect_radar_source(
+    *,
+    source_id: str,
+    source_errors: list[dict[str, Any]] | None,
+    now: datetime | None,
+    collector: Callable[[], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    try:
+        return collector()
+    except Exception as error:
+        if source_errors is None:
+            raise
+        source_errors.append(radar_source_error(source_id, error, now=now))
+        return []
+
+
+def radar_source_error(source_id: str, error: Exception, *, now: datetime | None = None) -> dict[str, Any]:
+    return {
+        "source_id": source_id,
+        "error_type": error.__class__.__name__,
+        "error": str(error),
+        "occurred_at": iso_timestamp(now or datetime.now(timezone.utc)),
+    }
+
+
+def append_radar_source_errors_to_report(report: str, source_errors: list[dict[str, Any]]) -> str:
+    if not source_errors:
+        return report
+    lines = [report.rstrip(), "", "## Source Errors", ""]
+    for error in source_errors:
+        lines.append(f"- `{error.get('source_id')}`: {error.get('error_type')}: {error.get('error')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def collect_team_radar_candidates(
     *,
     sources: list[str],
@@ -399,6 +443,7 @@ def collect_team_radar_candidates(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    source_errors: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     supported_sources = {
@@ -425,136 +470,167 @@ def collect_team_radar_candidates(
         raise ValueError(f"Unsupported radar source(s): {', '.join(unsupported)}")
     papers = []
     selected_conference_year = conference_year or radar_year(now)
-    if "arxiv" in sources:
-        papers.extend(collect_arxiv(query_terms=query_terms, max_results=max_results))
-    if "crossref" in sources:
+    def collect_source(source_id: str, collector: Callable[[], list[dict[str, Any]]]) -> None:
         papers.extend(
-            collect_crossref_works(
+            collect_radar_source(
+                source_id=source_id,
+                source_errors=source_errors,
+                now=now,
+                collector=collector,
+            )
+        )
+
+    if "arxiv" in sources:
+        collect_source("arxiv", lambda: collect_arxiv(query_terms=query_terms, max_results=max_results))
+    if "crossref" in sources:
+        collect_source(
+            "crossref",
+            lambda: collect_crossref_works(
                 query_terms=query_terms,
                 max_results=max_results,
                 mailto=crossref_mailto or os.environ.get("CROSSREF_MAILTO"),
-            )
+            ),
         )
     if "dblp" in sources:
-        for term in query_terms:
-            papers.extend(collect_dblp_publications(query=term, max_results=max_results))
+        collect_source(
+            "dblp",
+            lambda: [
+                paper
+                for term in query_terms
+                for paper in collect_dblp_publications(query=term, max_results=max_results)
+            ],
+        )
     if "dblp_authors" in sources:
-        papers.extend(
-            collect_dblp_author_publications(
+        collect_source(
+            "dblp_authors",
+            lambda: collect_dblp_author_publications(
                 author_pids=required_dblp_author_pids(dblp_author_pids),
                 max_results=max_results,
-            )
+            ),
         )
     if "dblp_venues" in sources:
-        papers.extend(
-            collect_dblp_venue_publications(
+        collect_source(
+            "dblp_venues",
+            lambda: collect_dblp_venue_publications(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_conference_year,
                 max_results=max_results,
-            )
+            ),
         )
     if "semantic_scholar" in sources:
-        papers.extend(
-            collect_semantic_scholar_search(
+        collect_source(
+            "semantic_scholar",
+            lambda: collect_semantic_scholar_search(
                 query_terms=query_terms,
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_authors" in sources:
-        papers.extend(
-            collect_semantic_scholar_author_papers(
+        collect_source(
+            "semantic_scholar_authors",
+            lambda: collect_semantic_scholar_author_papers(
                 author_ids=required_semantic_scholar_author_ids(semantic_scholar_author_ids),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_references" in sources:
-        papers.extend(
-            collect_semantic_scholar_related_papers(
+        collect_source(
+            "semantic_scholar_references",
+            lambda: collect_semantic_scholar_related_papers(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="references",
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_citations" in sources:
-        papers.extend(
-            collect_semantic_scholar_related_papers(
+        collect_source(
+            "semantic_scholar_citations",
+            lambda: collect_semantic_scholar_related_papers(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="citations",
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "semantic_scholar_recommendations" in sources:
-        papers.extend(
-            collect_semantic_scholar_recommendations(
+        collect_source(
+            "semantic_scholar_recommendations",
+            lambda: collect_semantic_scholar_recommendations(
                 positive_paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
                 api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
-            )
+            ),
         )
     if "openalex" in sources:
-        papers.extend(
-            collect_openalex_works(
+        collect_source(
+            "openalex",
+            lambda: collect_openalex_works(
                 query_terms=query_terms,
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openalex_authors" in sources:
-        papers.extend(
-            collect_openalex_author_works(
+        collect_source(
+            "openalex_authors",
+            lambda: collect_openalex_author_works(
                 author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openalex_venues" in sources:
-        papers.extend(
-            collect_openalex_venue_publications(
+        collect_source(
+            "openalex_venues",
+            lambda: collect_openalex_venue_publications(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_conference_year,
                 max_results=max_results,
                 mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
-            )
+            ),
         )
     if "openreview" in sources:
-        selected_invitations = openreview_invitations or env_list("OPENREVIEW_INVITATIONS")
-        if not selected_invitations:
-            raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
-        papers.extend(
-            collect_openreview_notes(
-                invitations=selected_invitations,
+        collect_source(
+            "openreview",
+            lambda: collect_openreview_notes(
+                invitations=required_openreview_invitations(openreview_invitations),
                 max_results=max_results,
-            )
+            ),
         )
     if "openreview_venues" in sources:
-        papers.extend(
-            collect_openreview_venue_submissions(
+        collect_source(
+            "openreview_venues",
+            lambda: collect_openreview_venue_submissions(
                 venue_profiles=openreview_venue_profiles or env_list("RADAR_OPENREVIEW_VENUES"),
                 year=selected_conference_year,
                 accepted_only=openreview_accepted_only,
                 max_results=max_results,
-            )
+            ),
         )
     if "usenix_security" in sources:
-        for cycle in usenix_security_cycles or [1]:
-            papers.extend(
-                collect_usenix_security_accepted_papers(
+        collect_source(
+            "usenix_security",
+            lambda: [
+                paper
+                for cycle in usenix_security_cycles or [1]
+                for paper in collect_usenix_security_accepted_papers(
                     year=selected_conference_year,
                     cycle=cycle,
                     max_results=max_results,
                 )
-            )
+            ],
+        )
     if "ndss" in sources:
-        papers.extend(
-            collect_ndss_accepted_papers(
+        collect_source(
+            "ndss",
+            lambda: collect_ndss_accepted_papers(
                 year=selected_conference_year,
                 max_results=max_results,
-            )
+            ),
         )
     selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
     if selected_unpaywall_email:
@@ -605,6 +681,13 @@ def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[st
     return selected_author_ids
 
 
+def required_openreview_invitations(invitations: list[str] | None = None) -> list[str]:
+    selected_invitations = invitations or env_list("OPENREVIEW_INVITATIONS")
+    if not selected_invitations:
+        raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
+    return selected_invitations
+
+
 def env_list(name: str) -> list[str]:
     return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
 
@@ -645,11 +728,18 @@ def enrich_team_radar_paper_with_unpaywall(
 def build_team_run_from_radar_paper(
     paper: dict[str, Any],
     *,
+    recommendation: dict[str, Any] | None = None,
     project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
     actor: str = "literature-radar",
     now: datetime | None = None,
 ) -> TeamResearchRunResult:
     source_type, source_value = source_for_radar_paper(paper)
+    selected_now = now or datetime.now(timezone.utc)
+    radar_metadata = build_radar_import_metadata(
+        paper,
+        recommendation=recommendation,
+        now=selected_now,
+    )
     metadata = {
         "title": paper.get("title") or source_value,
         "authors": paper.get("authors") or [],
@@ -660,17 +750,10 @@ def build_team_run_from_radar_paper(
         "identifiers": paper.get("identifiers") or {},
         "url": landing_url(paper),
         "tags": tags_from_radar_paper(paper),
-        "radar": {
-            "radar_id": paper.get("id"),
-            "source_id": paper.get("source_id"),
-            "source_paper_id": paper.get("source_paper_id"),
-            "dedupe_key": paper.get("dedupe_key"),
-            "source_records": paper.get("source_records") or [],
-            "links": paper.get("links") or {},
-            "discovered_at": paper.get("discovered_at"),
-        },
+        "pdf_access": radar_metadata["pdf_access"],
+        "radar": radar_metadata,
     }
-    return build_team_research_run(
+    result = build_team_research_run(
         source_type=source_type,
         source_value=source_value,
         metadata=metadata,
@@ -678,8 +761,48 @@ def build_team_run_from_radar_paper(
         project_id=project_id,
         submitted_by=actor,
         extracted_text=paper.get("abstract") or "",
-        now=now,
+        now=selected_now,
     )
+    result.item["pdf_access"] = radar_metadata["pdf_access"]
+    result.item["radar"] = radar_metadata
+    result.card["source_trace"]["radar"] = {
+        "dedupe_key": radar_metadata["dedupe_key"],
+        "source_id": radar_metadata["source_id"],
+        "recommended_action": radar_metadata["recommendation"].get("recommended_action"),
+    }
+    return result
+
+
+def build_radar_import_metadata(
+    paper: dict[str, Any],
+    *,
+    recommendation: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_recommendation = recommendation or {}
+    scoring = selected_recommendation.get("scoring") or {}
+    pdf_access = selected_recommendation.get("pdf_access") or assess_pdf_access(paper, now=now)
+    return {
+        "radar_id": paper.get("id"),
+        "source_id": paper.get("source_id"),
+        "source_paper_id": paper.get("source_paper_id"),
+        "dedupe_key": paper.get("dedupe_key"),
+        "source_records": paper.get("source_records") or [],
+        "links": paper.get("links") or {},
+        "discovered_at": paper.get("discovered_at"),
+        "pdf_access": pdf_access,
+        "recommendation": {
+            "score": scoring.get("score"),
+            "label": scoring.get("label"),
+            "why_relevant": selected_recommendation.get("why_relevant") or "",
+            "recommended_action": selected_recommendation.get("recommended_action") or "",
+            "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
+            "matched_negative_keywords": scoring.get("matched_negative_keywords") or [],
+            "novelty": selected_recommendation.get("novelty") or {},
+            "context": selected_recommendation.get("context") or {},
+            "summary": selected_recommendation.get("summary") or {},
+        },
+    }
 
 
 def import_radar_recommendation(
@@ -691,14 +814,29 @@ def import_radar_recommendation(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     paper = recommendation.get("paper") or recommendation
+    selected_now = now or datetime.now(timezone.utc)
+    radar_metadata = build_radar_import_metadata(
+        paper,
+        recommendation=recommendation,
+        now=selected_now,
+    )
     existing_item = find_existing_radar_item(database, paper)
     if existing_item:
-        database.set_item_tags(existing_item["id"], sorted({*database.get_item_tags(existing_item["id"]), *tags_from_radar_paper(paper)}))
-        screening = database.apply_team_interest_relevance(existing_item["id"], now=now)
+        database.update_item_radar_metadata(existing_item["id"], radar_metadata, now=selected_now)
+        database.set_item_tags(
+            existing_item["id"],
+            sorted({*database.get_item_tags(existing_item["id"]), *tags_from_radar_paper(paper)}),
+        )
+        screening = database.apply_team_interest_relevance(existing_item["id"], now=selected_now)
         return {"item_id": existing_item["id"], "status": "existing", "screening": screening}
 
-    selected_now = now or datetime.now(timezone.utc)
-    result = build_team_run_from_radar_paper(paper, project_id=project_id, actor=actor, now=selected_now)
+    result = build_team_run_from_radar_paper(
+        paper,
+        recommendation=recommendation,
+        project_id=project_id,
+        actor=actor,
+        now=selected_now,
+    )
     database.write_run(result, include_library_entry=False)
     database.set_item_tags(result.item["id"], tags_from_radar_paper(paper), now=selected_now)
     accepted = database.accept_item(

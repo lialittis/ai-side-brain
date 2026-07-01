@@ -24,7 +24,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import example_topic_profiles, topic_profile_by_id
-from team.literature_radar import DEFAULT_RADAR_SOURCES, import_radar_recommendation, run_team_literature_radar
+from team.literature_radar import (
+    DEFAULT_RADAR_SOURCES,
+    TEAM_RADAR_SETTINGS_KEY,
+    import_radar_recommendation,
+    run_team_literature_radar,
+)
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -69,6 +74,16 @@ RADAR_WEB_SEED_SOURCES = {
     "semantic_scholar_citations",
     "semantic_scholar_references",
     "semantic_scholar_recommendations",
+}
+RADAR_SETTINGS_KEY = TEAM_RADAR_SETTINGS_KEY
+RADAR_LIST_SETTING_KEYS = {
+    "semantic_scholar_author_ids",
+    "dblp_author_pids",
+    "openalex_author_ids",
+    "seed_paper_ids",
+    "openreview_invitations",
+    "openreview_venue_profiles",
+    "venue_profiles",
 }
 
 
@@ -673,7 +688,7 @@ def render_literature_radar_page(
       <section class="panel">
         <h2>Runs</h2>
         {render_radar_run_list(runs, selected_run)}
-        {render_radar_run_form()}
+        {render_radar_run_form(database)}
       </section>
       <section class="panel">
         {render_radar_run_detail(selected_run, recommendations)}
@@ -683,8 +698,12 @@ def render_literature_radar_page(
     return page("Literature Radar", body, active="radar")
 
 
-def render_radar_run_form() -> str:
-    sources = "\n".join(render_radar_source_checkbox(source_id, label) for source_id, label in RADAR_WEB_SOURCE_OPTIONS)
+def render_radar_run_form(database: TeamResearchDatabase) -> str:
+    settings = radar_form_settings(database)
+    sources = "\n".join(
+        render_radar_source_checkbox(source_id, label, settings=settings)
+        for source_id, label in RADAR_WEB_SOURCE_OPTIONS
+    )
     return f"""
     <form class="radar-run-form" method="post" action="/radar/run">
       <h2>Run Now</h2>
@@ -692,59 +711,62 @@ def render_radar_run_form() -> str:
       <div class="radar-number-row">
         <label>
           <span class="muted">Max/source</span>
-          <input type="number" name="max_results" min="1" max="100" value="20">
+          <input type="number" name="max_results" min="1" max="100" value="{html_escape(settings['max_results'])}">
         </label>
         <label>
           <span class="muted">Recommendations</span>
-          <input type="number" name="limit" min="1" max="50" value="10">
+          <input type="number" name="limit" min="1" max="50" value="{html_escape(settings['limit'])}">
         </label>
       </div>
       <label class="radar-option-line">
-        <input type="checkbox" name="summarize" value="1" checked>
+        <input type="checkbox" name="summarize" value="1"{checked_attr(bool(settings.get('summarize')))}>
         <span>Summaries</span>
       </label>
       <label>
         <span class="muted">Summary provider</span>
         <select name="summary_provider">
-          <option value="local" selected>Local</option>
-          <option value="openrouter">OpenRouter</option>
+          {render_summary_provider_options(str(settings.get('summary_provider') or 'local'))}
         </select>
       </label>
       <label>
         <span class="muted">Author IDs</span>
-        <textarea name="semantic_scholar_author_ids" placeholder="Semantic Scholar author IDs"></textarea>
+        <textarea name="semantic_scholar_author_ids" placeholder="Semantic Scholar author IDs">{html_escape(radar_list_form_value(settings, 'semantic_scholar_author_ids'))}</textarea>
       </label>
       <label>
         <span class="muted">DBLP author PIDs</span>
-        <textarea name="dblp_author_pids" placeholder="65/9612"></textarea>
+        <textarea name="dblp_author_pids" placeholder="65/9612">{html_escape(radar_list_form_value(settings, 'dblp_author_pids'))}</textarea>
       </label>
       <label>
         <span class="muted">OpenAlex author IDs</span>
-        <textarea name="openalex_author_ids" placeholder="A123456789"></textarea>
+        <textarea name="openalex_author_ids" placeholder="A123456789">{html_escape(radar_list_form_value(settings, 'openalex_author_ids'))}</textarea>
       </label>
       <label>
         <span class="muted">Seed paper IDs</span>
-        <textarea name="seed_paper_ids" placeholder="Semantic Scholar IDs"></textarea>
+        <textarea name="seed_paper_ids" placeholder="Semantic Scholar IDs">{html_escape(radar_list_form_value(settings, 'seed_paper_ids'))}</textarea>
       </label>
       <label>
         <span class="muted">OpenReview invitations</span>
-        <textarea name="openreview_invitations" placeholder="ICLR.cc/2026/Conference/-/Submission"></textarea>
+        <textarea name="openreview_invitations" placeholder="ICLR.cc/2026/Conference/-/Submission">{html_escape(radar_list_form_value(settings, 'openreview_invitations'))}</textarea>
       </label>
       <label>
         <span class="muted">OpenReview profiles</span>
-        <input name="openreview_venue_profiles" placeholder="iclr, ai_ml">
+        <input name="openreview_venue_profiles" placeholder="iclr, ai_ml" value="{html_escape(radar_list_form_value(settings, 'openreview_venue_profiles'))}">
       </label>
       <label>
         <span class="muted">Venue profiles</span>
-        <input name="venue_profiles" placeholder="security, systems">
+        <input name="venue_profiles" placeholder="security, systems" value="{html_escape(radar_list_form_value(settings, 'venue_profiles'))}">
+      </label>
+      <label class="radar-option-line">
+        <input type="checkbox" name="save_defaults" value="1">
+        <span>Save as defaults</span>
       </label>
       <button class="button primary" type="submit">Run Radar</button>
     </form>
     """
 
 
-def render_radar_source_checkbox(source_id: str, label: str) -> str:
-    checked = " checked" if source_id in RADAR_WEB_DEFAULT_SOURCES else ""
+def render_radar_source_checkbox(source_id: str, label: str, *, settings: dict[str, Any]) -> str:
+    checked = checked_attr(source_id in set(settings.get("sources") or []))
     field_name = radar_source_field_name(source_id)
     return f"""
     <label>
@@ -756,6 +778,67 @@ def render_radar_source_checkbox(source_id: str, label: str) -> str:
 
 def radar_source_field_name(source_id: str) -> str:
     return f"source_{source_id}"
+
+
+def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
+    saved_settings = database.get_team_setting(RADAR_SETTINGS_KEY, {}) or {}
+    if not isinstance(saved_settings, dict):
+        saved_settings = {}
+    settings: dict[str, Any] = {
+        "sources": list(DEFAULT_RADAR_SOURCES),
+        "max_results": 20,
+        "limit": 10,
+        "summarize": True,
+        "summary_provider": "local",
+    }
+    for key in RADAR_LIST_SETTING_KEYS:
+        settings[key] = []
+    settings.update(normalize_radar_settings(saved_settings))
+    if not settings["sources"]:
+        settings["sources"] = list(DEFAULT_RADAR_SOURCES)
+    return settings
+
+
+def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    if "sources" in settings:
+        source_values = settings.get("sources") or []
+        normalized["sources"] = [
+            source
+            for source in source_values
+            if source in {source_id for source_id, _label in RADAR_WEB_SOURCE_OPTIONS}
+        ]
+    if "max_results" in settings:
+        normalized["max_results"] = clean_positive_int(str(settings.get("max_results") or ""), default=20, maximum=100)
+    if "limit" in settings:
+        normalized["limit"] = clean_positive_int(str(settings.get("limit") or ""), default=10, maximum=50)
+    if "summarize" in settings:
+        normalized["summarize"] = bool(settings.get("summarize"))
+    if "summary_provider" in settings:
+        normalized["summary_provider"] = clean_summary_provider(str(settings.get("summary_provider") or "local"))
+    for key in RADAR_LIST_SETTING_KEYS:
+        if key in settings:
+            value = settings.get(key)
+            if isinstance(value, list):
+                normalized[key] = [str(item).strip() for item in value if str(item).strip()]
+            else:
+                normalized[key] = split_form_list(str(value or ""))
+    return normalized
+
+
+def radar_list_form_value(settings: dict[str, Any], key: str) -> str:
+    return "\n".join(str(value) for value in settings.get(key) or [])
+
+
+def checked_attr(enabled: bool) -> str:
+    return " checked" if enabled else ""
+
+
+def render_summary_provider_options(selected: str) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(value)}"{" selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in [("local", "Local"), ("openrouter", "OpenRouter")]
+    )
 
 
 def render_radar_run_list(runs: list[dict[str, Any]], selected_run: dict[str, Any] | None) -> str:
@@ -798,6 +881,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
     {render_radar_error(run)}
+    {render_radar_source_errors(run)}
     {render_radar_recommendations(recommendations)}
     """
 
@@ -814,6 +898,18 @@ def render_radar_error(run: dict[str, Any]) -> str:
     if not error:
         return ""
     return f'<div class="notice">Run error: {html_escape(error)}</div>'
+
+
+def render_radar_source_errors(run: dict[str, Any]) -> str:
+    source_errors = run.get("source_errors") or []
+    if not source_errors:
+        return ""
+    items = "".join(
+        f"<li><strong>{html_escape(error.get('source_id') or 'source')}</strong>: "
+        f"{html_escape(error.get('error_type') or 'Error')}: {html_escape(error.get('error') or '')}</li>"
+        for error in source_errors
+    )
+    return f'<div class="notice"><strong>Source errors</strong><ul>{items}</ul></div>'
 
 
 def render_radar_terms(label: str, terms: list[str]) -> str:
@@ -985,7 +1081,7 @@ def render_radar_import_control(record: dict[str, Any], imported_item_id: str | 
 
 
 def status_pill(status: str) -> str:
-    css = "good" if status == "succeeded" else "warn" if status in {"running", "pending", "failed"} else ""
+    css = "good" if status == "succeeded" else "warn" if status in {"running", "pending", "failed", "partial"} else ""
     return f'<span class="pill {css}">Status: {html_escape(status)}</span>'
 
 
@@ -1080,6 +1176,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
         tag_html = render_plain_tags(tags) if removed else render_tag_editor(paper)
         relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
         importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
+        pdf_access_html = render_item_pdf_access_pill(item)
         row_class = "paper removed" if removed else "paper"
         paper_actions = render_removed_controls(paper) if removed else render_active_actions(paper)
         rows.append(
@@ -1099,6 +1196,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {ai_status_pill(paper.get("ai_status"))}
                   {importance_html}
                   {relevance_html}
+                  {pdf_access_html}
                   {link_html}
                 </div>
                 <div class="paper-actions">
@@ -1109,6 +1207,14 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
             """
         )
     return "\n".join(rows)
+
+
+def render_item_pdf_access_pill(item: dict[str, Any]) -> str:
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    pdf_access = item.get("pdf_access") or radar_metadata.get("pdf_access") or {}
+    if not pdf_access:
+        return ""
+    return render_pdf_access_pill(pdf_access)
 
 
 def render_plain_tags(tags: list[str]) -> str:
@@ -1637,46 +1743,64 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
 
 
 def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
-    selected_sources = selected_radar_sources(fields)
-    semantic_scholar_author_ids = split_form_list(fields.get("semantic_scholar_author_ids", ""))
-    dblp_author_pids = split_form_list(fields.get("dblp_author_pids", ""))
-    openalex_author_ids = split_form_list(fields.get("openalex_author_ids", ""))
-    seed_paper_ids = split_form_list(fields.get("seed_paper_ids", ""))
-    openreview_invitations = split_form_list(fields.get("openreview_invitations", ""))
-    openreview_venue_profiles = split_form_list(fields.get("openreview_venue_profiles", ""))
-    dblp_venue_profiles = split_form_list(fields.get("venue_profiles", ""))
-    if dblp_author_pids and "dblp_authors" not in selected_sources:
-        selected_sources.append("dblp_authors")
-    if semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
-        selected_sources.append("semantic_scholar_authors")
-    if openalex_author_ids and "openalex_authors" not in selected_sources:
-        selected_sources.append("openalex_authors")
-    if seed_paper_ids and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES):
-        selected_sources.append("semantic_scholar_recommendations")
-    if openreview_invitations and "openreview" not in selected_sources:
-        selected_sources.append("openreview")
-    if openreview_venue_profiles and "openreview_venues" not in selected_sources:
-        selected_sources.append("openreview_venues")
-    if dblp_venue_profiles and "dblp_venues" not in selected_sources and "openalex_venues" not in selected_sources:
-        selected_sources.append("dblp_venues")
-    if not selected_sources:
+    settings = radar_settings_from_fields(fields)
+    if not settings["sources"]:
         raise ValueError("Select at least one radar source.")
+    if checkbox_enabled(fields, "save_defaults"):
+        database.set_team_setting(RADAR_SETTINGS_KEY, settings)
     result = run_team_literature_radar(
         database,
-        sources=selected_sources,
-        max_results=clean_positive_int(fields.get("max_results", ""), default=20, maximum=100),
-        recommendation_limit=clean_positive_int(fields.get("limit", ""), default=10, maximum=50),
-        summarize=checkbox_enabled(fields, "summarize"),
-        summary_provider=clean_summary_provider(fields.get("summary_provider", "")),
-        semantic_scholar_author_ids=semantic_scholar_author_ids,
-        dblp_author_pids=dblp_author_pids,
-        openalex_author_ids=openalex_author_ids,
-        seed_paper_ids=seed_paper_ids,
-        openreview_invitations=openreview_invitations,
-        openreview_venue_profiles=openreview_venue_profiles,
-        dblp_venue_profiles=dblp_venue_profiles,
+        sources=settings["sources"],
+        max_results=settings["max_results"],
+        recommendation_limit=settings["limit"],
+        summarize=settings["summarize"],
+        summary_provider=settings["summary_provider"],
+        semantic_scholar_author_ids=settings["semantic_scholar_author_ids"],
+        dblp_author_pids=settings["dblp_author_pids"],
+        openalex_author_ids=settings["openalex_author_ids"],
+        seed_paper_ids=settings["seed_paper_ids"],
+        openreview_invitations=settings["openreview_invitations"],
+        openreview_venue_profiles=settings["openreview_venue_profiles"],
+        dblp_venue_profiles=settings["venue_profiles"],
     )
     return str(result["run_id"])
+
+
+def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
+    settings = {
+        "sources": selected_radar_sources(fields),
+        "max_results": clean_positive_int(fields.get("max_results", ""), default=20, maximum=100),
+        "limit": clean_positive_int(fields.get("limit", ""), default=10, maximum=50),
+        "summarize": checkbox_enabled(fields, "summarize"),
+        "summary_provider": clean_summary_provider(fields.get("summary_provider", "")),
+        "semantic_scholar_author_ids": split_form_list(fields.get("semantic_scholar_author_ids", "")),
+        "dblp_author_pids": split_form_list(fields.get("dblp_author_pids", "")),
+        "openalex_author_ids": split_form_list(fields.get("openalex_author_ids", "")),
+        "seed_paper_ids": split_form_list(fields.get("seed_paper_ids", "")),
+        "openreview_invitations": split_form_list(fields.get("openreview_invitations", "")),
+        "openreview_venue_profiles": split_form_list(fields.get("openreview_venue_profiles", "")),
+        "venue_profiles": split_form_list(fields.get("venue_profiles", "")),
+    }
+    ensure_radar_sources_for_settings(settings)
+    return settings
+
+
+def ensure_radar_sources_for_settings(settings: dict[str, Any]) -> None:
+    selected_sources = settings["sources"]
+    if settings["dblp_author_pids"] and "dblp_authors" not in selected_sources:
+        selected_sources.append("dblp_authors")
+    if settings["semantic_scholar_author_ids"] and "semantic_scholar_authors" not in selected_sources:
+        selected_sources.append("semantic_scholar_authors")
+    if settings["openalex_author_ids"] and "openalex_authors" not in selected_sources:
+        selected_sources.append("openalex_authors")
+    if settings["seed_paper_ids"] and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES):
+        selected_sources.append("semantic_scholar_recommendations")
+    if settings["openreview_invitations"] and "openreview" not in selected_sources:
+        selected_sources.append("openreview")
+    if settings["openreview_venue_profiles"] and "openreview_venues" not in selected_sources:
+        selected_sources.append("openreview_venues")
+    if settings["venue_profiles"] and "dblp_venues" not in selected_sources and "openalex_venues" not in selected_sources:
+        selected_sources.append("dblp_venues")
 
 
 def selected_radar_sources(fields: dict[str, str]) -> list[str]:

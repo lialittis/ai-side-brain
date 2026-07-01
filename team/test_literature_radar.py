@@ -51,6 +51,17 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["item"]["title"], "Memory Safety for Agentic Security")
             self.assertEqual(papers[0]["screening"]["label"], "highly_relevant")
             self.assertIn("arxiv", papers[0]["tags"])
+            self.assertTrue(papers[0]["item"]["pdf_access"]["can_download"])
+            self.assertEqual(papers[0]["item"]["pdf_access"]["reason"], "arxiv_or_open_repository")
+            self.assertEqual(papers[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
+            self.assertEqual(
+                papers[0]["item"]["radar"]["recommendation"]["score"],
+                recommendation["scoring"]["score"],
+            )
+            self.assertEqual(
+                papers[0]["item"]["radar"]["recommendation"]["recommended_action"],
+                recommendation["recommended_action"],
+            )
             self.assertEqual(database.list_library("team-library")[0]["item"]["id"], result["item_id"])
 
     def test_import_deduplicates_existing_radar_item_by_doi(self) -> None:
@@ -70,7 +81,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(first["status"], "imported")
             self.assertEqual(second["status"], "existing")
             self.assertEqual(first["item_id"], second["item_id"])
-            self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+            papers = database.list_latest_relevant_papers()
+            self.assertEqual(len(papers), 1)
+            self.assertEqual(papers[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
+            self.assertEqual(papers[0]["item"]["pdf_access"]["source_url"], "https://doi.org/10.1145/example")
 
     def test_run_team_literature_radar_collects_recommends_and_imports(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -101,6 +115,38 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("memory safety", arxiv.call_args.kwargs["query_terms"])
             self.assertEqual(dblp.call_count, 3)
             self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+
+    def test_run_team_literature_radar_records_partial_source_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00032",
+                title="Memory Safety Partial Radar",
+                abstract="Memory safety and system security.",
+                identifiers={"arxiv_id": "2601.00032"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00032"},
+            )
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                with mock.patch("team.literature_radar.collect_dblp_publications", side_effect=RuntimeError("DBLP unavailable")):
+                    result = run_team_literature_radar(
+                        database,
+                        sources=["arxiv", "dblp"],
+                        query_terms=["memory safety"],
+                        max_results=1,
+                        now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                    )
+
+            self.assertEqual(result["run"]["status"], "partial")
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+            self.assertEqual(result["source_errors"][0]["source_id"], "dblp")
+            self.assertEqual(result["source_errors"][0]["error_type"], "RuntimeError")
+            self.assertIn("DBLP unavailable", result["source_errors"][0]["error"])
+            self.assertIn("## Source Errors", result["report"])
+            stored_run = database.get_literature_radar_run(result["run_id"])
+            self.assertEqual(stored_run["status"], "partial")
+            self.assertEqual(stored_run["source_errors"][0]["source_id"], "dblp")
 
     def test_run_team_literature_radar_scores_with_team_interest_weights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -860,6 +906,109 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIsNone(runner.call_args.kwargs["conference_year"])
             self.assertIsNone(runner.call_args.kwargs["usenix_security_cycles"])
             self.assertEqual(json.loads(stdout.getvalue())["recommendation_count"], 1)
+
+    def test_cli_radar_run_can_use_saved_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            database.set_team_setting(
+                "literature_radar_defaults",
+                {
+                    "sources": ["openalex_authors"],
+                    "max_results": 7,
+                    "limit": 3,
+                    "summarize": True,
+                    "summary_provider": "openrouter",
+                    "openalex_author_ids": ["A123456789"],
+                    "seed_paper_ids": ["seed-positive"],
+                    "venue_profiles": ["security"],
+                },
+            )
+            fake_result = {
+                "run_id": "radarrun_saved_defaults",
+                "sources": ["openalex_authors"],
+                "query_terms": ["memory safety"],
+                "collected_count": 1,
+                "recommendation_count": 1,
+                "imported_count": 0,
+                "recommendations": [],
+                "imported": [],
+                "report": "# Radar\n",
+            }
+            stdout = io.StringIO()
+            with mock.patch("team.research_cli.run_team_literature_radar", return_value=fake_result) as runner:
+                with contextlib.redirect_stdout(stdout):
+                    code = research_cli.main(
+                        [
+                            "radar-run",
+                            "--db-path",
+                            str(db_path),
+                            "--use-saved-defaults",
+                            "--json",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            runner.assert_called_once()
+            self.assertEqual(runner.call_args.kwargs["sources"], ["openalex_authors"])
+            self.assertEqual(runner.call_args.kwargs["max_results"], 7)
+            self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 3)
+            self.assertTrue(runner.call_args.kwargs["summarize"])
+            self.assertEqual(runner.call_args.kwargs["summary_provider"], "openrouter")
+            self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
+            self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
+            self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
+            self.assertEqual(json.loads(stdout.getvalue())["run_id"], "radarrun_saved_defaults")
+
+    def test_cli_radar_run_explicit_args_override_saved_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            database.set_team_setting(
+                "literature_radar_defaults",
+                {
+                    "sources": ["openalex_authors"],
+                    "max_results": 7,
+                    "limit": 3,
+                    "openalex_author_ids": ["A123456789"],
+                },
+            )
+            fake_result = {
+                "run_id": "radarrun_override_defaults",
+                "sources": ["arxiv"],
+                "query_terms": ["memory safety"],
+                "collected_count": 1,
+                "recommendation_count": 1,
+                "imported_count": 0,
+                "recommendations": [],
+                "imported": [],
+                "report": "# Radar\n",
+            }
+            with mock.patch("team.research_cli.run_team_literature_radar", return_value=fake_result) as runner:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = research_cli.main(
+                        [
+                            "radar-run",
+                            "--db-path",
+                            str(db_path),
+                            "--use-saved-defaults",
+                            "--source",
+                            "arxiv",
+                            "--max-results",
+                            "2",
+                            "--limit",
+                            "1",
+                            "--openalex-author-id",
+                            "A987654321",
+                            "--json",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(runner.call_args.kwargs["sources"], ["arxiv"])
+            self.assertEqual(runner.call_args.kwargs["max_results"], 2)
+            self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 1)
+            self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A987654321"])
 
 
 if __name__ == "__main__":

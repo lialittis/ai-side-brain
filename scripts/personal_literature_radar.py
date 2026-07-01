@@ -17,6 +17,7 @@ from personal.literature_radar import (
     DEFAULT_PERSONAL_RADAR_SOURCES,
     ensure_personal_radar_topic_profile,
     read_personal_radar_index,
+    read_personal_radar_paper_history,
     run_personal_literature_radar,
 )
 
@@ -87,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--limit", type=int, default=10)
     history.add_argument("--json", action="store_true")
 
+    papers = subparsers.add_parser("papers", help="list personal radar paper history")
+    papers.add_argument("--root-path", type=Path, default=ROOT)
+    papers.add_argument("--limit", type=int, default=20)
+    papers.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -107,6 +113,11 @@ def print_run(result: dict[str, Any]) -> None:
         paper = recommendation["paper"]
         scoring = recommendation["scoring"]
         print(f"- {scoring['label']} {scoring['score']}/100 | {paper.get('title')}")
+    for source_error in result.get("source_errors", []):
+        print(
+            f"! source error {source_error.get('source_id')}: "
+            f"{source_error.get('error_type')}: {source_error.get('error')}"
+        )
 
 
 def print_history(runs: list[dict[str, Any]]) -> None:
@@ -120,6 +131,25 @@ def print_history(runs: list[dict[str, Any]]) -> None:
             f"recommended={run.get('recommendation_count', 0)} | "
             f"{run.get('report_path') or 'no report'}"
         )
+
+
+def print_paper_history(records: list[dict[str, Any]]) -> None:
+    if not records:
+        print("No Personal Literature Radar paper history yet.")
+        return
+    for record in records:
+        print(
+            f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
+            f"latest={record.get('latest_seen_at')} | {record.get('title')}"
+        )
+
+
+def sorted_paper_history(records: dict[str, dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    return sorted(
+        records.values(),
+        key=lambda record: str(record.get("latest_seen_at") or ""),
+        reverse=True,
+    )[:limit]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -178,6 +208,17 @@ def main(argv: list[str] | None = None) -> int:
             print_json(runs)
         else:
             print_history(runs)
+        return 0
+
+    if args.command == "papers":
+        records = sorted_paper_history(
+            read_personal_radar_paper_history(args.root_path),
+            limit=args.limit,
+        )
+        if args.json:
+            print_json(records)
+        else:
+            print_paper_history(records)
         return 0
 
     parser.error(f"unsupported command: {args.command}")

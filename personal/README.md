@@ -26,7 +26,9 @@ Personal research-resource workflows should use the product-neutral Shared Resea
 
 Personal Literature Radar uses the product-neutral discovery core in `shared/literature_radar/`.
 It writes recommendation reports to `memory/06_Logs/` and run history to
-`indexes/literature-radar-runs.json`; it does not write accepted papers into
+`indexes/literature-radar-runs.json`. It also keeps deduplicated paper history
+in `indexes/literature-radar-papers.json` with first-seen/latest-seen counts,
+source IDs, and PDF-access decisions; it does not write accepted papers into
 long-term project or resource notes.
 Personal interest configuration is read from
 `indexes/literature-radar-topic-profile.json` when that file exists. Initialize
@@ -46,6 +48,7 @@ python scripts/personal_literature_radar.py run --source openalex_authors --open
 python scripts/personal_literature_radar.py run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
 python scripts/personal_literature_radar.py run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python scripts/personal_literature_radar.py history
+python scripts/personal_literature_radar.py papers
 ```
 
 For periodic personal reports, run the one-shot script from cron or a systemd
@@ -54,6 +57,9 @@ timer:
 ```bash
 scripts/run_personal_literature_radar.sh
 ```
+
+User-level systemd timer templates live under `infra/systemd/user/`; see
+`infra/systemd/README.md`.
 
 The script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
@@ -70,8 +76,11 @@ authors to expand around papers and researchers you already care about. Personal
 Radar still writes only review reports and index entries until you explicitly
 move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
-`indexes/literature-radar-runs.json` history.
-The same index stores the PDF-access decision metadata for each recommendation
-without downloading or redistributing PDFs.
+`indexes/literature-radar-papers.json` history.
+That paper history stores the PDF-access decision metadata for each deduplicated
+paper without downloading or redistributing PDFs.
+If one source fails during a multi-source run, Personal Radar records the run as
+`partial`, keeps recommendations from successful sources, and appends source
+errors to the report.
 
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

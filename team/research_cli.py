@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.research import topic_profile_by_id
-from team.literature_radar import run_team_literature_radar
+from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -85,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
     radar = subparsers.add_parser("radar-run", help="collect and rank Literature Radar recommendations")
     add_db_args(radar)
     radar.add_argument(
+        "--use-saved-defaults",
+        action="store_true",
+        help="start from Team Radar defaults saved by the web UI",
+    )
+    radar.add_argument(
         "--source",
         action="append",
         choices=[
@@ -109,13 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="source to collect; repeatable",
     )
     radar.add_argument("--query-term", action="append", default=[], help="interest term override; repeatable")
-    radar.add_argument("--max-results", type=int, default=25, help="maximum results per source query")
-    radar.add_argument("--limit", type=int, default=10, help="maximum recommendations to report")
+    radar.add_argument("--max-results", type=int, help="maximum results per source query")
+    radar.add_argument("--limit", type=int, help="maximum recommendations to report")
     radar.add_argument("--summarize", action="store_true", help="attach summaries to radar recommendations")
     radar.add_argument(
         "--summary-provider",
         choices=["local", "openrouter"],
-        default="local",
+        default=None,
         help="summary provider; openrouter requires OPENROUTER_API_KEY",
     )
     radar.add_argument("--summary-limit", type=int, help="maximum recommendations to summarize")
@@ -354,6 +360,11 @@ def print_radar_run(result: dict[str, Any]) -> None:
         paper = recommendation["paper"]
         scoring = recommendation["scoring"]
         print(f"- {scoring['label']} {scoring['score']}/100 | {paper.get('title')}")
+    for source_error in result.get("source_errors", []):
+        print(
+            f"! source error {source_error.get('source_id')}: "
+            f"{source_error.get('error_type')}: {source_error.get('error')}"
+        )
 
 
 def print_radar_history(runs: list[dict[str, Any]]) -> None:
@@ -376,6 +387,32 @@ def print_radar_report(run: dict[str, Any], recommendations: list[dict[str, Any]
         print(f"# Literature Radar Report - {run['id']}")
         for recommendation in recommendations:
             print(f"- {recommendation.get('label')} {recommendation.get('score')}/100 | {recommendation.get('title')}")
+
+
+def radar_saved_defaults(database: TeamResearchDatabase, enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {}
+    settings = database.get_team_setting(TEAM_RADAR_SETTINGS_KEY, {}) or {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def saved_radar_list(settings: dict[str, Any], key: str) -> list[str]:
+    value = settings.get(key) or []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in re.split(r"[\n, ]+", str(value)) if part.strip()]
+
+
+def saved_radar_int(settings: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(settings.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def saved_radar_summary_provider(settings: dict[str, Any]) -> str:
+    provider = str(settings.get("summary_provider") or "local").strip().lower()
+    return provider if provider in {"local", "openrouter"} else "local"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -442,34 +479,43 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-run":
+        saved_defaults = radar_saved_defaults(database, args.use_saved_defaults)
+        summary_provider = args.summary_provider or saved_radar_summary_provider(saved_defaults)
         result = run_team_literature_radar(
             database,
-            sources=args.source
-            or ["arxiv", "dblp", "semantic_scholar", "openalex", "crossref", "usenix_security", "ndss"],
+            sources=args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES),
             query_terms=args.query_term or None,
-            max_results=args.max_results,
-            recommendation_limit=args.limit,
-            summarize=args.summarize or args.summary_provider == "openrouter",
-            summary_provider=args.summary_provider,
+            max_results=args.max_results or saved_radar_int(saved_defaults, "max_results", 25),
+            recommendation_limit=args.limit or saved_radar_int(saved_defaults, "limit", 10),
+            summarize=args.summarize or bool(saved_defaults.get("summarize")) or summary_provider == "openrouter",
+            summary_provider=summary_provider,
             summary_limit=args.summary_limit,
             import_results=args.import_results,
             import_limit=args.import_limit,
             min_import_score=args.min_score,
             project_id=args.project,
             semantic_scholar_api_key=args.semantic_scholar_api_key,
-            semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
-            seed_paper_ids=args.seed_paper_id or None,
+            semantic_scholar_author_ids=args.semantic_scholar_author_id
+            or saved_radar_list(saved_defaults, "semantic_scholar_author_ids")
+            or None,
+            seed_paper_ids=args.seed_paper_id or saved_radar_list(saved_defaults, "seed_paper_ids") or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
             openalex_mailto=args.openalex_mailto,
-            openalex_author_ids=args.openalex_author_id or None,
-            openreview_invitations=args.openreview_invitation or None,
-            openreview_venue_profiles=args.openreview_venue_profile or None,
+            openalex_author_ids=args.openalex_author_id
+            or saved_radar_list(saved_defaults, "openalex_author_ids")
+            or None,
+            openreview_invitations=args.openreview_invitation
+            or saved_radar_list(saved_defaults, "openreview_invitations")
+            or None,
+            openreview_venue_profiles=args.openreview_venue_profile
+            or saved_radar_list(saved_defaults, "openreview_venue_profiles")
+            or None,
             openreview_accepted_only=not args.include_openreview_unaccepted,
             crossref_mailto=args.crossref_mailto,
             unpaywall_email=args.unpaywall_email,
             conference_year=args.conference_year,
-            dblp_author_pids=args.dblp_author_pid or None,
-            dblp_venue_profiles=args.venue_profile or None,
+            dblp_author_pids=args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids") or None,
+            dblp_venue_profiles=args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None,
             usenix_security_cycles=args.usenix_cycle or None,
         )
         if args.output:
