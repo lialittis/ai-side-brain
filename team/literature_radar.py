@@ -59,6 +59,7 @@ TEAM_RADAR_SETTINGS_KEY = "literature_radar_defaults"
 TEAM_RADAR_DEFAULT_PDF_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / "team" / "data" / "literature-radar-pdfs"
 )
+TEAM_RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "team-literature-radar",
     "name": "Team Literature Radar",
@@ -573,9 +574,9 @@ def team_radar_collection_config(
         semantic_scholar_api_key_configured=bool(
             semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
         ),
-        openalex_mailto_configured=bool(openalex_mailto or os.environ.get("OPENALEX_MAILTO")),
-        crossref_mailto_configured=bool(crossref_mailto or os.environ.get("CROSSREF_MAILTO")),
-        unpaywall_email_configured=bool(unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")),
+        openalex_mailto_configured=bool(team_openalex_mailto(openalex_mailto)),
+        crossref_mailto_configured=bool(team_crossref_mailto(crossref_mailto)),
+        unpaywall_email_configured=bool(team_unpaywall_email(unpaywall_email)),
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=(pdf_cache_dir or TEAM_RADAR_DEFAULT_PDF_CACHE_DIR) if cache_pdfs else None,
         pdf_cache_max_bytes=pdf_cache_max_bytes if cache_pdfs else None,
@@ -591,6 +592,38 @@ def resolved_source_list(
     if not any(source in selected_sources for source in relevant_sources):
         return []
     return values or env_list(env_name)
+
+
+def team_contact_value(*values: str | None) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def team_openalex_mailto(value: str | None = None) -> str | None:
+    return team_contact_value(
+        value,
+        os.environ.get("OPENALEX_MAILTO"),
+        os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
+    )
+
+
+def team_crossref_mailto(value: str | None = None) -> str | None:
+    return team_contact_value(
+        value,
+        os.environ.get("CROSSREF_MAILTO"),
+        os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
+    )
+
+
+def team_unpaywall_email(value: str | None = None) -> str | None:
+    return team_contact_value(
+        value,
+        os.environ.get("UNPAYWALL_EMAIL"),
+        os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
+    )
 
 
 def build_team_radar_scorer(interests: list[dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -731,6 +764,10 @@ def collect_team_radar_candidates(
         raise ValueError(f"Unsupported radar source(s): {', '.join(unsupported)}")
     papers = []
     selected_conference_year = conference_year or radar_year(now)
+    selected_crossref_mailto = team_crossref_mailto(crossref_mailto)
+    selected_openalex_mailto = team_openalex_mailto(openalex_mailto)
+    selected_unpaywall_email = team_unpaywall_email(unpaywall_email)
+
     def collect_source(source_id: str, collector: Callable[[], list[dict[str, Any]]]) -> None:
         papers.extend(
             collect_radar_source(
@@ -750,7 +787,7 @@ def collect_team_radar_candidates(
             lambda: collect_crossref_works(
                 query_terms=query_terms,
                 max_results=max_results,
-                mailto=crossref_mailto or os.environ.get("CROSSREF_MAILTO"),
+                mailto=selected_crossref_mailto,
             ),
         )
     if "dblp" in sources:
@@ -833,7 +870,7 @@ def collect_team_radar_candidates(
             lambda: collect_openalex_works(
                 query_terms=query_terms,
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openalex_authors" in sources:
@@ -842,7 +879,7 @@ def collect_team_radar_candidates(
             lambda: collect_openalex_author_works(
                 author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openalex_venues" in sources:
@@ -852,7 +889,7 @@ def collect_team_radar_candidates(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_conference_year,
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openreview" in sources:
@@ -894,7 +931,6 @@ def collect_team_radar_candidates(
                 max_results=max_results,
             ),
         )
-    selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
     if selected_unpaywall_email:
         papers = enrich_radar_papers_with_unpaywall(
             papers,

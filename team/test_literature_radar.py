@@ -918,6 +918,47 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(source_stats["unpaywall"]["failed_count"], 0)
             self.assertIn("`unpaywall`: 1 candidate(s) (succeeded)", result["report"])
 
+    def test_run_team_literature_radar_uses_source_contact_env_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            openalex_paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W-source-contact",
+                title="OpenAlex Source Contact Memory Safety",
+                abstract="Memory safety and system security from OpenAlex.",
+                identifiers={"openalex_id": "W-source-contact", "doi": "10.1145/source-contact-openalex"},
+                links={"landing": "https://openalex.org/W-source-contact"},
+            )
+            crossref_paper = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.1145/source-contact-crossref",
+                title="Crossref Source Contact Memory Safety",
+                abstract="Memory safety and system security from Crossref.",
+                identifiers={"doi": "10.1145/source-contact-crossref"},
+                links={"landing": "https://doi.org/10.1145/source-contact-crossref"},
+            )
+            with mock.patch.dict("os.environ", {"RADAR_SOURCE_CONTACT_EMAIL": "radar@example.org"}, clear=True):
+                with mock.patch("team.literature_radar.collect_openalex_works", return_value=[openalex_paper]) as openalex:
+                    with mock.patch("team.literature_radar.collect_crossref_works", return_value=[crossref_paper]) as crossref:
+                        with mock.patch(
+                            "team.literature_radar.enrich_paper_with_unpaywall",
+                            side_effect=lambda paper, **_kwargs: paper,
+                        ) as unpaywall:
+                            result = run_team_literature_radar(
+                                database,
+                                sources=["openalex", "crossref"],
+                                query_terms=["memory safety"],
+                                max_results=2,
+                            )
+
+            self.assertEqual(openalex.call_args.kwargs["mailto"], "radar@example.org")
+            self.assertEqual(crossref.call_args.kwargs["mailto"], "radar@example.org")
+            self.assertEqual([call.kwargs["email"] for call in unpaywall.call_args_list], ["radar@example.org", "radar@example.org"])
+            config = result["run"]["collection_config"]
+            self.assertTrue(config["openalex_mailto_configured"])
+            self.assertTrue(config["crossref_mailto_configured"])
+            self.assertTrue(config["unpaywall_email_configured"])
+
     def test_run_team_literature_radar_records_unpaywall_enrichment_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -1112,6 +1153,17 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["review"], "unreviewed")
             self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
+            self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
+            queue_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(queue_text_stdout):
+                queue_text_code = research_cli.main(["radar-queue", "--db-path", str(db_path)])
+            self.assertEqual(queue_text_code, 0)
+            queue_text = queue_text_stdout.getvalue()
+            self.assertIn("Why:", queue_text)
+            self.assertIn("Context:", queue_text)
+            self.assertIn("Matched:", queue_text)
+            self.assertIn("memory safety", queue_text)
             review_stdout = io.StringIO()
             with contextlib.redirect_stdout(review_stdout):
                 review_code = research_cli.main(
@@ -1282,6 +1334,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "seed-positive",
                             "--negative-seed-paper-id",
                             "seed-negative",
+                            "--source-contact-email",
+                            "radar@example.org",
+                            "--openalex-mailto",
+                            "openalex@example.org",
                             "--venue-profile",
                             "security",
                             "--openreview-venue-profile",
@@ -1333,10 +1389,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
             self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
             self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
-            self.assertIsNone(runner.call_args.kwargs["openalex_mailto"])
+            self.assertEqual(runner.call_args.kwargs["openalex_mailto"], "openalex@example.org")
             self.assertIsNone(runner.call_args.kwargs["openreview_invitations"])
-            self.assertIsNone(runner.call_args.kwargs["crossref_mailto"])
-            self.assertIsNone(runner.call_args.kwargs["unpaywall_email"])
+            self.assertEqual(runner.call_args.kwargs["crossref_mailto"], "radar@example.org")
+            self.assertEqual(runner.call_args.kwargs["unpaywall_email"], "radar@example.org")
             self.assertEqual(runner.call_args.kwargs["conference_year"], 2026)
             self.assertEqual(runner.call_args.kwargs["usenix_security_cycles"], [1, 2])
             self.assertEqual(json.loads(stdout.getvalue())["recommendation_count"], 1)

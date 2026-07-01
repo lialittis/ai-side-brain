@@ -104,9 +104,9 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 
 Web UI surfaces:
 
-- Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates when scheduled discovery has stored papers awaiting review;
+- Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates plus stored why/context/matched-interest signal lines when scheduled discovery has papers awaiting review;
 - Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
-- radar-imported library papers keep their radar provenance and PDF-access decision, so the main Latest Relevant Papers list shows whether a legal PDF is available and why;
+- radar-imported library papers keep their radar provenance, summary, relevance reason, context link, matched interests, and PDF-access decision, so the main Latest Relevant Papers list shows why the paper was worth importing and whether a legal PDF is available;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
@@ -123,6 +123,9 @@ recommendations and import only the papers the team wants to track in the main l
 paper relevance. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, conference year, USENIX cycles, source contact email,
 PDF cache settings, and run limits as reusable Team defaults.
+For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can provide one fallback
+contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
+settings are configured.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI. Scheduled collection
 writes matching text and JSON queue snapshots under `team/logs/` by default.

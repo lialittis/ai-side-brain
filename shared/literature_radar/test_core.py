@@ -33,6 +33,7 @@ from shared.literature_radar import (
     mvp_source_ids,
     pdf_access_report_text,
     radar_history_review_status,
+    radar_latest_signal_lines,
     radar_review_counts,
     radar_source_error,
     recommend_papers,
@@ -200,7 +201,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             {
                 "title": "Unreviewed High Score",
                 "latest_seen_at": "2026-07-01T11:00:00+00:00",
-                "latest_recommendation": {"score": 90},
+                "latest_recommendation": {
+                    "score": 90,
+                    "summary": {"short_summary": "High priority radar candidate."},
+                    "why_relevant": "Matches memory safety.",
+                    "matched_positive_keywords": ["memory safety"],
+                },
             },
             {
                 "title": "Imported Unreviewed Highest Score",
@@ -225,6 +231,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [record["title"] for record in queue["papers"]],
             ["Unreviewed High Score", "Unreviewed Low Score"],
         )
+        self.assertEqual(
+            queue["papers"][0]["signal_lines"],
+            [
+                "Signal: High priority radar candidate.",
+                "Why: Matches memory safety.",
+                "Matched: memory safety",
+            ],
+        )
+        self.assertNotIn("signal_lines", records[2])
 
         watch_queue = build_radar_review_queue([records[0], records[3]], limit=3)
         self.assertEqual(watch_queue["review"], "watch")
@@ -771,6 +786,33 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Related to existing context", context["relationship_summary"])
         self.assertIn("Context: Matches active interests", report)
 
+    def test_formats_latest_signal_lines_for_daily_queues(self) -> None:
+        lines = radar_latest_signal_lines(
+            {
+                "latest_recommendation": {
+                    "summary": {
+                        "short_summary": "  This paper studies memory safety for agents. ",
+                        "relationship_to_interests": "Strong match for memory safety.",
+                    },
+                    "context": {
+                        "relationship_summary": "Related to existing context: Agentic baseline.",
+                    },
+                    "why_relevant": "Strong match for memory safety.",
+                    "matched_positive_keywords": ["memory safety", "agentic security", "memory safety"],
+                }
+            }
+        )
+
+        self.assertEqual(
+            lines,
+            [
+                "Signal: This paper studies memory safety for agents.",
+                "Why: Strong match for memory safety.",
+                "Context: Related to existing context: Agentic baseline.",
+                "Matched: memory safety, agentic security",
+            ],
+        )
+
     def test_builds_radar_history_brief_from_run_records(self) -> None:
         paper = create_radar_paper(
             source_id="arxiv",
@@ -794,6 +836,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "relationship_summary": "Related to existing context: Prior memory safety work.",
             "related_items": [{"id": "item_memory", "title": "Prior memory safety work"}],
         }
+        recommendation["summary"] = {
+            "short_summary": "Weekly summary for memory safety.",
+            "relationship_to_interests": "Strong weekly match for memory safety.",
+        }
         watch_paper = create_radar_paper(
             source_id="arxiv",
             source_paper_id="2601.00032",
@@ -815,6 +861,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         watch_recommendation["context"] = {
             "relationship_summary": "Related to existing context: Agentic baseline.",
             "related_items": [{"id": "item_agentic", "title": "Agentic baseline"}],
+        }
+        watch_recommendation["summary"] = {
+            "short_summary": "Weekly watch summary for agentic security.",
+            "relationship_to_interests": "Strong weekly match for agentic security.",
         }
         brief = build_radar_history_brief(
             [
@@ -909,6 +959,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Review: watch", brief)
         self.assertIn("Review: dismissed", brief)
         self.assertIn("reason: outside current sprint", brief)
+        self.assertIn("Signal: Weekly watch summary for agentic security.", brief)
+        self.assertIn("Why: Strong weekly match for agentic security.", brief)
+        self.assertIn("Signal: Weekly summary for memory safety.", brief)
+        self.assertIn("Why: Strong weekly match for memory safety.", brief)
+        self.assertIn("Matched: memory safety", brief)
         self.assertIn("PDF policy: download allowed", brief)
         self.assertNotIn("run_old", brief)
 

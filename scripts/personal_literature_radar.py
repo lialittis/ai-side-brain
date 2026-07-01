@@ -26,6 +26,7 @@ from shared.literature_radar import (
     build_radar_review_queue,
     format_radar_source_stats,
     radar_history_review_status,
+    radar_latest_signal_lines,
     radar_review_counts,
 )
 
@@ -73,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--semantic-scholar-author-id", action="append", default=[])
     run.add_argument("--seed-paper-id", action="append", default=[])
     run.add_argument("--negative-seed-paper-id", action="append", default=[])
+    run.add_argument(
+        "--source-contact-email",
+        help="fallback contact email for OpenAlex, Crossref, and Unpaywall when service-specific values are unset",
+    )
     run.add_argument("--openalex-mailto")
     run.add_argument("--openalex-author-id", action="append", default=[])
     run.add_argument("--openreview-invitation", action="append", default=[])
@@ -202,6 +207,8 @@ def print_paper_history(
             f"review={record.get('review_status') or 'unreviewed'} | "
             f"latest={record.get('latest_seen_at')}{latest_signal} | {record.get('title')}"
         )
+        for line in radar_latest_signal_lines(latest):
+            print(f"  {line}")
 
 
 def print_personal_queue(
@@ -281,13 +288,13 @@ def main(argv: list[str] | None = None) -> int:
             semantic_scholar_author_ids=args.semantic_scholar_author_id or None,
             seed_paper_ids=args.seed_paper_id or None,
             negative_seed_paper_ids=args.negative_seed_paper_id or None,
-            openalex_mailto=args.openalex_mailto,
+            openalex_mailto=args.openalex_mailto or args.source_contact_email,
             openalex_author_ids=args.openalex_author_id or None,
             openreview_invitations=args.openreview_invitation or None,
             openreview_venue_profiles=args.openreview_venue_profile or None,
             openreview_accepted_only=not args.include_openreview_unaccepted,
-            crossref_mailto=args.crossref_mailto,
-            unpaywall_email=args.unpaywall_email,
+            crossref_mailto=args.crossref_mailto or args.source_contact_email,
+            unpaywall_email=args.unpaywall_email or args.source_contact_email,
             cache_pdfs=args.cache_pdfs,
             pdf_cache_dir=args.pdf_cache_dir,
             pdf_cache_max_bytes=args.pdf_cache_max_bytes,

@@ -84,6 +84,9 @@ if [[ -n "${PERSONAL_RADAR_SEED_PAPER_IDS:-}" ]]; then
     ARGS+=("--seed-paper-id" "$paper_id")
   done
 fi
+if [[ -n "${PERSONAL_RADAR_SOURCE_CONTACT_EMAIL:-}" ]]; then
+  ARGS+=("--source-contact-email" "$PERSONAL_RADAR_SOURCE_CONTACT_EMAIL")
+fi
 if [[ -n "${PERSONAL_RADAR_AUTHOR_IDS:-}" ]]; then
   read -r -a AUTHOR_IDS <<< "$PERSONAL_RADAR_AUTHOR_IDS"
   for author_id in "${AUTHOR_IDS[@]}"; do

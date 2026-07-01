@@ -80,7 +80,8 @@ without collecting again. Useful environment variables include `PERSONAL_RADAR_S
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
 `PERSONAL_RADAR_DBLP_AUTHOR_PIDS`, `PERSONAL_RADAR_OPENALEX_AUTHOR_IDS`,
 `PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_SEED_PAPER_IDS`,
-`PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_CACHE_PDFS=1`, and
+`PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
+`PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
@@ -89,6 +90,11 @@ variables include
 `PERSONAL_RADAR_BRIEF_DAYS`, `PERSONAL_RADAR_BRIEF_RECOMMENDATION_LIMIT`,
 `PERSONAL_RADAR_BRIEF_RUN_LIMIT`, and `PERSONAL_RADAR_BRIEF_OUTPUT_DIR`.
 OpenRouter summaries require `OPENROUTER_API_KEY`.
+`PERSONAL_RADAR_SOURCE_CONTACT_EMAIL` is a fallback contact address for
+OpenAlex, Crossref, and Unpaywall. If it is unset, `RADAR_SOURCE_CONTACT_EMAIL`
+is also accepted as a shared local fallback. Service-specific environment
+variables such as `OPENALEX_MAILTO`, `CROSSREF_MAILTO`, and `UNPAYWALL_EMAIL`
+still take precedence.
 
 Semantic Scholar runs can use recommendations, references, citations, or tracked
 authors to expand around papers and researchers you already care about. Personal
@@ -107,7 +113,9 @@ state without requiring another collection run.
 Use `queue` for the daily review surface: it prefers unreviewed papers, falls
 back to watched papers when there are no unreviewed items, sorts the active
 queue by latest recommendation score, and excludes dismissed or already-moved
-papers from the priority list.
+papers from the priority list. The text queue includes stored signal lines for
+why each paper is relevant, how it relates to existing context, and which
+interests matched; the JSON queue includes the same lines under `signal_lines`.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated
@@ -118,8 +126,9 @@ If one source fails during a multi-source run, Personal Radar records the run as
 `partial`, keeps recommendations from successful sources, records per-source
 candidate counts, and appends source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
-collecting again; it includes relevance, novelty, review state, context, venue
-coverage, and PDF policy for the top stored recommendations. Stored runs also
+collecting again; it includes relevance, novelty, review state, stored signal
+lines, context, venue coverage, and PDF policy for the top stored
+recommendations. Stored runs also
 snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief

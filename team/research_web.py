@@ -23,7 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.literature_radar import assess_pdf_access, build_radar_history_brief, build_radar_review_queue
+from shared.literature_radar import (
+    assess_pdf_access,
+    build_radar_history_brief,
+    build_radar_review_queue,
+    radar_latest_signal_lines,
+)
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
@@ -1140,19 +1145,27 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
 def render_radar_paper_latest_signal(latest: Any) -> str:
     if not isinstance(latest, dict) or not latest:
         return ""
-    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
-    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
-    why = str(latest.get("why_relevant") or "").strip()
-    context_text = str(context.get("relationship_summary") or "").strip()
-    summary_text = str(summary.get("short_summary") or "").strip()
-    detail = summary_text or context_text or why
+    signal_rows = "".join(render_radar_signal_line_row(line) for line in radar_latest_signal_lines(latest))
     return f"""
     <div class="radar-ai-summary">
       <p><strong>Latest signal:</strong> {relevance_pill(str(latest.get("label") or "needs_review"))} <span class="pill">Score: {html_escape(int(float(latest.get("score") or 0)))}</span></p>
-      {f'<p>{html_escape(detail)}</p>' if detail else ''}
-      {f'<p><strong>Context:</strong> {html_escape(context_text)}</p>' if context_text and context_text != detail else ''}
+      {signal_rows}
     </div>
     """
+
+
+def render_radar_signal_lines(latest: Any) -> str:
+    signal_rows = "".join(render_radar_signal_line_row(line) for line in radar_latest_signal_lines(latest))
+    if not signal_rows:
+        return ""
+    return f'<div class="radar-ai-summary radar-signal-lines">{signal_rows}</div>'
+
+
+def render_radar_signal_line_row(line: str) -> str:
+    label, separator, value = line.partition(": ")
+    if separator:
+        return f"<p><strong>{html_escape(label)}:</strong> {html_escape(value)}</p>"
+    return f"<p>{html_escape(line)}</p>"
 
 
 def render_radar_paper_import_control(
@@ -1936,7 +1949,6 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids[:4])
     if len(source_ids) > 4:
         source_tags += f'<span class="pill">+{len(source_ids) - 4} sources</span>'
-    latest_text = latest_radar_queue_signal_text(latest)
     return f"""
     <article class="radar-queue-item">
       <div class="radar-queue-title">{html_escape(record.get("title") or "Untitled radar paper")}</div>
@@ -1950,7 +1962,7 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
         <span class="pill">Score: {score}</span>
         {source_tags}
       </div>
-      {f'<div class="muted">{html_escape(latest_text)}</div>' if latest_text else ''}
+      {render_radar_signal_lines(latest)}
       <div class="radar-links">
         {render_radar_links(paper)}
         {render_radar_paper_import_control(record, review_filter=review_filter, return_to="latest")}
@@ -1958,20 +1970,6 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
       </div>
     </article>
     """
-
-
-def latest_radar_queue_signal_text(latest: dict[str, Any]) -> str:
-    if not latest:
-        return ""
-    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
-    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
-    return re.sub(
-        r"\s+",
-        " ",
-        str(summary.get("short_summary") or "")
-        or str(context.get("relationship_summary") or "")
-        or str(latest.get("why_relevant") or ""),
-    ).strip()
 
 
 def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
@@ -2015,6 +2013,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
                 </div>
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
+                {render_paper_radar_insight(item)}
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
                 {render_paper_comments(paper)}
               </div>
@@ -2034,6 +2033,52 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
             """
         )
     return "\n".join(rows)
+
+
+def render_paper_radar_insight(item: dict[str, Any]) -> str:
+    radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    recommendation = radar.get("recommendation") if isinstance(radar.get("recommendation"), dict) else {}
+    if not recommendation:
+        return ""
+    summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
+    context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+    summary_text = normalize_inline_text(summary.get("short_summary") or "")
+    relation_text = normalize_inline_text(summary.get("relationship_to_interests") or "")
+    why_text = normalize_inline_text(recommendation.get("why_relevant") or "")
+    context_text = normalize_inline_text(context.get("relationship_summary") or "")
+    matched_terms = [
+        normalize_inline_text(term)
+        for term in recommendation.get("matched_positive_keywords") or []
+        if normalize_inline_text(term)
+    ]
+    if not any([summary_text, relation_text, why_text, context_text, matched_terms]):
+        return ""
+    label = str(recommendation.get("label") or "needs_review")
+    score = recommendation.get("score")
+    score_text = ""
+    if score is not None and str(score).strip() != "":
+        try:
+            score_text = f" · {int(float(score))}/100"
+        except (TypeError, ValueError):
+            score_text = f" · {score}"
+    matched_html = (
+        f"<p><strong>Matched:</strong> {html_escape(', '.join(matched_terms[:6]))}</p>"
+        if matched_terms
+        else ""
+    )
+    return f"""
+    <div class="radar-ai-summary paper-radar-insight">
+      <p><strong>Radar insight:</strong> {relevance_pill(label)}<span class="pill">Radar{html_escape(score_text)}</span></p>
+      {f'<p><strong>Summary:</strong> {html_escape(summary_text)}</p>' if summary_text else ''}
+      {f'<p><strong>Why:</strong> {html_escape(relation_text or why_text)}</p>' if relation_text or why_text else ''}
+      {f'<p><strong>Context:</strong> {html_escape(context_text)}</p>' if context_text else ''}
+      {matched_html}
+    </div>
+    """
+
+
+def normalize_inline_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def render_item_pdf_access_pill(item: dict[str, Any]) -> str:

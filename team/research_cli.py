@@ -14,7 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from shared.literature_radar import build_radar_history_brief, build_radar_review_queue, format_radar_source_stats
+from shared.literature_radar import (
+    build_radar_history_brief,
+    build_radar_review_queue,
+    format_radar_source_stats,
+    radar_latest_signal_lines,
+)
 from shared.research import topic_profile_by_id
 from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
 from team.research_ai import TeamResearchAnalyzer
@@ -149,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="negative Semantic Scholar seed paper id; repeatable",
+    )
+    radar.add_argument(
+        "--source-contact-email",
+        help="fallback contact email for OpenAlex, Crossref, and Unpaywall when service-specific values are unset",
     )
     radar.add_argument("--openalex-mailto", help="optional email for OpenAlex polite-pool requests")
     radar.add_argument(
@@ -462,6 +471,8 @@ def print_radar_papers(
             f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
             f"{access} | {imported}{latest_signal} | {record.get('title')}"
         )
+        for line in radar_latest_signal_lines(latest):
+            print(f"  {line}")
 
 
 def print_radar_queue(result: dict[str, Any]) -> None:
@@ -660,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             or saved_radar_list(saved_defaults, "negative_seed_paper_ids")
             or None,
             openalex_mailto=args.openalex_mailto
+            or args.source_contact_email
             or saved_radar_text(saved_defaults, "openalex_mailto")
             or saved_source_contact_email,
             openalex_author_ids=args.openalex_author_id
@@ -676,9 +688,11 @@ def main(argv: list[str] | None = None) -> int:
                 or saved_radar_bool(saved_defaults, "include_openreview_unaccepted")
             ),
             crossref_mailto=args.crossref_mailto
+            or args.source_contact_email
             or saved_radar_text(saved_defaults, "crossref_mailto")
             or saved_source_contact_email,
             unpaywall_email=args.unpaywall_email
+            or args.source_contact_email
             or saved_radar_text(saved_defaults, "unpaywall_email")
             or saved_source_contact_email,
             cache_pdfs=args.cache_pdfs or saved_radar_bool(saved_defaults, "cache_pdfs"),

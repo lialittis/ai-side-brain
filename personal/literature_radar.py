@@ -73,6 +73,8 @@ PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
 PERSONAL_RADAR_PAPER_HISTORY_NAME = "literature-radar-papers.json"
 PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
 PERSONAL_RADAR_PDF_CACHE_DIR = Path("memory") / "06_Logs" / "literature-radar-pdfs"
+PERSONAL_RADAR_SOURCE_CONTACT_ENV = "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL"
+RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 PERSONAL_RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
 
 
@@ -541,6 +543,10 @@ def collect_personal_radar_candidates(
 
     papers = []
     selected_year = conference_year or radar_year(now)
+    selected_crossref_mailto = personal_crossref_mailto(crossref_mailto)
+    selected_openalex_mailto = personal_openalex_mailto(openalex_mailto)
+    selected_unpaywall_email = personal_unpaywall_email(unpaywall_email)
+
     def collect_source(source_id: str, collector: Callable[[], list[dict[str, Any]]]) -> None:
         papers.extend(
             collect_radar_source(
@@ -560,7 +566,7 @@ def collect_personal_radar_candidates(
             lambda: collect_crossref_works(
                 query_terms=query_terms,
                 max_results=max_results,
-                mailto=crossref_mailto or os.environ.get("CROSSREF_MAILTO"),
+                mailto=selected_crossref_mailto,
             ),
         )
     if "dblp" in sources:
@@ -643,7 +649,7 @@ def collect_personal_radar_candidates(
             lambda: collect_openalex_works(
                 query_terms=query_terms,
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openalex_authors" in sources:
@@ -652,7 +658,7 @@ def collect_personal_radar_candidates(
             lambda: collect_openalex_author_works(
                 author_ids=required_openalex_author_ids(openalex_author_ids),
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openalex_venues" in sources:
@@ -662,7 +668,7 @@ def collect_personal_radar_candidates(
                 venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
                 year=selected_year,
                 max_results=max_results,
-                mailto=openalex_mailto or os.environ.get("OPENALEX_MAILTO"),
+                mailto=selected_openalex_mailto,
             ),
         )
     if "openreview" in sources:
@@ -699,7 +705,6 @@ def collect_personal_radar_candidates(
     if "ndss" in sources:
         collect_source("ndss", lambda: collect_ndss_accepted_papers(year=selected_year, max_results=max_results))
 
-    selected_unpaywall_email = unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")
     if selected_unpaywall_email:
         papers = enrich_radar_papers_with_unpaywall(
             papers,
@@ -1007,9 +1012,9 @@ def personal_radar_collection_config(
         semantic_scholar_api_key_configured=bool(
             semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
         ),
-        openalex_mailto_configured=bool(openalex_mailto or os.environ.get("OPENALEX_MAILTO")),
-        crossref_mailto_configured=bool(crossref_mailto or os.environ.get("CROSSREF_MAILTO")),
-        unpaywall_email_configured=bool(unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")),
+        openalex_mailto_configured=bool(personal_openalex_mailto(openalex_mailto)),
+        crossref_mailto_configured=bool(personal_crossref_mailto(crossref_mailto)),
+        unpaywall_email_configured=bool(personal_unpaywall_email(unpaywall_email)),
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=pdf_cache_dir if cache_pdfs else None,
         pdf_cache_max_bytes=pdf_cache_max_bytes if cache_pdfs else None,
@@ -1031,6 +1036,45 @@ def personal_resolved_source_list(
         if env_values:
             return env_values
     return []
+
+
+def personal_contact_value(*values: str | None) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def personal_source_contact_email() -> str | None:
+    return personal_contact_value(
+        os.environ.get(PERSONAL_RADAR_SOURCE_CONTACT_ENV),
+        os.environ.get(RADAR_SOURCE_CONTACT_ENV),
+    )
+
+
+def personal_openalex_mailto(value: str | None = None) -> str | None:
+    return personal_contact_value(
+        value,
+        os.environ.get("OPENALEX_MAILTO"),
+        personal_source_contact_email(),
+    )
+
+
+def personal_crossref_mailto(value: str | None = None) -> str | None:
+    return personal_contact_value(
+        value,
+        os.environ.get("CROSSREF_MAILTO"),
+        personal_source_contact_email(),
+    )
+
+
+def personal_unpaywall_email(value: str | None = None) -> str | None:
+    return personal_contact_value(
+        value,
+        os.environ.get("UNPAYWALL_EMAIL"),
+        personal_source_contact_email(),
+    )
 
 
 def update_personal_radar_paper_history(

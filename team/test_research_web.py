@@ -531,6 +531,16 @@ class TeamResearchWebTest(unittest.TestCase):
                 links={"landing": "https://www.semanticscholar.org/paper/paper-1"},
             )
             recommendations = recommend_papers([paper], limit=1)
+            recommendations[0]["summary"] = {
+                "short_summary": "This paper links memory safety to agentic systems.",
+                "relationship_to_interests": "Strong match for agentic security and memory safety.",
+                "confidence": "medium",
+            }
+            recommendations[0]["context"] = {
+                "relationship_summary": "Related to existing context: Agentic baseline.",
+                "related_items": [],
+            }
+            recommendations[0]["scoring"]["matched_positive_keywords"] = ["agentic security"]
             run = database.create_literature_radar_run(
                 sources=["semantic_scholar"],
                 query_terms=["system security"],
@@ -566,6 +576,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("In Library", html)
             self.assertNotIn("Add to Library", html)
             latest_html = render_latest_papers_page(database)
+            self.assertIn("Radar insight", latest_html)
+            self.assertIn("This paper links memory safety to agentic systems.", latest_html)
+            self.assertIn("Strong match for agentic security and memory safety.", latest_html)
+            self.assertIn("Related to existing context: Agentic baseline.", latest_html)
+            self.assertIn("Matched:", latest_html)
+            self.assertIn("agentic security", latest_html)
             self.assertIn("PDF: metadata_only_no_legal_pdf_found", latest_html)
             self.assertIn("Radar Queue", latest_html)
             self.assertNotIn("Priority Candidates", latest_html)
@@ -633,10 +649,32 @@ class TeamResearchWebTest(unittest.TestCase):
                 query_terms=["system security"],
                 now=datetime(2026, 7, 1, 11, 0, tzinfo=timezone.utc),
             )
+            other_recommendations = [
+                {
+                    "paper": other_paper,
+                    "scoring": {
+                        "score": 72,
+                        "label": "highly_relevant",
+                        "matched_positive_keywords": ["system security"],
+                        "matched_negative_keywords": [],
+                        "reasons": ["Strong match for system security."],
+                    },
+                    "why_relevant": "Strong match for system security.",
+                    "recommended_action": "Review for team library.",
+                    "summary": {
+                        "short_summary": "Stored queue signal for daily radar review.",
+                        "relationship_to_interests": "Strong match for system security.",
+                    },
+                    "context": {
+                        "relationship_summary": "Related to existing context: Security baseline.",
+                        "related_items": [],
+                    },
+                }
+            ]
             database.complete_literature_radar_run(
                 other_run["id"],
                 collected_papers=[other_paper],
-                recommendations=recommend_papers([other_paper], limit=1),
+                recommendations=other_recommendations,
                 now=datetime(2026, 7, 1, 11, 1, tzinfo=timezone.utc),
             )
             self.assertEqual(
@@ -659,12 +697,16 @@ class TeamResearchWebTest(unittest.TestCase):
             unreviewed_history_html = render_literature_radar_papers_page(database, review_status="unreviewed")
             self.assertIn("Unreviewed Radar History Paper", unreviewed_history_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", unreviewed_history_html)
+            self.assertIn("<strong>Why:</strong>", unreviewed_history_html)
+            self.assertIn("<strong>Matched:</strong>", unreviewed_history_html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar Queue", latest_html)
             self.assertIn("1 unreviewed, 1 watch, 0 dismissed from 2 stored Radar papers.", latest_html)
             self.assertIn("Priority Candidates", latest_html)
             self.assertIn("Unreviewed Radar History Paper", latest_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
+            self.assertIn("<strong>Why:</strong>", latest_html)
+            self.assertIn("<strong>Matched:</strong>", latest_html)
             self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)
             self.assertIn('href="/radar">Run Radar</a>', latest_html)
             self.assertIn('href="/radar/papers?limit=50">All 2</a>', latest_html)

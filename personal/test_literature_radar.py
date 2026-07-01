@@ -557,6 +557,17 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["review"], "unreviewed")
             self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
+            self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
+            queue_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(queue_text_stdout):
+                queue_text_code = personal_literature_radar.main(["queue", "--root-path", str(root)])
+            self.assertEqual(queue_text_code, 0)
+            queue_text = queue_text_stdout.getvalue()
+            self.assertIn("Why:", queue_text)
+            self.assertIn("Context:", queue_text)
+            self.assertIn("Matched:", queue_text)
+            self.assertIn("memory safety", queue_text)
 
             review_stdout = io.StringIO()
             with contextlib.redirect_stdout(review_stdout):
@@ -847,6 +858,58 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(source_records[-1]["source_id"], "unpaywall")
             self.assertEqual(source_records[-1]["status"], "failed")
 
+    def test_personal_literature_radar_uses_source_contact_env_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            openalex_paper = create_radar_paper(
+                source_id="openalex",
+                source_paper_id="W-personal-source-contact",
+                title="Personal OpenAlex Source Contact Memory Safety",
+                abstract="Memory safety and system security from OpenAlex.",
+                identifiers={
+                    "openalex_id": "W-personal-source-contact",
+                    "doi": "10.1145/personal-source-contact-openalex",
+                },
+                links={"landing": "https://openalex.org/W-personal-source-contact"},
+            )
+            crossref_paper = create_radar_paper(
+                source_id="crossref",
+                source_paper_id="10.1145/personal-source-contact-crossref",
+                title="Personal Crossref Source Contact Memory Safety",
+                abstract="Memory safety and system security from Crossref.",
+                identifiers={"doi": "10.1145/personal-source-contact-crossref"},
+                links={"landing": "https://doi.org/10.1145/personal-source-contact-crossref"},
+            )
+            with mock.patch.dict(
+                "os.environ",
+                {"PERSONAL_RADAR_SOURCE_CONTACT_EMAIL": "personal-radar@example.org"},
+                clear=True,
+            ):
+                with mock.patch("personal.literature_radar.collect_openalex_works", return_value=[openalex_paper]) as openalex:
+                    with mock.patch("personal.literature_radar.collect_crossref_works", return_value=[crossref_paper]) as crossref:
+                        with mock.patch(
+                            "personal.literature_radar.enrich_paper_with_unpaywall",
+                            side_effect=lambda paper, **_kwargs: paper,
+                        ) as unpaywall:
+                            result = run_personal_literature_radar(
+                                root_path=root,
+                                sources=["openalex", "crossref"],
+                                query_terms=["memory safety"],
+                                max_results=2,
+                                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                            )
+
+            self.assertEqual(openalex.call_args.kwargs["mailto"], "personal-radar@example.org")
+            self.assertEqual(crossref.call_args.kwargs["mailto"], "personal-radar@example.org")
+            self.assertEqual(
+                [call.kwargs["email"] for call in unpaywall.call_args_list],
+                ["personal-radar@example.org", "personal-radar@example.org"],
+            )
+            config = result["run"]["collection_config"]
+            self.assertTrue(config["openalex_mailto_configured"])
+            self.assertTrue(config["crossref_mailto_configured"])
+            self.assertTrue(config["unpaywall_email_configured"])
+
     def test_personal_literature_radar_collects_dblp_venue_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1054,6 +1117,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "seed-positive",
                         "--negative-seed-paper-id",
                         "seed-negative",
+                        "--source-contact-email",
+                        "radar@example.org",
+                        "--crossref-mailto",
+                        "crossref@example.org",
                         "--venue-profile",
                         "security",
                         "--openreview-venue-profile",
@@ -1082,6 +1149,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
         self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
         self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
+        self.assertEqual(runner.call_args.kwargs["openalex_mailto"], "radar@example.org")
+        self.assertEqual(runner.call_args.kwargs["crossref_mailto"], "crossref@example.org")
+        self.assertEqual(runner.call_args.kwargs["unpaywall_email"], "radar@example.org")
         self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
         self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr"])
         self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])

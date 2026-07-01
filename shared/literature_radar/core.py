@@ -1734,6 +1734,12 @@ def build_radar_history_brief(
         recommendation = entry["recommendation"]
         run = entry["run"]
         title_text = radar_brief_recommendation_title(recommendation)
+        signal_lines = [f"- {line}" for line in radar_latest_signal_lines(recommendation)]
+        context_line = (
+            []
+            if any(line.startswith("- Context:") for line in signal_lines)
+            else [f"- Context: {context_report_text(radar_brief_recommendation_context(recommendation))}"]
+        )
         lines.extend(
             [
                 f"### {index}. {title_text}",
@@ -1743,7 +1749,8 @@ def build_radar_history_brief(
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
                 f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
-                f"- Context: {context_report_text(radar_brief_recommendation_context(recommendation))}",
+                *signal_lines,
+                *context_line,
                 f"- PDF policy: {pdf_access_report_text(radar_brief_recommendation_pdf_access(recommendation))}",
                 f"- Link: {radar_brief_recommendation_link(recommendation)}",
                 "",
@@ -2161,11 +2168,21 @@ def build_radar_review_queue(
         and radar_history_review_status(record) == selected_review
         and not radar_history_is_imported(record)
     ]
+    queued_papers = [
+        radar_history_record_with_signal_lines(record)
+        for record in sorted(active_records, key=radar_history_priority_key, reverse=True)[: max(0, int(limit))]
+    ]
     return {
         "review": selected_review,
         "review_counts": counts,
-        "papers": sorted(active_records, key=radar_history_priority_key, reverse=True)[: max(0, int(limit))],
+        "papers": queued_papers,
     }
+
+
+def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(record)
+    enriched["signal_lines"] = radar_latest_signal_lines(record)
+    return enriched
 
 
 def radar_queue_priority_review_status(records: list[dict[str, Any]]) -> str:
@@ -2195,6 +2212,52 @@ def radar_history_priority_key(record: dict[str, Any]) -> tuple[float, str, str]
         str(record.get("latest_seen_at") or ""),
         str(record.get("title") or "").lower(),
     )
+
+
+def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> list[str]:
+    latest = source.get("latest_recommendation") if isinstance(source, dict) else {}
+    if not isinstance(latest, dict) or not latest:
+        latest = source if isinstance(source, dict) else {}
+    if not isinstance(latest, dict) or not latest:
+        return []
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def add_line(label: str, value: Any) -> None:
+        text = normalize_spaces(str(value or ""))
+        if not text or text in seen:
+            return
+        lines.append(f"{label}: {text}")
+        seen.add(text)
+
+    add_line("Signal", summary.get("short_summary"))
+    add_line("Why", summary.get("relationship_to_interests") or latest.get("why_relevant"))
+    add_line("Context", context.get("relationship_summary"))
+
+    scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    matched_terms = unique_normalized_terms(
+        latest.get("matched_positive_keywords")
+        or scoring.get("matched_positive_keywords")
+        or scoring.get("matched_terms")
+        or []
+    )
+    if matched_terms:
+        lines.append(f"Matched: {', '.join(matched_terms[:max(0, int(max_matched_terms))])}")
+    return lines
+
+
+def unique_normalized_terms(values: list[Any]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        term = normalize_spaces(str(value or ""))
+        key = term.lower()
+        if term and key not in seen:
+            terms.append(term)
+            seen.add(key)
+    return terms
 
 
 def radar_brief_recommendation_novelty(recommendation: dict[str, Any]) -> dict[str, Any]:

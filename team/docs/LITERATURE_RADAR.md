@@ -56,7 +56,9 @@ The page is review-first:
    papers without importing them into the main library;
 5. a team member clicks `Add to Library` only for papers worth tracking;
 6. imported papers appear in Latest Papers with the normal tag, relevance,
-   importance, comment, soft-remove, and recovery controls.
+   importance, comment, soft-remove, and recovery controls, plus a compact
+   Radar insight block with the stored summary, relevance reason, matched
+   interests, and relationship to existing team context.
 
 This keeps automatic collection broad without filling the team library with
 every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
@@ -71,10 +73,10 @@ The Radar page also shows review queue counts for all stored Radar papers, so a
 team member can jump directly to unreviewed, watch, or dismissed candidates.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
 panel whenever stored Radar papers exist. It also previews the highest-priority
-stored candidates, with paper links plus watch, dismiss, and add-to-library
-actions that return to the daily page. That keeps scheduled discovery visible
-in the team’s normal daily scan without auto-importing candidates into the main
-library.
+stored candidates, with stored why/context/matched-interest signal lines, paper
+links plus watch, dismiss, and add-to-library actions that return to the daily
+page. That keeps scheduled discovery visible in the team’s normal daily scan
+without auto-importing candidates into the main library.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -127,6 +129,9 @@ Useful options:
   `semantic_scholar_references`, or `semantic_scholar_citations`.
 - `--negative-seed-paper-id`: Semantic Scholar seed paper ID to steer related
   recommendations away from; repeatable.
+- `--source-contact-email`: fallback contact email for OpenAlex polite-pool
+  requests, Crossref polite-pool requests, and Unpaywall OA/PDF enrichment when
+  service-specific options are unset.
 - `--openalex-mailto`: optional email for OpenAlex polite-pool requests;
   `OPENALEX_MAILTO` is also supported.
 - `--openalex-author-id`: OpenAlex author ID to track; repeatable. Use with the
@@ -264,7 +269,9 @@ still preserving the metadata trail.
 The CLI and browser both expose review queues: use
 `radar-queue` for the active daily terminal queue ranked with the same shared
 priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
-papers and papers already imported into the library. Use
+papers and papers already imported into the library, and the text output includes
+stored signal lines for why a paper is relevant, how it relates to existing
+context, and which interests matched. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 `--status dismissed`, or `--status unreviewed` to change a stored paper from
@@ -279,7 +286,7 @@ conference profile/year.
 Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
 without collecting again. It aggregates run status, per-source counts, venue
 coverage, failures, and the top stored recommendations with review state,
-context, and PDF policy. New runs snapshot the Team Interest weights used for
+stored signal lines, context, and PDF policy. New runs snapshot the Team Interest weights used for
 scoring, so a weekly brief can still explain recommendations after the
 `/interests` sliders change. They also include a pipeline trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and report
@@ -312,8 +319,10 @@ should ignore web-saved defaults and use only explicit environment variables.
 
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also writes text and JSON `literature-radar-queue-*` snapshots
-for the active review queue unless `RADAR_WRITE_QUEUE=0`; use
-`RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
+for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
+includes the stored summary, relevance/context signal, and matched interests for
+daily review, and the JSON snapshot includes the same lines under
+`signal_lines`. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
 brief script writes a stored-run roll-up without collecting again. The cycle
 script runs both in order; if collection fails, the brief step does not run.
 
@@ -375,8 +384,9 @@ It reads `.env` first and supports these optional variables:
   default `20`.
 - `RADAR_BRIEF_RUN_LIMIT`: maximum stored runs to inspect; default `50`.
 - `RADAR_BRIEF_OUTPUT_DIR`: brief output directory; default `team/logs`.
-- API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`, `OPENALEX_MAILTO`,
-  `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
+- API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`,
+  `RADAR_SOURCE_CONTACT_EMAIL`, `OPENALEX_MAILTO`, `CROSSREF_MAILTO`,
+  `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
 
 Example cron entry for 07:30 daily:
 
