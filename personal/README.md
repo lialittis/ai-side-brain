@@ -95,7 +95,8 @@ Reports mark recommendations as new or seen-before using the local
 Use `review` to mark a stored paper as `watch`, `dismissed`, or `unreviewed`.
 Dismissed papers stay in history but are skipped by future Personal Radar
 recommendations, which keeps repeated low-value hits from consuming review
-slots.
+slots. Review changes also update stored run recommendations so weekly or daily
+briefs show the current review state without requiring another collection run.
 That paper history stores the PDF-access decision metadata for each deduplicated
 paper without downloading or redistributing PDFs. Recommendation reports also
 include the source URL, access timestamp, OA status, license, local PDF path when
@@ -104,6 +105,14 @@ If one source fails during a multi-source run, Personal Radar records the run as
 `partial`, keeps recommendations from successful sources, records per-source
 candidate counts, and appends source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
-collecting again.
+collecting again; it includes relevance, novelty, review state, context, and PDF
+policy for the top stored recommendations. Stored runs also snapshot the topic
+profile used for scoring and a phase trace for collection, PDF policy,
+deduplication, scoring, summarization, storage, and reporting, so later briefs
+remain understandable after the local profile changes. Brief ranking is
+review-aware: `watch` papers are listed before unreviewed papers, and
+`dismissed` papers are pushed behind active candidates. Stored run history also
+keeps non-secret collection settings such as limits, conference year, venue
+profiles, seed counts, and whether summaries or PDF caching were enabled.
 
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

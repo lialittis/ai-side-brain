@@ -9,7 +9,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from shared.literature_radar import assess_pdf_access, add_recommendation_novelty, dedupe_key as radar_dedupe_key
+from shared.literature_radar import (
+    assess_pdf_access,
+    add_recommendation_novelty,
+    build_radar_pipeline_trace,
+    dedupe_key as radar_dedupe_key,
+)
 from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import (
     TeamResearchRunResult,
@@ -1080,6 +1085,8 @@ class TeamResearchDatabase:
         *,
         sources: list[str],
         query_terms: list[str],
+        collection_config: dict[str, Any] | None = None,
+        scoring_profile: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
@@ -1101,6 +1108,10 @@ class TeamResearchDatabase:
             "source_stats": [],
             "source_errors": [],
         }
+        if collection_config:
+            run["collection_config"] = collection_config
+        if scoring_profile:
+            run["scoring_profile"] = scoring_profile
         with self.connect() as connection:
             self._upsert_literature_radar_run(connection, run)
         return run
@@ -1192,6 +1203,15 @@ class TeamResearchDatabase:
                     "error": error,
                     "source_errors": source_errors or [],
                     "source_stats": source_stats or [],
+                    "pipeline_trace": build_radar_pipeline_trace(
+                        status=status,
+                        collected_papers=collected_papers,
+                        recommendations=recommendations,
+                        imported_count=len(imported_results),
+                        source_errors=source_errors,
+                        report_written=bool(report),
+                        storage_target="team_sqlite",
+                    ),
                 }
             )
             self._upsert_literature_radar_run(connection, run)

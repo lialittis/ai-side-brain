@@ -13,6 +13,7 @@ from shared.literature_radar import (
     add_recommendation_novelty,
     assess_pdf_access,
     build_recommendation_report,
+    build_radar_pipeline_trace,
     build_radar_history_brief,
     cache_open_access_pdf,
     cache_recommendation_pdfs,
@@ -64,6 +65,41 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("ai_safety", profile["topics"])
         self.assertIn("memory safety", profile["topics"]["memory_safety"]["positive_keywords"])
         self.assertIn("agent safety", profile["topics"]["ai_safety"]["positive_keywords"])
+
+    def test_builds_pipeline_trace_for_separated_radar_phases(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00045",
+            title="Pipeline Trace Memory Safety",
+            abstract="Memory safety and system security.",
+            identifiers={"arxiv_id": "2601.00045"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00045"},
+        )
+        recommendation = recommend_papers([paper])[0]
+        recommendation["pdf_access"] = {
+            "can_download": True,
+            "downloaded": False,
+        }
+        recommendation["summary"] = {"short_summary": "A useful memory safety paper."}
+
+        trace = build_radar_pipeline_trace(
+            status="partial",
+            collected_papers=[paper],
+            recommendations=[recommendation],
+            source_errors=[{"source_id": "dblp", "error": "unavailable"}],
+            report_written=True,
+            storage_target="test_index",
+        )
+
+        by_phase = {record["phase"]: record for record in trace}
+        self.assertEqual([record["phase"] for record in trace], RADAR_PIPELINE_PHASES)
+        self.assertEqual(by_phase["metadata_collection"]["status"], "partial")
+        self.assertEqual(by_phase["metadata_collection"]["metrics"]["collected_count"], 1)
+        self.assertEqual(by_phase["copyright_license_check"]["metrics"]["downloadable_pdf_count"], 1)
+        self.assertEqual(by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
+        self.assertEqual(by_phase["ai_summarization"]["status"], "succeeded")
+        self.assertEqual(by_phase["long_term_storage"]["metrics"]["storage_target"], "test_index")
+        self.assertEqual(by_phase["recommendation_report"]["status"], "succeeded")
 
     def test_dblp_venue_profiles_cover_required_conference_groups(self) -> None:
         profiles = dblp_venue_profiles()
@@ -383,6 +419,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             history_by_dedupe_key={},
             now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
         )[0]
+        new_recommendation["review"] = {"status": "watch", "reviewed_by": "alice"}
         seen_recommendation = add_recommendation_novelty(
             [recommendation],
             history_by_dedupe_key={
@@ -405,6 +442,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(new_recommendation["novelty"]["status"], "new")
         self.assertFalse(seen_recommendation["novelty"]["is_new"])
         self.assertEqual(seen_recommendation["novelty"]["seen_count_before_run"], 2)
+        self.assertIn("Review: watch", report)
         self.assertIn("Novelty: new this run", report)
         self.assertIn("Novelty: seen before (2 prior runs", report)
 
@@ -466,23 +504,74 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [paper],
             now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
         )[0]
+        recommendation["review"] = {
+            "status": "dismissed",
+            "reviewed_by": "alice",
+            "reviewed_at": "2026-07-01T10:00:00+00:00",
+            "reason": "outside current sprint",
+        }
+        watch_paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00032",
+            title="Weekly Watch Radar",
+            abstract="Agentic security paper that should stay on the team's watch list.",
+            identifiers={"arxiv_id": "2601.00032"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00032"},
+        )
+        watch_recommendation = recommend_papers(
+            [watch_paper],
+            now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        )[0]
+        watch_recommendation["scoring"]["score"] = 10
+        watch_recommendation["review"] = {
+            "status": "watch",
+            "reviewed_by": "bob",
+            "reviewed_at": "2026-07-01T11:00:00+00:00",
+        }
         brief = build_radar_history_brief(
             [
                 {
                     "id": "run_recent",
                     "status": "partial",
                     "started_at": "2026-07-01T09:00:00+00:00",
-                    "collected_count": 1,
-                    "recommendation_count": 1,
+                    "collected_count": 2,
+                    "recommendation_count": 2,
                     "imported_count": 0,
+                    "collection_config": {
+                        "max_results": 25,
+                        "recommendation_limit": 5,
+                        "conference_year": 2026,
+                        "dblp_venue_profiles": ["security"],
+                        "openreview_venue_profiles": ["iclr"],
+                        "summarize": True,
+                        "summary_provider": "local",
+                        "summary_limit": 2,
+                        "cache_pdfs": False,
+                    },
+                    "scoring_profile": {
+                        "type": "team_interests",
+                        "name": "Team Interests",
+                        "interests": [
+                            {"keyword": "memory safety", "weight": 90},
+                            {"keyword": "agentic security", "weight": 80},
+                        ],
+                    },
+                    "pipeline_trace": build_radar_pipeline_trace(
+                        status="partial",
+                        collected_papers=[paper, watch_paper],
+                        recommendations=[recommendation, watch_recommendation],
+                        source_errors=[{"source_id": "dblp", "error": "DBLP unavailable"}],
+                        report_written=True,
+                        storage_target="team_sqlite",
+                    ),
                     "source_stats": [
-                        {"source_id": "arxiv", "status": "succeeded", "collected_count": 1},
+                        {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
                         {"source_id": "dblp", "status": "failed", "collected_count": 0},
                     ],
                     "source_errors": [
                         {"source_id": "dblp", "error_type": "RuntimeError", "error": "DBLP unavailable"}
                     ],
-                    "recommendations": [recommendation],
+                    "recommendations": [recommendation, watch_recommendation],
                 },
                 {
                     "id": "run_old",
@@ -502,10 +591,22 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("# Test Radar Brief", brief)
         self.assertIn("Window: last 7 days", brief)
         self.assertIn("Runs: 1 (partial=1)", brief)
-        self.assertIn("`arxiv`: 1 candidate(s)", brief)
+        self.assertIn("Review states: dismissed=1, watch=1", brief)
+        self.assertIn("Collection Configs", brief)
+        self.assertIn("max=25; limit=5; year=2026; venues=security; openreview=iclr; summary=local limit=2", brief)
+        self.assertIn("Scoring Profiles", brief)
+        self.assertIn("Team Interests: memory safety=90, agentic security=80", brief)
+        self.assertIn("Pipeline Trace", brief)
+        self.assertIn("`metadata_collection`: partial=1", brief)
+        self.assertIn("`recommendation_report`: succeeded=1", brief)
+        self.assertIn("`arxiv`: 2 candidate(s)", brief)
         self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)
         self.assertIn("DBLP unavailable", brief)
+        self.assertLess(brief.index("Weekly Watch Radar"), brief.index("Weekly Memory Safety Radar"))
         self.assertIn("Weekly Memory Safety Radar", brief)
+        self.assertIn("Review: watch", brief)
+        self.assertIn("Review: dismissed", brief)
+        self.assertIn("reason: outside current sprint", brief)
         self.assertIn("PDF policy: download allowed", brief)
         self.assertNotIn("run_old", brief)
 

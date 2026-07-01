@@ -32,10 +32,12 @@ Pipeline phases are explicit:
 
 The shared package currently provides source definitions, default security and
 AI topic interests, deduplication, PDF access policy, deterministic scoring, and
-recommendation report generation. It also includes initial arXiv, DBLP,
-Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors that use public
-metadata APIs and return product-neutral radar paper records. Semantic Scholar
-also supports seed-paper recommendation expansion through the official
+recommendation report generation. It also includes a product-neutral pipeline
+trace builder so Personal and Team runs can store phase-level status for the
+explicit radar pipeline. The initial arXiv, DBLP, Semantic Scholar, OpenAlex,
+Crossref, and OpenReview collectors use public metadata APIs and return
+product-neutral radar paper records. Semantic Scholar also supports seed-paper
+recommendation expansion through the official
 Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
 DOI-bearing papers without downloading files. Product adapters own scheduling,
 credentials, storage, and UI.
@@ -47,7 +49,11 @@ OpenRouter structured summaries.
 Recommendation reports can include novelty metadata supplied by Personal or
 Team storage, keeping "new this run" separate from relevance score.
 The shared brief builder can also aggregate stored daily runs into a weekly or
-daily review brief without recollecting metadata or calling external APIs.
+daily review brief without recollecting metadata or calling external APIs, and
+it carries stored review state such as `watch` or `dismissed` plus the scoring
+profile snapshot, non-secret collection settings, and phase trace used for the
+run. Brief ranking is review-aware: `watch` papers are surfaced before
+unreviewed papers, while `dismissed` papers fall behind active candidates.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.

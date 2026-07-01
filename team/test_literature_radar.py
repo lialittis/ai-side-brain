@@ -203,6 +203,26 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(scoring["topic_scores"][0]["weight"], 100)
             self.assertEqual(scoring["source_trace"]["processor"], "team-interest-radar-scorer-v0.1")
             self.assertIn("Ranked with editable Team Interest weights.", result["recommendations"][0]["why_relevant"])
+            stored_run = database.get_literature_radar_run(result["run_id"])
+            self.assertEqual(stored_run["collection_config"]["max_results"], 2)
+            self.assertEqual(stored_run["collection_config"]["recommendation_limit"], 10)
+            self.assertEqual(stored_run["collection_config"]["conference_year"], 2026)
+            self.assertFalse(stored_run["collection_config"]["cache_pdfs"])
+            self.assertNotIn("semantic_scholar_api_key", stored_run["collection_config"])
+            self.assertEqual(stored_run["scoring_profile"]["type"], "team_interests")
+            self.assertEqual(
+                stored_run["scoring_profile"]["interests"],
+                [
+                    {"keyword": "radiative cooling", "weight": 100},
+                    {"keyword": "system security", "weight": 85},
+                    {"keyword": "agentic security", "weight": 80},
+                    {"keyword": "memory safety", "weight": 20},
+                ],
+            )
+            pipeline_by_phase = {record["phase"]: record for record in stored_run["pipeline_trace"]}
+            self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
+            self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
+            self.assertEqual(pipeline_by_phase["long_term_storage"]["metrics"]["storage_target"], "team_sqlite")
 
     def test_run_team_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

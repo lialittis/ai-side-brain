@@ -203,7 +203,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(history_record["seen_count"], 2)
             runs = read_personal_radar_index(root)
             self.assertEqual(runs[0]["recommendation_count"], 0)
-            self.assertEqual(runs[1]["recommendations"][0]["review"]["status"], "unreviewed")
+            self.assertEqual(runs[1]["recommendations"][0]["review"]["status"], "dismissed")
+            self.assertEqual(runs[1]["recommendations"][0]["review"]["reviewed_by"], "alice")
 
     def test_run_personal_literature_radar_records_partial_source_errors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -336,8 +337,22 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(scoring["matched_positive_keywords"], ["building control", "radiative cooling"])
             self.assertEqual(scoring["score"], 36)
             runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["collection_config"]["max_results"], 1)
+            self.assertEqual(runs[0]["collection_config"]["recommendation_limit"], 10)
+            self.assertEqual(runs[0]["collection_config"]["conference_year"], 2026)
+            self.assertTrue(runs[0]["collection_config"]["write_report"])
+            self.assertNotIn("semantic_scholar_api_key", runs[0]["collection_config"])
             self.assertEqual(runs[0]["topic_profile_id"], "personal-radiative-radar")
             self.assertEqual(runs[0]["topic_profile_name"], "Personal Radiative Radar")
+            self.assertEqual(runs[0]["scoring_profile"]["type"], "topic_profile")
+            self.assertEqual(runs[0]["scoring_profile"]["topics"][0]["id"], "radiative_cooling")
+            self.assertEqual(
+                runs[0]["scoring_profile"]["topics"][0]["positive_keywords"],
+                ["radiative cooling", "building control"],
+            )
+            pipeline_by_phase = {record["phase"]: record for record in runs[0]["pipeline_trace"]}
+            self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
+            self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
 
     def test_run_personal_literature_radar_uses_openrouter_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -440,6 +455,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(reviewed["reviewed_by"], "alice")
             updated_history = read_personal_radar_paper_history(root)
             self.assertEqual(updated_history[papers[0]["dedupe_key"]]["review_status"], "watch")
+            updated_runs = read_personal_radar_index(root)
+            self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["status"], "watch")
+            self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["reviewed_by"], "alice")
 
             brief_stdout = io.StringIO()
             with contextlib.redirect_stdout(brief_stdout):
@@ -461,6 +479,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["run_count"], 1)
             self.assertIn("Personal Literature Radar Brief", brief["brief"])
             self.assertIn("Agentic Security for Memory Safety", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Scoring Profiles", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Pipeline Trace", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
 
     def test_personal_literature_radar_profile_init_writes_default_profile(self) -> None:

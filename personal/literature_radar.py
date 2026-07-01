@@ -19,7 +19,9 @@ from shared.literature_radar import (
     add_recommendation_context,
     add_recommendation_novelty,
     assess_pdf_access,
+    build_radar_collection_config,
     build_recommendation_report,
+    build_radar_pipeline_trace,
     cache_recommendation_pdfs,
     collect_arxiv,
     collect_crossref_works,
@@ -113,6 +115,35 @@ def run_personal_literature_radar(
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
+    collection_config = personal_radar_collection_config(
+        selected_sources=selected_sources,
+        max_results=max_results,
+        recommendation_limit=recommendation_limit,
+        summarize=summarize,
+        summary_provider=summary_provider,
+        summary_limit=summary_limit,
+        semantic_scholar_api_key=semantic_scholar_api_key,
+        seed_paper_ids=seed_paper_ids,
+        negative_seed_paper_ids=negative_seed_paper_ids,
+        openalex_mailto=openalex_mailto,
+        openreview_invitations=openreview_invitations,
+        crossref_mailto=crossref_mailto,
+        unpaywall_email=unpaywall_email,
+        semantic_scholar_author_ids=semantic_scholar_author_ids,
+        dblp_author_pids=dblp_author_pids,
+        openalex_author_ids=openalex_author_ids,
+        conference_year=conference_year,
+        dblp_venue_profiles=dblp_venue_profiles,
+        openreview_venue_profiles=openreview_venue_profiles,
+        openreview_accepted_only=openreview_accepted_only,
+        usenix_security_cycles=usenix_security_cycles,
+        topic_profile_path=topic_profile_path,
+        write_report=write_report,
+        cache_pdfs=cache_pdfs,
+        pdf_cache_dir=pdf_cache_dir,
+        pdf_cache_max_bytes=pdf_cache_max_bytes,
+        now=selected_now,
+    )
     run_id = personal_radar_run_id(selected_sources, selected_terms, selected_now)
     source_errors: list[dict[str, Any]] = []
     source_stats: list[dict[str, Any]] = []
@@ -189,6 +220,8 @@ def run_personal_literature_radar(
         sources=selected_sources,
         query_terms=selected_terms,
         topic_profile=selected_topic_profile,
+        collection_config=collection_config,
+        collected_papers=collected,
         collected_count=len(collected),
         recommendations=recommendations,
         source_errors=source_errors,
@@ -806,6 +839,8 @@ def build_personal_radar_run_record(
     sources: list[str],
     query_terms: list[str],
     topic_profile: dict[str, Any],
+    collection_config: dict[str, Any],
+    collected_papers: list[dict[str, Any]],
     collected_count: int,
     recommendations: list[dict[str, Any]],
     source_errors: list[dict[str, Any]] | None = None,
@@ -823,6 +858,16 @@ def build_personal_radar_run_record(
         "query_terms": query_terms,
         "topic_profile_id": topic_profile.get("id") or "personal-literature-radar",
         "topic_profile_name": topic_profile.get("name") or "",
+        "collection_config": collection_config,
+        "scoring_profile": personal_radar_scoring_profile(topic_profile),
+        "pipeline_trace": build_radar_pipeline_trace(
+            status="partial" if errors else "succeeded",
+            collected_papers=collected_papers,
+            recommendations=recommendations,
+            source_errors=errors,
+            report_written=report_path is not None,
+            storage_target="personal_index",
+        ),
         "collected_count": collected_count,
         "recommendation_count": len(recommendations),
         "source_errors": errors,
@@ -845,6 +890,152 @@ def build_personal_radar_run_record(
             for index, recommendation in enumerate(recommendations, start=1)
         ],
     }
+
+
+def personal_radar_scoring_profile(topic_profile: dict[str, Any]) -> dict[str, Any]:
+    topics = []
+    for topic_id, topic in (topic_profile.get("topics") or {}).items():
+        if not isinstance(topic, dict):
+            continue
+        topics.append(
+            {
+                "id": str(topic_id),
+                "positive_keywords": [
+                    str(keyword).strip()
+                    for keyword in topic.get("positive_keywords") or []
+                    if str(keyword).strip()
+                ],
+                "negative_keywords": [
+                    str(keyword).strip()
+                    for keyword in topic.get("negative_keywords") or []
+                    if str(keyword).strip()
+                ],
+            }
+        )
+    return {
+        "type": "topic_profile",
+        "id": topic_profile.get("id") or "personal-literature-radar",
+        "name": topic_profile.get("name") or "Personal Literature Radar",
+        "topics": topics,
+    }
+
+
+def personal_radar_collection_config(
+    *,
+    selected_sources: list[str],
+    max_results: int,
+    recommendation_limit: int,
+    summarize: bool,
+    summary_provider: str,
+    summary_limit: int | None,
+    semantic_scholar_api_key: str | None,
+    seed_paper_ids: list[str] | None,
+    negative_seed_paper_ids: list[str] | None,
+    openalex_mailto: str | None,
+    openreview_invitations: list[str] | None,
+    crossref_mailto: str | None,
+    unpaywall_email: str | None,
+    semantic_scholar_author_ids: list[str] | None,
+    dblp_author_pids: list[str] | None,
+    openalex_author_ids: list[str] | None,
+    conference_year: int | None,
+    dblp_venue_profiles: list[str] | None,
+    openreview_venue_profiles: list[str] | None,
+    openreview_accepted_only: bool,
+    usenix_security_cycles: list[int] | None,
+    topic_profile_path: Path | None,
+    write_report: bool,
+    cache_pdfs: bool,
+    pdf_cache_dir: Path | None,
+    pdf_cache_max_bytes: int,
+    now: datetime,
+) -> dict[str, Any]:
+    return build_radar_collection_config(
+        max_results=max_results,
+        recommendation_limit=recommendation_limit,
+        summarize=summarize,
+        summary_provider=summary_provider,
+        summary_limit=summary_limit,
+        topic_profile_path=topic_profile_path,
+        write_report=write_report,
+        conference_year=conference_year or radar_year(now),
+        dblp_venue_profiles=personal_resolved_source_list(
+            selected_sources,
+            {"dblp_venues", "openalex_venues"},
+            dblp_venue_profiles,
+            ["RADAR_DBLP_VENUES"],
+        ),
+        openreview_venue_profiles=personal_resolved_source_list(
+            selected_sources,
+            {"openreview_venues"},
+            openreview_venue_profiles,
+            ["RADAR_OPENREVIEW_VENUES"],
+        ),
+        openreview_accepted_only=openreview_accepted_only,
+        usenix_security_cycles=(usenix_security_cycles or [1]) if "usenix_security" in selected_sources else None,
+        seed_paper_ids=personal_resolved_source_list(
+            selected_sources,
+            SEMANTIC_SCHOLAR_SEED_SOURCES,
+            seed_paper_ids,
+            ["RADAR_SEED_PAPER_IDS"],
+        ),
+        negative_seed_paper_ids=personal_resolved_source_list(
+            selected_sources,
+            {"semantic_scholar_recommendations"},
+            negative_seed_paper_ids,
+            ["RADAR_NEGATIVE_SEED_PAPER_IDS"],
+        ),
+        semantic_scholar_author_ids=personal_resolved_source_list(
+            selected_sources,
+            {"semantic_scholar_authors"},
+            semantic_scholar_author_ids,
+            ["RADAR_AUTHOR_IDS"],
+        ),
+        dblp_author_pids=personal_resolved_source_list(
+            selected_sources,
+            {"dblp_authors"},
+            dblp_author_pids,
+            ["PERSONAL_RADAR_DBLP_AUTHOR_PIDS", "RADAR_DBLP_AUTHOR_PIDS"],
+        ),
+        openalex_author_ids=personal_resolved_source_list(
+            selected_sources,
+            {"openalex_authors"},
+            openalex_author_ids,
+            ["PERSONAL_RADAR_OPENALEX_AUTHOR_IDS", "RADAR_OPENALEX_AUTHOR_IDS"],
+        ),
+        openreview_invitations=personal_resolved_source_list(
+            selected_sources,
+            {"openreview"},
+            openreview_invitations,
+            ["OPENREVIEW_INVITATIONS"],
+        ),
+        semantic_scholar_api_key_configured=bool(
+            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        ),
+        openalex_mailto_configured=bool(openalex_mailto or os.environ.get("OPENALEX_MAILTO")),
+        crossref_mailto_configured=bool(crossref_mailto or os.environ.get("CROSSREF_MAILTO")),
+        unpaywall_email_configured=bool(unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")),
+        cache_pdfs=cache_pdfs,
+        pdf_cache_dir=pdf_cache_dir if cache_pdfs else None,
+        pdf_cache_max_bytes=pdf_cache_max_bytes if cache_pdfs else None,
+    )
+
+
+def personal_resolved_source_list(
+    selected_sources: list[str],
+    relevant_sources: set[str],
+    values: list[str] | None,
+    env_names: list[str],
+) -> list[str]:
+    if not any(source in selected_sources for source in relevant_sources):
+        return []
+    if values:
+        return values
+    for env_name in env_names:
+        env_values = env_list(env_name)
+        if env_values:
+            return env_values
+    return []
 
 
 def update_personal_radar_paper_history(
@@ -909,11 +1100,13 @@ def mark_personal_radar_paper_review(
     record["reviewed_at"] = timestamp
     record["review_reason"] = str(reason or "").strip()
     latest = record.get("latest_recommendation")
+    review = personal_radar_review_record(record)
     if isinstance(latest, dict):
-        latest["review"] = personal_radar_review_record(record)
+        latest["review"] = review
         record["latest_recommendation"] = latest
     histories[selected_key] = record
     write_personal_radar_paper_history(root, histories)
+    update_personal_radar_index_review(root, selected_key, review, updated_at=timestamp)
     return record
 
 
@@ -1000,6 +1193,32 @@ def append_personal_radar_index(root: Path, run_record: dict[str, Any]) -> None:
     runs = read_personal_radar_index(root)
     runs = [run for run in runs if run.get("id") != run_record["id"]]
     runs.insert(0, run_record)
+    write_personal_radar_index(root, runs[:200])
+
+
+def update_personal_radar_index_review(
+    root: Path,
+    dedupe_key: str,
+    review: dict[str, Any],
+    *,
+    updated_at: str,
+) -> bool:
+    runs = read_personal_radar_index(root)
+    changed = False
+    for run in runs:
+        for recommendation in run.get("recommendations") or []:
+            if str(recommendation.get("dedupe_key") or "") == dedupe_key:
+                recommendation["review"] = dict(review)
+                recommendation["updated_at"] = updated_at
+                changed = True
+    if changed:
+        write_personal_radar_index(root, runs)
+    return changed
+
+
+def write_personal_radar_index(root: Path, runs: list[dict[str, Any]]) -> None:
+    path = personal_radar_index_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(runs[:200], ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
 
 

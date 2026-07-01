@@ -1144,6 +1144,7 @@ def build_recommendation_report(
                 f"## {index}. {paper.get('title') or 'Untitled paper'}",
                 "",
                 f"- Relevance: {scoring['label']} ({scoring['score']}/100)",
+                f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Novelty: {novelty_report_text(recommendation.get('novelty') or {})}",
                 f"- Why: {recommendation['why_relevant']}",
                 f"- Context: {context_report_text(recommendation.get('context') or {})}",
@@ -1162,6 +1163,154 @@ def build_recommendation_report(
             )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_radar_pipeline_trace(
+    *,
+    status: str,
+    collected_papers: list[dict[str, Any]] | None = None,
+    recommendations: list[dict[str, Any]] | None = None,
+    imported_count: int = 0,
+    source_errors: list[dict[str, Any]] | None = None,
+    report_written: bool = False,
+    storage_target: str = "",
+) -> list[dict[str, Any]]:
+    collected = collected_papers or []
+    selected_recommendations = recommendations or []
+    errors = source_errors or []
+    collection_status = "failed" if status == "failed" and not collected else "partial" if errors else "succeeded"
+    unique_paper_count = len(
+        {
+            key
+            for key in [
+                *[pipeline_paper_key(paper) for paper in collected],
+                *[pipeline_paper_key(recommendation.get("paper") or {}) for recommendation in selected_recommendations],
+            ]
+            if key
+        }
+    )
+    pdf_records = pipeline_pdf_access_records(collected, selected_recommendations)
+    summarized_count = sum(1 for recommendation in selected_recommendations if recommendation.get("summary"))
+    recommendation_count = len(selected_recommendations)
+    return [
+        pipeline_phase(
+            "metadata_collection",
+            collection_status,
+            collected_count=len(collected),
+            source_error_count=len(errors),
+        ),
+        pipeline_phase(
+            "pdf_link_collection",
+            "succeeded" if collected or selected_recommendations else "skipped",
+            pdf_record_count=len(pdf_records),
+        ),
+        pipeline_phase(
+            "copyright_license_check",
+            "succeeded" if collected or selected_recommendations else "skipped",
+            downloadable_pdf_count=sum(1 for pdf_access in pdf_records if pdf_access.get("can_download")),
+            downloaded_pdf_count=sum(1 for pdf_access in pdf_records if pdf_access.get("downloaded")),
+        ),
+        pipeline_phase(
+            "deduplication",
+            "succeeded" if unique_paper_count else "skipped",
+            unique_paper_count=unique_paper_count,
+        ),
+        pipeline_phase(
+            "relevance_scoring",
+            "succeeded" if recommendation_count else "no_matches",
+            recommendation_count=recommendation_count,
+        ),
+        pipeline_phase(
+            "ai_summarization",
+            summarization_phase_status(recommendation_count, summarized_count),
+            summarized_count=summarized_count,
+        ),
+        pipeline_phase(
+            "long_term_storage",
+            "succeeded",
+            storage_target=storage_target or "run_history",
+            imported_count=imported_count,
+        ),
+        pipeline_phase(
+            "recommendation_report",
+            "succeeded" if report_written else "skipped",
+        ),
+    ]
+
+
+def build_radar_collection_config(**values: Any) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    for key, value in values.items():
+        cleaned = radar_collection_config_value(value)
+        if cleaned is None:
+            continue
+        config[key] = cleaned
+    return config
+
+
+def radar_collection_config_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        value = list(value)
+    if isinstance(value, list):
+        cleaned_items = [radar_collection_config_value(item) for item in value]
+        return [item for item in cleaned_items if item not in (None, "", [])] or None
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            cleaned_value = radar_collection_config_value(item)
+            if cleaned_value not in (None, "", []):
+                cleaned[str(key)] = cleaned_value
+        return cleaned or None
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
+
+
+def pipeline_phase(phase: str, status: str, **metrics: Any) -> dict[str, Any]:
+    record = {
+        "phase": phase,
+        "status": status,
+    }
+    if metrics:
+        record["metrics"] = {key: value for key, value in metrics.items() if value not in (None, "")}
+    return record
+
+
+def pipeline_paper_key(paper: dict[str, Any]) -> str:
+    return str(paper.get("dedupe_key") or dedupe_key(paper) or "").strip()
+
+
+def pipeline_pdf_access_records(
+    collected_papers: list[dict[str, Any]],
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records = []
+    for paper in collected_papers:
+        pdf_access = paper.get("pdf_access")
+        if isinstance(pdf_access, dict):
+            records.append(pdf_access)
+    for recommendation in recommendations:
+        pdf_access = recommendation.get("pdf_access")
+        if not isinstance(pdf_access, dict):
+            paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+            pdf_access = paper.get("pdf_access")
+        if isinstance(pdf_access, dict):
+            records.append(pdf_access)
+    return records
+
+
+def summarization_phase_status(recommendation_count: int, summarized_count: int) -> str:
+    if recommendation_count <= 0:
+        return "skipped"
+    if summarized_count <= 0:
+        return "skipped"
+    if summarized_count < recommendation_count:
+        return "partial"
+    return "succeeded"
 
 
 def build_radar_history_brief(
@@ -1192,6 +1341,7 @@ def build_radar_history_brief(
         return "\n".join(lines).rstrip() + "\n"
 
     status_counts = radar_brief_status_counts([bundle["run"] for bundle in bundles])
+    review_counts = radar_brief_review_counts(bundles)
     total_collected = sum(int((bundle["run"]).get("collected_count") or 0) for bundle in bundles)
     total_recommended = sum(int((bundle["run"]).get("recommendation_count") or 0) for bundle in bundles)
     total_imported = sum(int((bundle["run"]).get("imported_count") or 0) for bundle in bundles)
@@ -1202,12 +1352,22 @@ def build_radar_history_brief(
             f"- Runs: {len(bundles)} ({format_status_counts(status_counts)})",
             f"- Collected candidates: {total_collected}",
             f"- Recommendations: {total_recommended}",
+            f"- Review states: {format_status_counts(review_counts)}",
             f"- Imported to library: {total_imported}",
             "",
         ]
     )
 
     source_lines = radar_brief_source_stat_lines([bundle["run"] for bundle in bundles])
+    collection_config_lines = radar_brief_collection_config_lines([bundle["run"] for bundle in bundles])
+    if collection_config_lines:
+        lines.extend(["## Collection Configs", "", *collection_config_lines, ""])
+    scoring_profile_lines = radar_brief_scoring_profile_lines([bundle["run"] for bundle in bundles])
+    if scoring_profile_lines:
+        lines.extend(["## Scoring Profiles", "", *scoring_profile_lines, ""])
+    pipeline_lines = radar_brief_pipeline_trace_lines([bundle["run"] for bundle in bundles])
+    if pipeline_lines:
+        lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
     if source_lines:
         lines.extend(["## Source Stats", "", *source_lines, ""])
     error_lines = radar_brief_source_error_lines([bundle["run"] for bundle in bundles])
@@ -1229,6 +1389,7 @@ def build_radar_history_brief(
                 "",
                 f"- Relevance: {radar_brief_recommendation_label(recommendation)} "
                 f"({radar_brief_recommendation_score(recommendation)}/100)",
+                f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
                 f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
                 f"- Context: {context_report_text(radar_brief_recommendation_context(recommendation))}",
@@ -1281,8 +1442,161 @@ def radar_brief_status_counts(runs: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def radar_brief_review_counts(bundles: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for bundle in bundles:
+        for recommendation in bundle["recommendations"]:
+            status = recommendation_review_record(recommendation)["status"]
+            counts[status] = counts.get(status, 0) + 1
+    return counts or {"none": 0}
+
+
 def format_status_counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+
+
+def radar_brief_pipeline_trace_lines(runs: list[dict[str, Any]]) -> list[str]:
+    status_by_phase: dict[str, dict[str, int]] = {}
+    for run in runs:
+        trace = run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
+        for phase_record in trace:
+            if not isinstance(phase_record, dict):
+                continue
+            phase = str(phase_record.get("phase") or "").strip()
+            if not phase:
+                continue
+            status = str(phase_record.get("status") or "unknown").strip()
+            counts = status_by_phase.setdefault(phase, {})
+            counts[status] = counts.get(status, 0) + 1
+    lines = []
+    for phase in RADAR_PIPELINE_PHASES:
+        if phase in status_by_phase:
+            lines.append(f"- `{phase}`: {format_status_counts(status_by_phase[phase])}")
+    for phase, counts in sorted(status_by_phase.items()):
+        if phase not in RADAR_PIPELINE_PHASES:
+            lines.append(f"- `{phase}`: {format_status_counts(counts)}")
+    return lines
+
+
+def radar_brief_collection_config_lines(runs: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    seen = set()
+    for run in runs:
+        config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+        if not config:
+            continue
+        key = repr(sorted(config.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"- {radar_brief_collection_config_text(config)}")
+    return lines
+
+
+def radar_brief_collection_config_text(config: dict[str, Any]) -> str:
+    parts = []
+    for key, label in (
+        ("max_results", "max"),
+        ("recommendation_limit", "limit"),
+        ("conference_year", "year"),
+    ):
+        if key in config:
+            parts.append(f"{label}={config[key]}")
+    for key, label in (
+        ("dblp_venue_profiles", "venues"),
+        ("openreview_venue_profiles", "openreview"),
+        ("usenix_security_cycles", "usenix_cycles"),
+    ):
+        values = config.get(key)
+        if isinstance(values, list) and values:
+            parts.append(f"{label}={', '.join(str(value) for value in values)}")
+    counted_fields = [
+        ("seed_paper_ids", "seeds"),
+        ("negative_seed_paper_ids", "negative_seeds"),
+        ("semantic_scholar_author_ids", "s2_authors"),
+        ("dblp_author_pids", "dblp_authors"),
+        ("openalex_author_ids", "openalex_authors"),
+        ("openreview_invitations", "openreview_invitations"),
+    ]
+    for key, label in counted_fields:
+        values = config.get(key)
+        if isinstance(values, list) and values:
+            parts.append(f"{label}={len(values)}")
+    if config.get("summarize"):
+        provider = config.get("summary_provider") or "local"
+        summary_limit = config.get("summary_limit")
+        parts.append(f"summary={provider}{f' limit={summary_limit}' if summary_limit else ''}")
+    if config.get("cache_pdfs"):
+        parts.append(f"cache_pdfs=true max_bytes={config.get('pdf_cache_max_bytes') or 'default'}")
+    if config.get("import_results"):
+        parts.append(
+            f"auto_import=true limit={config.get('import_limit') or 'default'} "
+            f"min_score={config.get('min_import_score') or 'default'}"
+        )
+    configured_flags = [
+        label
+        for key, label in (
+            ("semantic_scholar_api_key_configured", "semantic_scholar_key"),
+            ("openalex_mailto_configured", "openalex_mailto"),
+            ("crossref_mailto_configured", "crossref_mailto"),
+            ("unpaywall_email_configured", "unpaywall"),
+        )
+        if config.get(key)
+    ]
+    if configured_flags:
+        parts.append(f"configured={', '.join(configured_flags)}")
+    return "; ".join(parts) if parts else "default collection settings"
+
+
+def radar_brief_scoring_profile_lines(runs: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    seen = set()
+    for run in runs:
+        profile = run.get("scoring_profile") if isinstance(run.get("scoring_profile"), dict) else {}
+        if not profile:
+            continue
+        key = radar_brief_scoring_profile_key(profile)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"- {radar_brief_scoring_profile_text(profile)}")
+    return lines
+
+
+def radar_brief_scoring_profile_key(profile: dict[str, Any]) -> str:
+    if profile.get("type") == "team_interests":
+        interests = profile.get("interests") if isinstance(profile.get("interests"), list) else []
+        weights = [
+            f"{interest.get('keyword')}={interest.get('weight')}"
+            for interest in interests
+            if isinstance(interest, dict)
+        ]
+        return f"team_interests:{'|'.join(weights)}"
+    return f"{profile.get('type') or 'profile'}:{profile.get('id') or profile.get('name') or ''}"
+
+
+def radar_brief_scoring_profile_text(profile: dict[str, Any]) -> str:
+    name = str(profile.get("name") or profile.get("id") or "Scoring profile")
+    if profile.get("type") == "team_interests":
+        interests = profile.get("interests") if isinstance(profile.get("interests"), list) else []
+        parts = [
+            f"{interest.get('keyword')}={interest.get('weight')}"
+            for interest in interests[:8]
+            if isinstance(interest, dict) and interest.get("keyword")
+        ]
+        suffix = f"; +{len(interests) - 8} more" if len(interests) > 8 else ""
+        return f"{name}: {', '.join(parts) if parts else 'no weighted interests'}{suffix}"
+    if profile.get("type") == "topic_profile":
+        topics = profile.get("topics") if isinstance(profile.get("topics"), list) else []
+        topic_parts = []
+        for topic in topics[:4]:
+            if not isinstance(topic, dict):
+                continue
+            keywords = [str(keyword) for keyword in (topic.get("positive_keywords") or [])[:3]]
+            topic_parts.append(f"{topic.get('id') or 'topic'} ({', '.join(keywords)})")
+        suffix = f"; +{len(topics) - 4} more" if len(topics) > 4 else ""
+        return f"{name}: {'; '.join(topic_parts) if topic_parts else 'no topics'}{suffix}"
+    return name
 
 
 def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:
@@ -1325,12 +1639,22 @@ def radar_brief_top_recommendations(
     ]
     entries.sort(
         key=lambda entry: (
+            radar_brief_recommendation_review_priority(entry["recommendation"]),
             radar_brief_recommendation_score(entry["recommendation"]),
             str(entry["run"].get("started_at") or ""),
         ),
         reverse=True,
     )
     return entries[: max(0, int(limit))]
+
+
+def radar_brief_recommendation_review_priority(recommendation: dict[str, Any]) -> int:
+    status = recommendation_review_record(recommendation)["status"]
+    return {
+        "watch": 2,
+        "unreviewed": 1,
+        "dismissed": 0,
+    }.get(status, 1)
 
 
 def radar_brief_recommendation_title(recommendation: dict[str, Any]) -> str:
@@ -1358,6 +1682,34 @@ def radar_brief_recommendation_score(recommendation: dict[str, Any]) -> int:
 def radar_brief_recommendation_label(recommendation: dict[str, Any]) -> str:
     scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
     return str(recommendation.get("label") or scoring.get("label") or "needs_review")
+
+
+def recommendation_review_record(recommendation: dict[str, Any]) -> dict[str, Any]:
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    for source in (recommendation, nested):
+        review = source.get("review") if isinstance(source.get("review"), dict) else {}
+        if review:
+            return normalize_recommendation_review_record(review)
+    return normalize_recommendation_review_record(
+        {
+            "status": recommendation.get("review_status") or nested.get("review_status"),
+            "reviewed_by": recommendation.get("reviewed_by") or nested.get("reviewed_by"),
+            "reviewed_at": recommendation.get("reviewed_at") or nested.get("reviewed_at"),
+            "reason": recommendation.get("review_reason") or nested.get("review_reason"),
+        }
+    )
+
+
+def normalize_recommendation_review_record(review: dict[str, Any]) -> dict[str, Any]:
+    status = str(review.get("status") or "unreviewed").strip().lower()
+    if status not in {"unreviewed", "watch", "dismissed"}:
+        status = "unreviewed"
+    return {
+        "status": status,
+        "reviewed_by": review.get("reviewed_by") or "",
+        "reviewed_at": review.get("reviewed_at") or "",
+        "reason": review.get("reason") or "",
+    }
 
 
 def radar_brief_recommendation_novelty(recommendation: dict[str, Any]) -> dict[str, Any]:
@@ -1396,6 +1748,20 @@ def novelty_report_text(novelty: dict[str, Any]) -> str:
     seen_count = int(novelty.get("seen_count_before_run") or 0)
     latest = novelty.get("previous_latest_seen_at") or "unknown"
     return f"seen before ({seen_count} prior run{'s' if seen_count != 1 else ''}; latest {latest})"
+
+
+def review_report_text(review: dict[str, Any]) -> str:
+    status = str(review.get("status") or "unreviewed").strip().lower()
+    details = []
+    if review.get("reviewed_by"):
+        details.append(f"by {review['reviewed_by']}")
+    if review.get("reviewed_at"):
+        details.append(f"at {review['reviewed_at']}")
+    if review.get("reason"):
+        details.append(f"reason: {review['reason']}")
+    if not details:
+        return status
+    return f"{status} ({'; '.join(details)})"
 
 
 def context_report_text(context: dict[str, Any]) -> str:

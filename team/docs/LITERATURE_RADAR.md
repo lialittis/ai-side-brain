@@ -213,8 +213,10 @@ python team/research_cli.py radar-brief --days 7 --output team/logs/literature-r
 
 Every `radar-run` creates durable Team-side history in SQLite:
 
-- `literature_radar_runs` stores source choices, query terms, status, total
-  counts, per-source collection stats, errors, and the Markdown report.
+- `literature_radar_runs` stores source choices, query terms, non-secret
+  collection settings, status, total counts, per-source collection stats,
+  errors, scoring profile snapshot, pipeline phase trace, and the Markdown
+  report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
   and latest-seen timestamps, source IDs, PDF-access decision metadata, and any
   imported Team item ID.
@@ -246,7 +248,15 @@ the Radar page and report.
 
 Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
 without collecting again. It aggregates run status, per-source counts and
-failures, and the top stored recommendations with context and PDF policy.
+failures, and the top stored recommendations with review state, context, and PDF
+policy. New runs snapshot the Team Interest weights used for scoring, so a
+weekly brief can still explain recommendations after the `/interests` sliders
+change. They also include a pipeline trace for collection, PDF policy,
+deduplication, scoring, summarization, storage, and report generation. Brief
+ranking is review-aware: `watch` papers are listed before unreviewed papers, and
+`dismissed` papers are pushed behind active candidates. Stored run history keeps
+collection settings such as limits, conference year, venue profiles, seed counts,
+and whether summaries, PDF caching, or auto-import were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
 Brief`, so team members can review it without using the CLI.
 

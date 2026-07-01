@@ -12,6 +12,7 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     assess_pdf_access,
+    build_radar_collection_config,
     build_recommendation_report,
     cache_recommendation_pdfs,
     collect_arxiv,
@@ -128,13 +129,47 @@ def run_team_literature_radar(
     pdf_cache_max_bytes: int = 50 * 1024 * 1024,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    selected_terms = query_terms or team_radar_query_terms(database)
+    selected_interests = database.list_team_interest_keywords()
+    selected_terms = query_terms or team_radar_query_terms_from_interests(selected_interests)
     selected_sources = list(sources or DEFAULT_RADAR_SOURCES)
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
+    collection_config = team_radar_collection_config(
+        selected_sources=selected_sources,
+        max_results=max_results,
+        recommendation_limit=recommendation_limit,
+        summarize=summarize,
+        summary_provider=summary_provider,
+        summary_limit=summary_limit,
+        import_results=import_results,
+        import_limit=import_limit,
+        min_import_score=min_import_score,
+        project_id=project_id,
+        semantic_scholar_api_key=semantic_scholar_api_key,
+        seed_paper_ids=seed_paper_ids,
+        negative_seed_paper_ids=negative_seed_paper_ids,
+        openalex_mailto=openalex_mailto,
+        openreview_invitations=openreview_invitations,
+        crossref_mailto=crossref_mailto,
+        unpaywall_email=unpaywall_email,
+        semantic_scholar_author_ids=semantic_scholar_author_ids,
+        dblp_author_pids=dblp_author_pids,
+        openalex_author_ids=openalex_author_ids,
+        conference_year=conference_year,
+        dblp_venue_profiles=dblp_venue_profiles,
+        openreview_venue_profiles=openreview_venue_profiles,
+        openreview_accepted_only=openreview_accepted_only,
+        usenix_security_cycles=usenix_security_cycles,
+        cache_pdfs=cache_pdfs,
+        pdf_cache_dir=pdf_cache_dir,
+        pdf_cache_max_bytes=pdf_cache_max_bytes,
+        now=now,
+    )
     run = database.create_literature_radar_run(
         sources=selected_sources,
         query_terms=selected_terms,
+        collection_config=collection_config,
+        scoring_profile=team_radar_scoring_profile(selected_interests),
         now=now,
     )
     collected: list[dict[str, Any]] = []
@@ -169,7 +204,7 @@ def run_team_literature_radar(
         )
         recommendations = recommend_papers(
             collected,
-            scorer=build_team_radar_scorer(database.list_team_interest_keywords()),
+            scorer=build_team_radar_scorer(selected_interests),
             limit=max(recommendation_limit + 20, recommendation_limit * 3),
             now=now,
         )
@@ -342,7 +377,10 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
 
 
 def team_radar_query_terms(database: TeamResearchDatabase, *, limit: int = 8) -> list[str]:
-    interests = database.list_team_interest_keywords()
+    return team_radar_query_terms_from_interests(database.list_team_interest_keywords(), limit=limit)
+
+
+def team_radar_query_terms_from_interests(interests: list[dict[str, Any]], *, limit: int = 8) -> list[str]:
     terms = [interest["keyword"] for interest in interests if interest.get("keyword")]
     if terms:
         return terms[:limit]
@@ -351,6 +389,140 @@ def team_radar_query_terms(database: TeamResearchDatabase, *, limit: int = 8) ->
     for topic in (profile.get("topics") or {}).values():
         fallback_terms.extend(topic.get("positive_keywords") or [])
     return fallback_terms[:limit]
+
+
+def team_radar_scoring_profile(interests: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "type": "team_interests",
+        "id": "team-interests",
+        "name": "Team Interests",
+        "processor": TEAM_RADAR_SCORER_PROCESSOR,
+        "interests": [
+            {
+                "keyword": normalize_interest_keyword(str(interest.get("keyword") or "")),
+                "weight": clean_interest_weight(interest.get("weight")),
+            }
+            for interest in interests
+            if normalize_interest_keyword(str(interest.get("keyword") or ""))
+            and clean_interest_weight(interest.get("weight")) > 0
+        ],
+    }
+
+
+def team_radar_collection_config(
+    *,
+    selected_sources: list[str],
+    max_results: int,
+    recommendation_limit: int,
+    summarize: bool,
+    summary_provider: str,
+    summary_limit: int | None,
+    import_results: bool,
+    import_limit: int,
+    min_import_score: int,
+    project_id: str,
+    semantic_scholar_api_key: str | None,
+    seed_paper_ids: list[str] | None,
+    negative_seed_paper_ids: list[str] | None,
+    openalex_mailto: str | None,
+    openreview_invitations: list[str] | None,
+    crossref_mailto: str | None,
+    unpaywall_email: str | None,
+    semantic_scholar_author_ids: list[str] | None,
+    dblp_author_pids: list[str] | None,
+    openalex_author_ids: list[str] | None,
+    conference_year: int | None,
+    dblp_venue_profiles: list[str] | None,
+    openreview_venue_profiles: list[str] | None,
+    openreview_accepted_only: bool,
+    usenix_security_cycles: list[int] | None,
+    cache_pdfs: bool,
+    pdf_cache_dir: Path | None,
+    pdf_cache_max_bytes: int,
+    now: datetime | None,
+) -> dict[str, Any]:
+    return build_radar_collection_config(
+        max_results=max_results,
+        recommendation_limit=recommendation_limit,
+        summarize=summarize,
+        summary_provider=summary_provider,
+        summary_limit=summary_limit,
+        import_results=import_results,
+        import_limit=import_limit if import_results else None,
+        min_import_score=min_import_score if import_results else None,
+        project_id=project_id if import_results else None,
+        conference_year=conference_year or radar_year(now),
+        dblp_venue_profiles=resolved_source_list(
+            selected_sources,
+            {"dblp_venues", "openalex_venues"},
+            dblp_venue_profiles,
+            "RADAR_DBLP_VENUES",
+        ),
+        openreview_venue_profiles=resolved_source_list(
+            selected_sources,
+            {"openreview_venues"},
+            openreview_venue_profiles,
+            "RADAR_OPENREVIEW_VENUES",
+        ),
+        openreview_accepted_only=openreview_accepted_only,
+        usenix_security_cycles=(usenix_security_cycles or [1]) if "usenix_security" in selected_sources else None,
+        seed_paper_ids=resolved_source_list(
+            selected_sources,
+            SEMANTIC_SCHOLAR_SEED_SOURCES,
+            seed_paper_ids,
+            "RADAR_SEED_PAPER_IDS",
+        ),
+        negative_seed_paper_ids=resolved_source_list(
+            selected_sources,
+            {"semantic_scholar_recommendations"},
+            negative_seed_paper_ids,
+            "RADAR_NEGATIVE_SEED_PAPER_IDS",
+        ),
+        semantic_scholar_author_ids=resolved_source_list(
+            selected_sources,
+            {"semantic_scholar_authors"},
+            semantic_scholar_author_ids,
+            "RADAR_AUTHOR_IDS",
+        ),
+        dblp_author_pids=resolved_source_list(
+            selected_sources,
+            {"dblp_authors"},
+            dblp_author_pids,
+            "RADAR_DBLP_AUTHOR_PIDS",
+        ),
+        openalex_author_ids=resolved_source_list(
+            selected_sources,
+            {"openalex_authors"},
+            openalex_author_ids,
+            "RADAR_OPENALEX_AUTHOR_IDS",
+        ),
+        openreview_invitations=resolved_source_list(
+            selected_sources,
+            {"openreview"},
+            openreview_invitations,
+            "OPENREVIEW_INVITATIONS",
+        ),
+        semantic_scholar_api_key_configured=bool(
+            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        ),
+        openalex_mailto_configured=bool(openalex_mailto or os.environ.get("OPENALEX_MAILTO")),
+        crossref_mailto_configured=bool(crossref_mailto or os.environ.get("CROSSREF_MAILTO")),
+        unpaywall_email_configured=bool(unpaywall_email or os.environ.get("UNPAYWALL_EMAIL")),
+        cache_pdfs=cache_pdfs,
+        pdf_cache_dir=(pdf_cache_dir or TEAM_RADAR_DEFAULT_PDF_CACHE_DIR) if cache_pdfs else None,
+        pdf_cache_max_bytes=pdf_cache_max_bytes if cache_pdfs else None,
+    )
+
+
+def resolved_source_list(
+    selected_sources: list[str],
+    relevant_sources: set[str],
+    values: list[str] | None,
+    env_name: str,
+) -> list[str]:
+    if not any(source in selected_sources for source in relevant_sources):
+        return []
+    return values or env_list(env_name)
 
 
 def build_team_radar_scorer(interests: list[dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
