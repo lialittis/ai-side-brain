@@ -102,6 +102,11 @@ Radar still writes only review reports and index entries until you explicitly
 move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
 `indexes/literature-radar-papers.json` history.
+Generated reports, briefs, and queue output use the same labelled `Signal`,
+`Why`, `Context`, and `Matched` lines, so the immediate run report and later
+daily review surfaces explain recommendations in the same format. Those signal
+lines are also persisted in the JSON run index and paper-history records for
+future local automation.
 Use `review` to mark a stored paper as `watch`, `dismissed`, or `unreviewed`.
 Watched papers stay visible as known candidates and become context for future
 Personal Radar runs, so a new paper can be explained as related to
@@ -116,6 +121,9 @@ queue by latest recommendation score, and excludes dismissed or already-moved
 papers from the priority list. The text queue includes stored signal lines for
 why each paper is relevant, how it relates to existing context, and which
 interests matched; the JSON queue includes the same lines under `signal_lines`.
+Both text and JSON queue output include latest-run health and source-error
+counts, so scheduled queue snapshots distinguish an empty healthy queue from a
+collector problem.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated

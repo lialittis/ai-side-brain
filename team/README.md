@@ -106,6 +106,7 @@ Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates plus stored why/context/matched-interest signal lines when scheduled discovery has papers awaiting review;
 - Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Radar run cards, Markdown reports, weekly briefs, paper history, and the Latest Papers Radar Queue all share labelled `Signal`, `Why`, `Context`, and `Matched` lines so team members see the same explanation wherever they review a recommendation;
 - radar-imported library papers keep their radar provenance, summary, relevance reason, context link, matched interests, and PDF-access decision, so the main Latest Relevant Papers list shows why the paper was worth importing and whether a legal PDF is available;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
@@ -120,15 +121,24 @@ unreviewed, watch, and dismissed counts plus the top priority candidates, so
 daily users can review scheduled Radar output without remembering a separate URL. Scan the latest
 recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
-paper relevance. The Radar form can save source choices, tracked authors, seed
+paper relevance. The queue also shows latest-run health and source-error counts
+when a scheduled run exists, even if no papers were stored. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, conference year, USENIX cycles, source contact email,
 PDF cache settings, and run limits as reusable Team defaults.
 For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can provide one fallback
 contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
 settings are configured.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
-same active, unimported queue priority as the web UI. Scheduled collection
-writes matching text and JSON queue snapshots under `team/logs/` by default.
+same active, unimported queue priority as the web UI and prints latest-run
+health before the priority papers. Scheduled collection writes matching text and
+JSON queue snapshots under `team/logs/` by default.
+Radar signal lines are persisted in stored run recommendations, paper history,
+and imported library-item metadata, so future API or notification surfaces can
+reuse the same explanation without reprocessing the paper.
+`python team/research_cli.py radar-queue --json` and, when the web UI is
+running, `/radar/queue.json?limit=20` expose the same stored active queue,
+latest-run health, source stats, and persisted signal lines for local dashboards
+or self-hosted notification scripts.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

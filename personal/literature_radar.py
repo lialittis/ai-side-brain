@@ -25,6 +25,7 @@ from shared.literature_radar import (
     build_radar_collection_config,
     build_recommendation_report,
     build_radar_pipeline_trace,
+    build_radar_review_queue,
     build_venue_coverage_summary,
     cache_recommendation_pdfs,
     collect_arxiv,
@@ -48,6 +49,8 @@ from shared.literature_radar import (
     dedupe_key as radar_dedupe_key,
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
+    radar_latest_signal_lines,
+    radar_review_counts,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -324,6 +327,53 @@ def personal_radar_review_record(history: dict[str, Any] | None) -> dict[str, An
         "reviewed_by": source.get("reviewed_by") or "",
         "reviewed_at": source.get("reviewed_at") or "",
         "reason": source.get("review_reason") or "",
+    }
+
+
+def build_personal_literature_radar_queue_payload(
+    root: Path,
+    *,
+    limit: int = 3,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit))
+    records = read_personal_radar_paper_history(root)
+    counts = radar_review_counts(records)
+    runs = read_personal_radar_index(root)
+    latest_run = runs[0] if runs else None
+    queue = build_radar_review_queue(records, limit=selected_limit, review_counts=counts)
+    return {
+        "success": True,
+        "kind": "personal_literature_radar_queue",
+        "review": queue.get("review") or "",
+        "review_counts": queue.get("review_counts") or counts,
+        "limit": selected_limit,
+        "latest_run": personal_literature_radar_run_summary(latest_run),
+        "papers": queue.get("papers") or [],
+        "paths": {
+            "run_index": str(personal_radar_index_path(root)),
+            "paper_history": str(personal_radar_paper_history_path(root)),
+        },
+    }
+
+
+def personal_literature_radar_run_summary(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(run, dict) or not run:
+        return None
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+    venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
+    return {
+        "id": run.get("id") or "",
+        "status": run.get("status") or "unknown",
+        "started_at": run.get("started_at") or "",
+        "completed_at": run.get("completed_at") or "",
+        "collected_count": int(run.get("collected_count") or 0),
+        "recommendation_count": int(run.get("recommendation_count") or 0),
+        "source_error_count": len(source_errors),
+        "source_errors": source_errors,
+        "source_stats": source_stats,
+        "venue_coverage": venue_coverage,
+        "report_path": run.get("report_path") or "",
     }
 
 
@@ -885,6 +935,7 @@ def build_personal_radar_run_record(
                 "pdf_access": recommendation.get("pdf_access"),
                 "context": recommendation.get("context"),
                 "summary": recommendation.get("summary"),
+                "signal_lines": radar_latest_signal_lines(recommendation),
                 "link": ((recommendation.get("paper") or {}).get("links") or {}).get("landing"),
             }
             for index, recommendation in enumerate(recommendations, start=1)
@@ -1189,6 +1240,7 @@ def build_personal_radar_paper_history_record(
             "rank": rank,
             "score": scoring.get("score"),
             "label": scoring.get("label"),
+            "signal_lines": radar_latest_signal_lines(recommendation),
             "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
             "novelty": recommendation.get("novelty"),
             "review": recommendation.get("review"),

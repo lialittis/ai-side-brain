@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from personal.literature_radar import (
     DEFAULT_PERSONAL_RADAR_SOURCES,
+    build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
     read_personal_radar_index,
@@ -23,7 +24,6 @@ from personal.literature_radar import (
 )
 from shared.literature_radar import (
     build_radar_history_brief,
-    build_radar_review_queue,
     format_radar_source_stats,
     radar_history_review_status,
     radar_latest_signal_lines,
@@ -216,6 +216,7 @@ def print_personal_queue(
     *,
     review_counts: dict[str, int],
     review: str,
+    latest_run: dict[str, Any] | None = None,
 ) -> None:
     print("Personal Literature Radar Queue")
     print(
@@ -225,11 +226,33 @@ def print_personal_queue(
             for status in PERSONAL_RADAR_REVIEW_FILTERS
         )
     )
+    if latest_run:
+        print(format_personal_queue_latest_run(latest_run))
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
     print(f"Priority filter: {review}")
     print_paper_history(records, review=review)
+
+
+def format_personal_queue_latest_run(run: dict[str, Any]) -> str:
+    parts = [
+        f"Latest run: {run.get('id') or 'unknown'}",
+        f"status={run.get('status') or 'unknown'}",
+        f"started={run.get('started_at') or 'unknown'}",
+        f"collected={int(run.get('collected_count') or 0)}",
+        f"recommended={int(run.get('recommendation_count') or 0)}",
+        f"source_errors={int(run.get('source_error_count') or 0)}",
+    ]
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    error_sources = [
+        str(error.get("source_id") or "source")
+        for error in source_errors[:3]
+        if isinstance(error, dict)
+    ]
+    if error_sources:
+        parts.append(f"error_sources={', '.join(error_sources)}")
+    return " | ".join(parts)
 
 
 def sorted_paper_history(
@@ -247,15 +270,6 @@ def sorted_paper_history(
         key=lambda record: str(record.get("latest_seen_at") or ""),
         reverse=True,
     )[:limit]
-
-
-def priority_paper_history(
-    records: dict[str, dict[str, Any]],
-    *,
-    limit: int,
-) -> tuple[str, list[dict[str, Any]]]:
-    queue = build_radar_review_queue(records, limit=limit)
-    return str(queue["review"]), list(queue["papers"])
 
 
 def personal_paper_review_counts(records: dict[str, dict[str, Any]]) -> dict[str, int]:
@@ -354,19 +368,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "queue":
-        history_records = read_personal_radar_paper_history(args.root_path)
-        review_counts = personal_paper_review_counts(history_records)
-        selected_review, records = priority_paper_history(history_records, limit=args.limit)
+        queue = build_personal_literature_radar_queue_payload(args.root_path, limit=args.limit)
         if args.json:
-            print_json(
-                {
-                    "review": selected_review,
-                    "review_counts": review_counts,
-                    "papers": records,
-                }
-            )
+            print_json(queue)
         else:
-            print_personal_queue(records, review_counts=review_counts, review=selected_review)
+            print_personal_queue(
+                queue.get("papers") or [],
+                review_counts=queue.get("review_counts") or {},
+                review=str(queue.get("review") or ""),
+                latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
+            )
         return 0
 
     if args.command == "review":

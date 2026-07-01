@@ -637,6 +637,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(recommendations[0]["pdf_access"]["access_date"], "2026-07-01T12:30:00+00:00")
         self.assertIn("Memory Safety for Agentic Security", report)
         self.assertIn("Relevance: highly_relevant", report)
+        self.assertIn("Why: Matched interest keywords", report)
+        self.assertIn("Matched: LLM security", report)
         self.assertIn("PDF policy: metadata/link only", report)
         self.assertIn("accessed=2026-07-01T12:30:00+00:00", report)
 
@@ -696,8 +698,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
         self.assertIn("memory safety", summary["relationship_to_interests"])
         self.assertEqual(summary["source_trace"]["processor"], LOCAL_RADAR_SUMMARY_PROCESSOR)
-        self.assertIn("Summary: This paper studies memory safety", report)
-        self.assertIn("Relation: Connects to configured interests", report)
+        self.assertIn("Signal: This paper studies memory safety", report)
+        self.assertIn("Why: Connects to configured interests", report)
+        self.assertIn("Matched: cyber reasoning", report)
 
     def test_recommendation_novelty_marks_new_and_seen_before(self) -> None:
         paper = create_radar_paper(
@@ -811,6 +814,23 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "Context: Related to existing context: Agentic baseline.",
                 "Matched: memory safety, agentic security",
             ],
+        )
+
+        stored_lines = radar_latest_signal_lines(
+            {
+                "latest_recommendation": {
+                    "signal_lines": [
+                        " Signal: Stored recommendation signal. ",
+                        "Signal: Stored recommendation signal.",
+                        "Why: Stored relevance reason.",
+                    ],
+                    "summary": {"short_summary": "Recomputed summary should not replace stored lines."},
+                }
+            }
+        )
+        self.assertEqual(
+            stored_lines,
+            ["Signal: Stored recommendation signal.", "Why: Stored relevance reason."],
         )
 
     def test_builds_radar_history_brief_from_run_records(self) -> None:

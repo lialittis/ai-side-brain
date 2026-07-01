@@ -1334,6 +1334,12 @@ def build_recommendation_report(
     for index, recommendation in enumerate(recommendations, start=1):
         paper = recommendation["paper"]
         scoring = recommendation["scoring"]
+        signal_lines = [f"- {line}" for line in radar_latest_signal_lines(recommendation)]
+        context_line = (
+            []
+            if any(line.startswith("- Context:") for line in signal_lines)
+            else [f"- Context: {context_report_text(recommendation.get('context') or {})}"]
+        )
         lines.extend(
             [
                 f"## {index}. {paper.get('title') or 'Untitled paper'}",
@@ -1341,21 +1347,13 @@ def build_recommendation_report(
                 f"- Relevance: {scoring['label']} ({scoring['score']}/100)",
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Novelty: {novelty_report_text(recommendation.get('novelty') or {})}",
-                f"- Why: {recommendation['why_relevant']}",
-                f"- Context: {context_report_text(recommendation.get('context') or {})}",
+                *signal_lines,
+                *context_line,
                 f"- Action: {recommendation['recommended_action']}",
                 f"- PDF policy: {pdf_access_report_text(recommendation.get('pdf_access') or {})}",
                 f"- Link: {(paper.get('links') or {}).get('landing') or (paper.get('links') or {}).get('pdf') or ''}",
             ]
         )
-        summary = recommendation.get("summary") or {}
-        if summary:
-            lines.extend(
-                [
-                    f"- Summary: {summary.get('short_summary') or ''}",
-                    f"- Relation: {summary.get('relationship_to_interests') or ''}",
-                ]
-            )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -2220,6 +2218,9 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
         latest = source if isinstance(source, dict) else {}
     if not isinstance(latest, dict) or not latest:
         return []
+    stored_lines = unique_signal_lines(latest.get("signal_lines") if isinstance(latest.get("signal_lines"), list) else [])
+    if stored_lines:
+        return stored_lines
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
     context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
     lines: list[str] = []
@@ -2245,6 +2246,18 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
     )
     if matched_terms:
         lines.append(f"Matched: {', '.join(matched_terms[:max(0, int(max_matched_terms))])}")
+    return lines
+
+
+def unique_signal_lines(values: list[Any]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        line = normalize_spaces(str(value or ""))
+        key = line.lower()
+        if line and key not in seen:
+            lines.append(line)
+            seen.add(key)
     return lines
 
 

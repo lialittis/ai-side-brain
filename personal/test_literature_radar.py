@@ -58,7 +58,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(result["report_path"])
             report_path = Path(result["report_path"])
             self.assertTrue(report_path.exists())
-            self.assertIn("Memory Safety for Agentic Security", report_path.read_text(encoding="utf-8"))
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("Memory Safety for Agentic Security", report_text)
             runs = read_personal_radar_index(root)
             self.assertEqual(runs[0]["id"], result["run_id"])
             self.assertEqual(runs[0]["recommendations"][0]["title"], "Memory Safety for Agentic Security")
@@ -69,6 +70,10 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 runs[0]["recommendations"][0]["summary"]["source_trace"]["processor"],
                 "local-radar-summary-v0.1",
             )
+            self.assertIn(
+                "Signal: Memory safety and LLM security",
+                runs[0]["recommendations"][0]["signal_lines"][0],
+            )
             paper_history = read_personal_radar_paper_history(root)
             history_record = paper_history[paper["dedupe_key"]]
             self.assertEqual(history_record["title"], "Memory Safety for Agentic Security")
@@ -78,8 +83,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(history_record["source_ids"], ["arxiv"])
             self.assertTrue(history_record["pdf_access"]["can_download"])
             self.assertEqual(history_record["latest_recommendation"]["rank"], 1)
-            self.assertIn("Novelty: new this run", report_path.read_text(encoding="utf-8"))
-            self.assertIn("Summary: Memory safety and LLM security", report_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "Signal: Memory safety and LLM security",
+                history_record["latest_recommendation"]["signal_lines"][0],
+            )
+            self.assertIn("Novelty: new this run", report_text)
+            self.assertIn("Signal: Memory safety and LLM security", report_text)
+            self.assertIn("Matched: LLM security", report_text)
             self.assertEqual(arxiv.call_args.kwargs["query_terms"], ["memory safety"])
 
     def test_run_personal_literature_radar_can_cache_recommended_open_access_pdf(self) -> None:
@@ -554,8 +564,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 queue_code = personal_literature_radar.main(["queue", "--root-path", str(root), "--json"])
             self.assertEqual(queue_code, 0)
             queue_result = json.loads(queue_stdout.getvalue())
+            self.assertTrue(queue_result["success"])
+            self.assertEqual(queue_result["kind"], "personal_literature_radar_queue")
             self.assertEqual(queue_result["review"], "unreviewed")
             self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
+            self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
+            self.assertIn("literature-radar-runs.json", queue_result["paths"]["run_index"])
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -564,6 +579,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 queue_text_code = personal_literature_radar.main(["queue", "--root-path", str(root)])
             self.assertEqual(queue_text_code, 0)
             queue_text = queue_text_stdout.getvalue()
+            self.assertIn("Latest run:", queue_text)
+            self.assertIn("status=succeeded", queue_text)
+            self.assertIn("source_errors=0", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
@@ -609,6 +627,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(watch_queue_code, 0)
             watch_queue = json.loads(watch_queue_stdout.getvalue())
             self.assertEqual(watch_queue["review"], "watch")
+            self.assertEqual(watch_queue["latest_run"]["status"], "succeeded")
             self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
 
             brief_stdout = io.StringIO()
@@ -635,6 +654,42 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Pipeline Trace", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
+
+    def test_personal_literature_radar_queue_reports_partial_empty_latest_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with mock.patch("personal.literature_radar.collect_dblp_publications", side_effect=RuntimeError("DBLP unavailable")):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["dblp"],
+                    query_terms=["system security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 7, 30, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["run"]["status"], "partial")
+            queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(queue_stdout):
+                queue_code = personal_literature_radar.main(["queue", "--root-path", str(root), "--json"])
+            self.assertEqual(queue_code, 0)
+            queue = json.loads(queue_stdout.getvalue())
+            self.assertTrue(queue["success"])
+            self.assertEqual(queue["kind"], "personal_literature_radar_queue")
+            self.assertEqual(queue["latest_run"]["status"], "partial")
+            self.assertEqual(queue["latest_run"]["source_error_count"], 1)
+            self.assertEqual(queue["latest_run"]["source_errors"][0]["source_id"], "dblp")
+            self.assertEqual(queue["papers"], [])
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = personal_literature_radar.main(["queue", "--root-path", str(root)])
+            text = text_stdout.getvalue()
+            self.assertEqual(text_code, 0)
+            self.assertIn(f"Latest run: {result['run_id']}", text)
+            self.assertIn("status=partial", text)
+            self.assertIn("source_errors=1", text)
+            self.assertIn("error_sources=dblp", text)
+            self.assertIn("No active unreviewed or watched Radar papers.", text)
 
     def test_personal_literature_radar_queue_prioritizes_score_and_excludes_dismissed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

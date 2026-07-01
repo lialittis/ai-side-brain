@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from shared.literature_radar import create_radar_paper, recommend_papers
+from team.literature_radar import build_team_literature_radar_queue_payload
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
@@ -99,6 +100,53 @@ class TeamResearchWebTest(unittest.TestCase):
             updated_keywords = [interest["keyword"] for interest in database.list_team_interest_keywords()]
             self.assertIn("exploit mitigation", updated_keywords)
             self.assertNotIn("memory safety", updated_keywords)
+
+    def test_latest_radar_queue_shows_failed_run_health_without_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            run = database.create_literature_radar_run(
+                sources=["dblp"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 7, 30, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                status="failed",
+                error="DBLP unavailable",
+                source_errors=[
+                    {
+                        "source_id": "dblp",
+                        "error_type": "RuntimeError",
+                        "error": "DBLP unavailable",
+                        "occurred_at": "2026-07-01T07:31:00+00:00",
+                    }
+                ],
+                source_stats=[
+                    {
+                        "source_id": "dblp",
+                        "status": "failed",
+                        "collected_count": 0,
+                        "error_type": "RuntimeError",
+                    }
+                ],
+                now=datetime(2026, 7, 1, 7, 31, tzinfo=timezone.utc),
+            )
+
+            html = render_latest_papers_page(database)
+            payload = build_team_literature_radar_queue_payload(database, limit=20)
+
+            self.assertIn("Radar Queue", html)
+            self.assertIn("0 unreviewed, 0 watch, 0 dismissed from 0 stored Radar papers.", html)
+            self.assertIn("Latest run health:", html)
+            self.assertIn("Latest run: 2026-07-01 07:30", html)
+            self.assertIn("Status: failed", html)
+            self.assertIn("Source errors: 1", html)
+            self.assertNotIn("Priority Candidates", html)
+            self.assertEqual(payload["latest_run"]["status"], "failed")
+            self.assertEqual(payload["latest_run"]["source_error_count"], 1)
+            self.assertEqual(payload["latest_run"]["source_errors"][0]["source_id"], "dblp")
 
     def test_literature_radar_page_lists_stored_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -232,9 +280,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("OpenReview Venues", html)
             self.assertIn("Memory Safety for Agentic Security Workflows", html)
             self.assertIn("Ada Lovelace, Grace Hopper", html)
-            self.assertIn("Matched interest keywords", html)
             self.assertIn("A local summary for radar review.", html)
             self.assertIn("Connects to memory safety.", html)
+            self.assertIn("<strong>Signal:</strong> A local summary for radar review.", html)
+            self.assertIn("<strong>Why:</strong> Connects to memory safety.", html)
+            self.assertIn("<strong>Matched:</strong> AI agent security", html)
             self.assertIn("Related to existing context: Baseline Paper.", html)
             self.assertIn("Baseline Paper", html)
             self.assertIn("shared interests: memory safety", html)
@@ -308,6 +358,10 @@ class TeamResearchWebTest(unittest.TestCase):
 
             latest = database.list_latest_relevant_papers()
             self.assertEqual(latest[0]["item"]["id"], item_id)
+            self.assertIn(
+                "Signal: A local summary for radar review.",
+                latest[0]["item"]["radar"]["recommendation"]["signal_lines"][0],
+            )
             stored_paper = database.get_literature_radar_paper(paper["dedupe_key"])
             self.assertEqual(stored_paper["imported_item_id"], item_id)
             stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
@@ -315,6 +369,8 @@ class TeamResearchWebTest(unittest.TestCase):
             imported_html = render_literature_radar_papers_page(database, limit=50)
             self.assertIn(f"Imported: {item_id}", imported_html)
             self.assertIn("In Library", imported_html)
+            latest_html = render_latest_papers_page(database)
+            self.assertIn("<strong>Signal:</strong> A local summary for radar review.", latest_html)
 
     def test_literature_radar_web_run_uses_team_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -567,6 +623,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(latest[0]["item"]["id"], item_id)
             self.assertEqual(latest[0]["item"]["title"], "System Security for Memory Safe Agents")
             self.assertEqual(latest[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
+            self.assertIn(
+                "Signal: This paper links memory safety to agentic systems.",
+                latest[0]["item"]["radar"]["recommendation"]["signal_lines"][0],
+            )
             self.assertEqual(latest[0]["item"]["pdf_access"]["reason"], "metadata_only_no_legal_pdf_found")
             stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
             self.assertEqual(stored_recommendation["imported_item_id"], item_id)
@@ -709,6 +769,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("<strong>Matched:</strong>", latest_html)
             self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)
             self.assertIn('href="/radar">Run Radar</a>', latest_html)
+            self.assertIn('href="/radar/queue.json?limit=20"', latest_html)
             self.assertIn('href="/radar/papers?limit=50">All 2</a>', latest_html)
             self.assertIn('href="/radar/papers?limit=50&amp;review=unreviewed">Unreviewed 1</a>', latest_html)
             self.assertIn('href="/radar/papers?limit=50&amp;review=watch">Watch 1</a>', latest_html)
@@ -717,6 +778,19 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="return_to" value="latest"', latest_html)
             self.assertIn('action="/radar/papers/import"', latest_html)
             self.assertIn('action="/radar/review"', latest_html)
+            queue_payload = build_team_literature_radar_queue_payload(database, limit=5)
+            self.assertTrue(queue_payload["success"])
+            self.assertEqual(queue_payload["kind"], "team_literature_radar_queue")
+            self.assertEqual(queue_payload["review"], "unreviewed")
+            self.assertEqual(queue_payload["review_counts"], {"all": 2, "unreviewed": 1, "watch": 1, "dismissed": 0})
+            self.assertEqual(queue_payload["latest_run"]["id"], other_run["id"])
+            self.assertEqual(queue_payload["latest_run"]["status"], "succeeded")
+            self.assertEqual(queue_payload["latest_run"]["collected_count"], 1)
+            self.assertEqual(queue_payload["latest_run"]["recommendation_count"], 1)
+            self.assertEqual(queue_payload["latest_run"]["source_error_count"], 0)
+            self.assertEqual(queue_payload["papers"][0]["title"], "Unreviewed Radar History Paper")
+            self.assertIn("Signal: Stored queue signal for daily radar review.", queue_payload["papers"][0]["signal_lines"])
+            self.assertEqual(queue_payload["links"]["radar"], "/radar")
 
     def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

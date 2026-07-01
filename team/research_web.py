@@ -33,6 +33,7 @@ from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    build_team_literature_radar_queue_payload,
     build_team_radar_scorer,
     import_radar_recommendation,
     run_team_literature_radar,
@@ -931,6 +932,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     <div class="radar-brief-link">
       <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
+      <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
     </div>
     {render_radar_review_count_links(review_counts, selected_review="all", limit=50)}
     """
@@ -1603,13 +1605,14 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
     summary = record.get("summary") or recommendation.get("summary") or {}
     review = radar_review_from_record(record)
     imported_item_id = record.get("imported_item_id") or (record.get("import_result") or {}).get("item_id")
+    signal_lines = render_radar_signal_lines(recommendation)
     return f"""
     <article class="radar-recommendation">
       <div><span class="radar-rank">{rank}</span></div>
       <div>
         <div class="radar-rec-title">{html_escape(title)}</div>
         <div class="meta">{html_escape(" · ".join(meta_parts))}</div>
-        <p class="radar-reasons">{html_escape(why)}</p>
+        {signal_lines or f'<p class="radar-reasons">{html_escape(why)}</p>'}
         {render_radar_context(context)}
         {render_radar_summary(summary)}
         <div class="radar-links">
@@ -1892,8 +1895,10 @@ def render_latest_papers_page(
 
 def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
     counts = database.literature_radar_paper_review_counts()
+    latest_runs = database.list_literature_radar_runs(limit=1)
+    latest_run = latest_runs[0] if latest_runs else None
     total = int(counts.get("all") or 0)
-    if total == 0:
+    if total == 0 and not latest_run:
         return ""
     unreviewed = int(counts.get("unreviewed") or 0)
     watch = int(counts.get("watch") or 0)
@@ -1919,11 +1924,45 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
         <div class="radar-queue-actions">
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
           <a class="button" href="/radar">Run Radar</a>
+          <a class="button" href="/radar/queue.json?limit=20">JSON</a>
         </div>
       </div>
+      {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
       {render_latest_radar_queue_preview(priority_records, review_filter=selected_review)}
     </section>
+    """
+
+
+def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
+    if not isinstance(run, dict) or not run:
+        return ""
+    run_id = str(run.get("id") or "")
+    started_at = display_radar_datetime(str(run.get("started_at") or "")) or run_id or "unknown"
+    run_link = (
+        f'<a class="tag" href="/radar?run={quote(run_id, safe="")}">Latest run: {html_escape(started_at)}</a>'
+        if run_id
+        else f'<span class="tag">Latest run: {html_escape(started_at)}</span>'
+    )
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    source_error_label = ""
+    if source_errors:
+        source_ids = [
+            str(error.get("source_id") or "source")
+            for error in source_errors[:3]
+            if isinstance(error, dict)
+        ]
+        suffix = f" ({', '.join(source_ids)})" if source_ids else ""
+        source_error_label = f'<span class="pill warn">Source errors: {len(source_errors)}{html_escape(suffix)}</span>'
+    return f"""
+    <div class="tags">
+      <span class="muted">Latest run health:</span>
+      {run_link}
+      {status_pill(str(run.get("status") or "unknown"))}
+      <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
+      <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
+      {source_error_label}
+    </div>
     """
 
 
@@ -2061,6 +2100,19 @@ def render_paper_radar_insight(item: dict[str, Any]) -> str:
             score_text = f" · {int(float(score))}/100"
         except (TypeError, ValueError):
             score_text = f" · {score}"
+    stored_signal_lines = [
+        normalize_inline_text(line)
+        for line in recommendation.get("signal_lines") or []
+        if normalize_inline_text(line)
+    ]
+    if stored_signal_lines:
+        signal_rows = "".join(render_radar_signal_line_row(line) for line in stored_signal_lines)
+        return f"""
+        <div class="radar-ai-summary paper-radar-insight">
+          <p><strong>Radar insight:</strong> {relevance_pill(label)}<span class="pill">Radar{html_escape(score_text)}</span></p>
+          {signal_rows}
+        </div>
+        """
     matched_html = (
         f"<p><strong>Matched:</strong> {html_escape(', '.join(matched_terms[:6]))}</p>"
         if matched_terms
@@ -2625,12 +2677,21 @@ def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[s
     if not paper:
         raise ValueError("Radar paper has no stored metadata.")
     scoring = build_team_radar_scorer(database.list_team_interest_keywords())(paper)
+    latest = (
+        paper_record.get("latest_recommendation")
+        if isinstance(paper_record.get("latest_recommendation"), dict)
+        else {}
+    )
     recommendation = {
         "paper": paper,
         "scoring": scoring,
         "pdf_access": paper_record.get("pdf_access") or assess_pdf_access(paper),
-        "why_relevant": " ".join(scoring.get("reasons") or []),
+        "why_relevant": latest.get("why_relevant") or " ".join(scoring.get("reasons") or []),
         "recommended_action": "import_from_radar_paper_history",
+        "novelty": latest.get("novelty") or {},
+        "context": latest.get("context") or {},
+        "summary": latest.get("summary") or {},
+        "signal_lines": latest.get("signal_lines") or [],
     }
     import_result = import_radar_recommendation(
         database,
@@ -2924,6 +2985,13 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         self.database,
                         run_id=query.get("run", [None])[0] or None,
                         notice=notice,
+                    )
+                )
+            elif parsed.path == "/radar/queue.json":
+                self.respond_json(
+                    build_team_literature_radar_queue_payload(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                     )
                 )
             elif parsed.path == "/radar/brief":

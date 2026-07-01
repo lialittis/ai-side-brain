@@ -15,6 +15,7 @@ from shared.literature_radar import (
     build_radar_pipeline_trace,
     build_venue_coverage_summary,
     dedupe_key as radar_dedupe_key,
+    radar_latest_signal_lines,
 )
 from shared.research.core import iso_timestamp, stable_id
 from team.research_adapter import (
@@ -1900,6 +1901,7 @@ class TeamResearchDatabase:
                 "rank": rank,
                 "score": scoring.get("score"),
                 "label": scoring.get("label"),
+                "signal_lines": radar_latest_signal_lines(recommendation),
                 "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
                 "novelty": recommendation.get("novelty"),
                 "review": recommendation.get("review"),
@@ -2258,6 +2260,7 @@ def build_literature_radar_recommendation_record(
         "pdf_access": recommendation.get("pdf_access") or assess_pdf_access(paper, now=parse_iso_datetime(timestamp)),
         "context": recommendation.get("context"),
         "summary": recommendation.get("summary"),
+        "signal_lines": radar_latest_signal_lines(recommendation),
         "imported_item_id": (import_result or {}).get("item_id"),
         "import_result": import_result,
         "recommendation": recommendation,

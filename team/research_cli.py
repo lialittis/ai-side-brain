@@ -16,12 +16,16 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     build_radar_history_brief,
-    build_radar_review_queue,
     format_radar_source_stats,
     radar_latest_signal_lines,
 )
 from shared.research import topic_profile_by_id
-from team.literature_radar import DEFAULT_RADAR_SOURCES, TEAM_RADAR_SETTINGS_KEY, run_team_literature_radar
+from team.literature_radar import (
+    DEFAULT_RADAR_SOURCES,
+    TEAM_RADAR_SETTINGS_KEY,
+    build_team_literature_radar_queue_payload,
+    run_team_literature_radar,
+)
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
@@ -484,12 +488,35 @@ def print_radar_queue(result: dict[str, Any]) -> None:
             for status in ("all", "unreviewed", "watch", "dismissed")
         )
     )
+    latest_run = result.get("latest_run") if isinstance(result.get("latest_run"), dict) else {}
+    if latest_run:
+        print(format_radar_queue_latest_run(latest_run))
     review = str(result.get("review") or "")
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
     print(f"Priority filter: {review}")
     print_radar_papers(result.get("papers") or [], review=review)
+
+
+def format_radar_queue_latest_run(run: dict[str, Any]) -> str:
+    parts = [
+        f"Latest run: {run.get('id') or 'unknown'}",
+        f"status={run.get('status') or 'unknown'}",
+        f"started={run.get('started_at') or 'unknown'}",
+        f"collected={int(run.get('collected_count') or 0)}",
+        f"recommended={int(run.get('recommendation_count') or 0)}",
+        f"source_errors={int(run.get('source_error_count') or 0)}",
+    ]
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    error_sources = [
+        str(error.get("source_id") or "source")
+        for error in source_errors[:3]
+        if isinstance(error, dict)
+    ]
+    if error_sources:
+        parts.append(f"error_sources={', '.join(error_sources)}")
+    return " | ".join(parts)
 
 
 def print_radar_review(record: dict[str, Any]) -> None:
@@ -742,12 +769,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-queue":
-        review_counts = database.literature_radar_paper_review_counts()
-        result = build_radar_review_queue(
-            database.list_literature_radar_papers(limit=None),
-            limit=args.limit,
-            review_counts=review_counts,
-        )
+        result = build_team_literature_radar_queue_payload(database, limit=args.limit)
         if args.json:
             print_json(result)
         else:

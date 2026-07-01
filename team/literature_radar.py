@@ -17,6 +17,7 @@ from shared.literature_radar import (
     assess_pdf_access,
     build_radar_collection_config,
     build_recommendation_report,
+    build_radar_review_queue,
     build_venue_coverage_summary,
     cache_recommendation_pdfs,
     collect_arxiv,
@@ -39,6 +40,7 @@ from shared.literature_radar import (
     default_radar_topic_profile,
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
+    radar_latest_signal_lines,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -337,6 +339,58 @@ def summarize_team_radar_recommendations(
             now=now,
         )
     raise ValueError("Unsupported radar summary provider.")
+
+
+def build_team_literature_radar_queue_payload(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 3,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit))
+    counts = database.literature_radar_paper_review_counts()
+    latest_runs = database.list_literature_radar_runs(limit=1)
+    latest_run = latest_runs[0] if latest_runs else None
+    queue = build_radar_review_queue(
+        database.list_literature_radar_papers(limit=None),
+        limit=selected_limit,
+        review_counts=counts,
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_queue",
+        "review": queue.get("review") or "",
+        "review_counts": queue.get("review_counts") or counts,
+        "limit": selected_limit,
+        "latest_run": team_literature_radar_run_summary(latest_run),
+        "papers": queue.get("papers") or [],
+        "links": {
+            "latest_papers": "/",
+            "radar": "/radar",
+            "radar_papers": f"/radar/papers?limit={selected_limit}",
+            "weekly_brief": "/radar/brief?days=7&limit=20",
+        },
+    }
+
+
+def team_literature_radar_run_summary(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(run, dict) or not run:
+        return None
+    source_errors = run.get("source_errors") if isinstance(run.get("source_errors"), list) else []
+    source_stats = run.get("source_stats") if isinstance(run.get("source_stats"), list) else []
+    venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
+    return {
+        "id": run.get("id") or "",
+        "status": run.get("status") or "unknown",
+        "started_at": run.get("started_at") or "",
+        "completed_at": run.get("completed_at") or "",
+        "collected_count": int(run.get("collected_count") or 0),
+        "recommendation_count": int(run.get("recommendation_count") or 0),
+        "imported_count": int(run.get("imported_count") or 0),
+        "source_error_count": len(source_errors),
+        "source_errors": source_errors,
+        "source_stats": source_stats,
+        "venue_coverage": venue_coverage,
+    }
 
 
 def apply_team_radar_review_feedback(
@@ -1068,6 +1122,7 @@ def build_radar_import_metadata(
             "label": scoring.get("label"),
             "why_relevant": selected_recommendation.get("why_relevant") or "",
             "recommended_action": selected_recommendation.get("recommended_action") or "",
+            "signal_lines": radar_latest_signal_lines(selected_recommendation),
             "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
             "matched_negative_keywords": scoring.get("matched_negative_keywords") or [],
             "novelty": selected_recommendation.get("novelty") or {},

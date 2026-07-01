@@ -40,6 +40,7 @@ The web UI exposes stored radar runs at:
 http://127.0.0.1:8790/radar
 http://127.0.0.1:8790/radar/brief?days=7
 http://127.0.0.1:8790/radar/papers
+http://127.0.0.1:8790/radar/queue.json
 ```
 
 The page is review-first:
@@ -71,12 +72,25 @@ the current Team Interest weights from the `/interests` sliders, so changing
 those weights affects both new Radar runs and later imported library relevance.
 The Radar page also shows review queue counts for all stored Radar papers, so a
 team member can jump directly to unreviewed, watch, or dismissed candidates.
+Stored run details and generated Markdown reports use the same labelled signal
+lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
+answer to "why should the team read this?" consistent across ad hoc runs, daily
+queue review, and weekly briefs.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
 panel whenever stored Radar papers exist. It also previews the highest-priority
 stored candidates, with stored why/context/matched-interest signal lines, paper
 links plus watch, dismiss, and add-to-library actions that return to the daily
 page. That keeps scheduled discovery visible in the team’s normal daily scan
 without auto-importing candidates into the main library.
+If the latest scheduled run produced no stored papers but did fail or complete,
+the same panel still shows latest-run health, counts, and source-error status so
+an empty queue is not confused with a healthy run that simply found nothing.
+The same active queue is available as local JSON at `/radar/queue.json?limit=20`
+for self-hosted scripts, dashboards, or future notifications. That endpoint only
+reads stored Radar state; it does not collect sources, download PDFs, or call AI.
+The payload includes `review_counts`, `latest_run` health and source stats, the
+active paper records, persisted signal lines, and links back to the HTML review
+surfaces.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -242,16 +256,19 @@ Every `radar-run` creates durable Team-side history in SQLite:
   snapshot, pipeline phase trace, and the Markdown report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
   and latest-seen timestamps, source IDs, PDF-access decision metadata, latest
-  recommendation score/context/summary, and any imported Team item ID.
+  recommendation score/context/summary, persisted signal lines, and any imported
+  Team item ID.
 - `literature_radar_recommendations` stores the ranked recommendations for each
   run, including score, label, novelty, PDF-access decision metadata, summary,
-  imported item ID, and the full recommendation JSON.
+  persisted signal lines, imported item ID, and the full recommendation JSON.
 
 When a recommendation is imported, the Team library item also keeps a compact
 `radar` object and top-level `pdf_access` object. This lets the Latest Papers UI
 show the same access-policy decision as the Radar page and lets duplicate radar
 hits refresh provenance on an existing library item instead of creating another
-paper.
+paper. The imported `radar.recommendation` object also keeps the persisted
+signal lines, so future notification, API, or brief surfaces can reuse the same
+explanation without re-running summarization.
 
 This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
@@ -276,6 +293,10 @@ context, and which interests matched. Use
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 `--status dismissed`, or `--status unreviewed` to change a stored paper from
 the terminal; the same state can be changed from `/radar/papers` in the web UI.
+For browser-side, CLI, or local automation, `/radar/queue.json?limit=20` and
+`python team/research_cli.py radar-queue --json` return the same active queue
+shape with review counts, latest-run health/source stats, persisted signal
+lines, paper records, and links back to the HTML review surfaces.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, and source errors are shown in
@@ -320,9 +341,10 @@ should ignore web-saved defaults and use only explicit environment variables.
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also writes text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
-includes the stored summary, relevance/context signal, and matched interests for
-daily review, and the JSON snapshot includes the same lines under
-`signal_lines`. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
+includes latest-run health, source-error counts, stored summary,
+relevance/context signal, and matched interests for daily review. The JSON
+snapshot uses the same queue payload as `radar-queue --json`, including
+`latest_run` health plus per-paper `signal_lines`. Use `RADAR_QUEUE_LIMIT` to change how many active queue papers are included. The
 brief script writes a stored-run roll-up without collecting again. The cycle
 script runs both in order; if collection fails, the brief step does not run.
 

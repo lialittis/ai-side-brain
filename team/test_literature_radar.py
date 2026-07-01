@@ -343,9 +343,13 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             summary = result["recommendations"][0]["summary"]
             self.assertIn("memory safety, system security", summary["short_summary"])
             self.assertEqual(summary["source_trace"]["processor"], "local-radar-summary-v0.1")
-            self.assertIn("Summary: This paper studies memory safety", result["report"])
+            self.assertIn("Signal: This paper studies memory safety", result["report"])
+            self.assertIn("Matched: memory safety", result["report"])
             stored = database.list_literature_radar_recommendations(result["run_id"])[0]
             self.assertEqual(stored["summary"]["source_trace"]["processor"], "local-radar-summary-v0.1")
+            self.assertIn("Signal: This paper studies memory safety", stored["signal_lines"][0])
+            history = database.get_literature_radar_paper(paper["dedupe_key"])
+            self.assertIn("Signal: This paper studies memory safety", history["latest_recommendation"]["signal_lines"][0])
 
     def test_run_team_literature_radar_links_recommendations_to_existing_library_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1150,16 +1154,25 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 queue_code = research_cli.main(["radar-queue", "--db-path", str(db_path), "--json"])
             self.assertEqual(queue_code, 0)
             queue_result = json.loads(queue_stdout.getvalue())
+            self.assertTrue(queue_result["success"])
+            self.assertEqual(queue_result["kind"], "team_literature_radar_queue")
             self.assertEqual(queue_result["review"], "unreviewed")
             self.assertEqual(queue_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            self.assertEqual(queue_result["latest_run"]["id"], result["run_id"])
+            self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
+            self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
+            self.assertEqual(queue_result["links"]["radar"], "/radar")
             queue_text_stdout = io.StringIO()
             with contextlib.redirect_stdout(queue_text_stdout):
                 queue_text_code = research_cli.main(["radar-queue", "--db-path", str(db_path)])
             self.assertEqual(queue_text_code, 0)
             queue_text = queue_text_stdout.getvalue()
+            self.assertIn(f"Latest run: {result['run_id']}", queue_text)
+            self.assertIn("status=succeeded", queue_text)
+            self.assertIn("source_errors=0", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
@@ -1208,6 +1221,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(watch_queue_code, 0)
             watch_queue = json.loads(watch_queue_stdout.getvalue())
             self.assertEqual(watch_queue["review"], "watch")
+            self.assertEqual(watch_queue["latest_run"]["id"], result["run_id"])
             self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             stored_recommendations = database.list_literature_radar_recommendations(result["run_id"])
             self.assertEqual(stored_recommendations[0]["review"]["status"], "watch")
@@ -1283,8 +1297,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             queue = json.loads(stdout.getvalue())
+            self.assertTrue(queue["success"])
+            self.assertEqual(queue["kind"], "team_literature_radar_queue")
             self.assertEqual(queue["review"], "unreviewed")
             self.assertEqual(queue["review_counts"], {"all": 3, "dismissed": 1, "unreviewed": 2, "watch": 0})
+            self.assertEqual(queue["latest_run"]["status"], "succeeded")
             self.assertEqual(
                 [paper["title"] for paper in queue["papers"]],
                 [
@@ -1292,6 +1309,44 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "Recent Lower Priority Team Radar Paper",
                 ],
             )
+
+    def test_cli_radar_queue_text_reports_failed_empty_latest_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            run = database.create_literature_radar_run(
+                sources=["dblp"],
+                query_terms=["system security"],
+                now=datetime(2026, 7, 1, 7, 30, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                status="failed",
+                error="DBLP unavailable",
+                source_errors=[
+                    {
+                        "source_id": "dblp",
+                        "error_type": "RuntimeError",
+                        "error": "DBLP unavailable",
+                        "occurred_at": "2026-07-01T07:31:00+00:00",
+                    }
+                ],
+                now=datetime(2026, 7, 1, 7, 31, tzinfo=timezone.utc),
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = research_cli.main(["radar-queue", "--db-path", str(db_path)])
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn(f"Latest run: {run['id']}", output)
+            self.assertIn("status=failed", output)
+            self.assertIn("source_errors=1", output)
+            self.assertIn("error_sources=dblp", output)
+            self.assertIn("No active unreviewed or watched Radar papers.", output)
 
     def test_cli_radar_run_dispatches_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
