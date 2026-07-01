@@ -11,10 +11,12 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_recommendation_report,
     build_radar_pipeline_trace,
     build_radar_history_brief,
+    build_venue_coverage_summary,
     cache_open_access_pdf,
     cache_recommendation_pdfs,
     create_radar_paper,
@@ -124,6 +126,54 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             ["usenix_security", "ieee_sp", "acm_ccs", "ndss", "raid", "acsac"],
         )
         self.assertEqual([profile["id"] for profile in expand_dblp_venue_profiles(["acm_ccs"])], ["acm_ccs"])
+
+    def test_builds_venue_coverage_summary_from_profile_source_records(self) -> None:
+        ccs_paper = create_radar_paper(
+            source_id="dblp_venues",
+            source_paper_id="conf/ccs/Example2026",
+            title="Memory Safety at CCS",
+            abstract="Memory safety and system security.",
+            year=2026,
+            source_record={
+                "source_id": "dblp",
+                "collector_id": "dblp_venues",
+                "source_paper_id": "conf/ccs/Example2026",
+                "venue_profile_id": "acm_ccs",
+                "venue_profile_name": "ACM CCS",
+                "venue_group": "security",
+                "venue_year": 2026,
+            },
+        )
+        openreview_paper = create_radar_paper(
+            source_id="openreview_venues",
+            source_paper_id="iclr-accepted",
+            title="LLM Security at ICLR",
+            abstract="LLM security and prompt injection.",
+            year=2026,
+            source_record={
+                "source_id": "openreview",
+                "collector_id": "openreview_venues",
+                "source_paper_id": "iclr-accepted",
+                "openreview_venue_profile_id": "iclr",
+                "openreview_venue_profile_name": "ICLR",
+                "openreview_venue_group": "ai_ml",
+                "openreview_venue_year": 2026,
+            },
+        )
+        recommendation = recommend_papers([ccs_paper])[0]
+
+        coverage = build_venue_coverage_summary(
+            collected_papers=[ccs_paper, openreview_paper],
+            recommendations=[recommendation],
+        )
+        report = append_radar_venue_coverage_to_report("# Report\n", coverage)
+
+        self.assertEqual([record["venue_profile_id"] for record in coverage], ["iclr", "acm_ccs"])
+        self.assertEqual(coverage[1]["candidate_count"], 1)
+        self.assertEqual(coverage[1]["recommended_count"], 1)
+        self.assertEqual(coverage[1]["source_ids"], ["dblp_venues"])
+        self.assertIn("## Venue Coverage", report)
+        self.assertIn("`acm_ccs` ACM CCS (security, 2026): 1 candidate(s), 1 recommended", report)
 
     def test_deduplicates_by_doi_and_merges_source_records(self) -> None:
         first = create_radar_paper(
@@ -584,6 +634,17 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                         {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
                         {"source_id": "dblp", "status": "failed", "collected_count": 0},
                     ],
+                    "venue_coverage": [
+                        {
+                            "venue_profile_id": "acm_ccs",
+                            "venue_profile_name": "ACM CCS",
+                            "venue_group": "security",
+                            "venue_year": 2026,
+                            "source_ids": ["dblp_venues"],
+                            "candidate_count": 2,
+                            "recommended_count": 1,
+                        }
+                    ],
                     "source_errors": [
                         {"source_id": "dblp", "error_type": "RuntimeError", "error": "DBLP unavailable"}
                     ],
@@ -618,6 +679,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`recommendation_report`: succeeded=1", brief)
         self.assertIn("`arxiv`: 2 candidate(s)", brief)
         self.assertIn("`dblp`: 0 candidate(s), 1 run(s), 1 failure(s)", brief)
+        self.assertIn("Venue Coverage", brief)
+        self.assertIn("`acm_ccs` ACM CCS (security, 2026): 2 candidate(s), 1 recommended", brief)
         self.assertIn("DBLP unavailable", brief)
         self.assertLess(brief.index("Weekly Watch Radar"), brief.index("Weekly Memory Safety Radar"))
         self.assertIn("Weekly Memory Safety Radar", brief)

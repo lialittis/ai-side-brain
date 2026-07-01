@@ -205,6 +205,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar_papers.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    radar_review = subparsers.add_parser(
+        "radar-review",
+        help="mark one Literature Radar paper as watch, dismissed, or unreviewed",
+    )
+    add_db_args(radar_review)
+    radar_review.add_argument("dedupe_key")
+    radar_review.add_argument("--status", choices=["watch", "dismissed", "unreviewed"], required=True)
+    radar_review.add_argument("--actor", default="team-member")
+    radar_review.add_argument("--reason", default="")
+    radar_review.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     radar_report = subparsers.add_parser("radar-report", help="show a stored Literature Radar report")
     add_db_args(radar_report)
     radar_report.add_argument("run_id", nargs="?", help="run id; defaults to the latest run")
@@ -448,6 +459,15 @@ def print_radar_papers(
         )
 
 
+def print_radar_review(record: dict[str, Any]) -> None:
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    status = review.get("status") or record.get("review_status") or "unreviewed"
+    actor = review.get("reviewed_by") or record.get("reviewed_by") or "team-member"
+    reason = review.get("reason") or record.get("review_reason") or ""
+    suffix = f" | reason={reason}" if reason else ""
+    print(f"{record.get('dedupe_key')} | review={status} | reviewed_by={actor}{suffix} | {record.get('title')}")
+
+
 def format_radar_source_stats(source_stats: list[dict[str, Any]]) -> str:
     return ", ".join(
         f"{stat.get('source_id')}: {int(stat.get('collected_count') or 0)}"
@@ -613,7 +633,9 @@ def main(argv: list[str] | None = None) -> int:
             or saved_radar_list(saved_defaults, "semantic_scholar_author_ids")
             or None,
             seed_paper_ids=args.seed_paper_id or saved_radar_list(saved_defaults, "seed_paper_ids") or None,
-            negative_seed_paper_ids=args.negative_seed_paper_id or None,
+            negative_seed_paper_ids=args.negative_seed_paper_id
+            or saved_radar_list(saved_defaults, "negative_seed_paper_ids")
+            or None,
             openalex_mailto=args.openalex_mailto,
             openalex_author_ids=args.openalex_author_id
             or saved_radar_list(saved_defaults, "openalex_author_ids")
@@ -674,6 +696,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print_radar_papers(papers, review_counts=review_counts, review=review)
+        return 0
+
+    if args.command == "radar-review":
+        record = database.mark_literature_radar_paper_review(
+            args.dedupe_key,
+            status=args.status,
+            actor=args.actor,
+            reason=args.reason,
+        )
+        if args.json:
+            print_json(record)
+        else:
+            print_radar_review(record)
         return 0
 
     if args.command == "radar-report":

@@ -68,14 +68,16 @@ those weights affects both new Radar runs and later imported library relevance.
 The Radar page also shows review queue counts for all stored Radar papers, so a
 team member can jump directly to unreviewed, watch, or dismissed candidates.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
-recommendations; selecting references or citations uses the same seed IDs for
-graph expansion. OpenReview invitation IDs, OpenReview venue profiles, Semantic
-Scholar author IDs, and DBLP venue profiles automatically enable their matching
-collectors for that run.
+recommendations; selecting references or citations uses the same positive seed
+IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
+and steer Semantic Scholar recommendations away from known low-value directions.
+OpenReview invitation IDs, OpenReview venue profiles, Semantic Scholar author
+IDs, and DBLP venue profiles automatically enable their matching collectors for
+that run.
 
 The form can save source choices, limits, summary provider, conference year,
 USENIX Security cycles, OpenReview accepted-only behavior, PDF cache settings,
-tracked authors, seed papers, and venue profiles as Team defaults. Saved
+tracked authors, positive and negative seed papers, and venue profiles as Team defaults. Saved
 defaults live in the existing `team_settings` table under
 `literature_radar_defaults`, so the team can configure daily-use radar settings
 once and reuse them for later ad hoc or scheduled runs.
@@ -208,6 +210,7 @@ Stored runs can be inspected later:
 python team/research_cli.py radar-history
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
+python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
 python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
 python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
@@ -219,8 +222,8 @@ Every `radar-run` creates durable Team-side history in SQLite:
 
 - `literature_radar_runs` stores source choices, query terms, non-secret
   collection settings, status, total counts, per-source collection stats,
-  errors, scoring profile snapshot, pipeline phase trace, and the Markdown
-  report.
+  venue coverage by configured top-conference profile, errors, scoring profile
+  snapshot, pipeline phase trace, and the Markdown report.
 - `literature_radar_papers` stores one row per deduplicated paper with first-seen
   and latest-seen timestamps, source IDs, PDF-access decision metadata, latest
   recommendation score/context/summary, and any imported Team item ID.
@@ -242,24 +245,29 @@ that were collected and stored before any import decision. The same history is
 available in the browser at `/radar/papers`, where a team member can add a
 stored paper to the main library.
 Radar review feedback is also stored on the deduplicated paper history. Mark a
-paper as `watch` to keep it visible as a known candidate, or `dismissed` to stop
-future Team Radar runs from recommending it again while still preserving the
-metadata trail.
+paper as `watch` to keep it visible as a known candidate and to make it part of
+the Team Radar context used by future runs. This lets the Radar explain that a
+new paper is related to watched-but-not-yet-imported work. Mark a paper as
+`dismissed` to stop future Team Radar runs from recommending it again while
+still preserving the metadata trail.
 The CLI and browser both expose review queues: use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
-to focus the terminal output, and use the queue-count links in `/radar` or
-`/radar/papers` for the same workflow in the web UI.
+to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
+`--status dismissed`, or `--status unreviewed` to change a stored paper from
+the terminal; the same state can be changed from `/radar/papers` in the web UI.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, and source errors are shown in
-the Radar page and report.
+the Radar page and report. Venue-profile runs also show `Venue Coverage` in the
+report and Radar page, including candidate and recommendation counts per
+conference profile/year.
 
 Use `radar-brief` to turn stored daily runs into a weekly or daily review brief
-without collecting again. It aggregates run status, per-source counts and
-failures, and the top stored recommendations with review state, context, and PDF
-policy. New runs snapshot the Team Interest weights used for scoring, so a
-weekly brief can still explain recommendations after the `/interests` sliders
-change. They also include a pipeline trace for collection, PDF policy,
+without collecting again. It aggregates run status, per-source counts, venue
+coverage, failures, and the top stored recommendations with review state,
+context, and PDF policy. New runs snapshot the Team Interest weights used for
+scoring, so a weekly brief can still explain recommendations after the
+`/interests` sliders change. They also include a pipeline trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and report
 generation. Brief ranking is review-aware: `watch` papers are listed before
 unreviewed papers, and `dismissed` papers are pushed behind active candidates.
@@ -283,7 +291,7 @@ team/scripts/build_literature_radar_brief.sh
 The cycle script is the recommended team-facing scheduled command. It runs a
 collection pass and then immediately builds a stored-run brief. By default it
 sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse the sources, limits,
-authors, seed papers, venue profiles, summary settings, and PDF-cache settings
+authors, positive and negative seed papers, venue profiles, summary settings, and PDF-cache settings
 saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
 
@@ -389,12 +397,12 @@ Current implemented shared collectors:
 
 Recommended next MVP order:
 
-1. DBLP venue/cross-source conference enrichment;
+1. direct accepted-paper page collectors for more venues where stable official
+   pages exist;
 2. more OpenReview workshop presets for recurring safety, alignment,
    interpretability, and adversarial ML workshops when their invitation IDs are
    stable enough to encode;
-3. IEEE S&P, ACM CCS, RAID, ACSAC, OSDI, SOSP, EuroSys, ATC, ASPLOS, PLDI,
-   OOPSLA, POPL, ECOOP, ICSE, FSE, and ASE venue presets.
+3. cross-source DOI/citation enrichment for venue-profile results.
 
 Scheduling should remain product-owned: Team Side-Brain can run a cron/systemd
 timer against a team database, while Personal Side-Brain can run the same shared

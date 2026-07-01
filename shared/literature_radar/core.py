@@ -1166,6 +1166,128 @@ def build_recommendation_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_venue_coverage_summary(
+    *,
+    collected_papers: list[dict[str, Any]] | None = None,
+    recommendations: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    coverage: dict[str, dict[str, Any]] = {}
+
+    def add_paper(paper: dict[str, Any], *, recommended: bool) -> None:
+        paper_key = pipeline_paper_key(paper) or dedupe_key(paper)
+        if not paper_key:
+            return
+        for source_record in venue_profile_source_records(paper):
+            venue_key = venue_coverage_key(source_record)
+            entry = coverage.setdefault(
+                venue_key,
+                {
+                    "venue_profile_id": source_record["venue_profile_id"],
+                    "venue_profile_name": source_record["venue_profile_name"],
+                    "venue_group": source_record.get("venue_group") or "",
+                    "venue_year": source_record.get("venue_year"),
+                    "source_ids": set(),
+                    "_candidate_keys": set(),
+                    "_recommended_keys": set(),
+                },
+            )
+            if source_record.get("source_id"):
+                entry["source_ids"].add(source_record["source_id"])
+            entry["_candidate_keys"].add(paper_key)
+            if recommended:
+                entry["_recommended_keys"].add(paper_key)
+
+    for paper in collected_papers or []:
+        add_paper(paper, recommended=False)
+    for recommendation in recommendations or []:
+        paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+        add_paper(paper, recommended=True)
+
+    records = []
+    for entry in coverage.values():
+        records.append(
+            {
+                "venue_profile_id": entry["venue_profile_id"],
+                "venue_profile_name": entry["venue_profile_name"],
+                "venue_group": entry.get("venue_group") or "",
+                "venue_year": entry.get("venue_year"),
+                "source_ids": sorted(entry["source_ids"]),
+                "candidate_count": len(entry["_candidate_keys"]),
+                "recommended_count": len(entry["_recommended_keys"]),
+            }
+        )
+    return sorted(
+        records,
+        key=lambda record: (
+            str(record.get("venue_group") or ""),
+            str(record.get("venue_profile_id") or ""),
+            str(record.get("venue_year") or ""),
+        ),
+    )
+
+
+def venue_profile_source_records(paper: dict[str, Any]) -> list[dict[str, Any]]:
+    records = []
+    for source_record in paper.get("source_records") or []:
+        if not isinstance(source_record, dict):
+            continue
+        profile_id = source_record.get("venue_profile_id") or source_record.get("openreview_venue_profile_id")
+        if not profile_id:
+            continue
+        records.append(
+            {
+                "source_id": source_record.get("collector_id") or source_record.get("source_id") or "",
+                "venue_profile_id": str(profile_id),
+                "venue_profile_name": str(
+                    source_record.get("venue_profile_name")
+                    or source_record.get("openreview_venue_profile_name")
+                    or profile_id
+                ),
+                "venue_group": str(
+                    source_record.get("venue_group")
+                    or source_record.get("openreview_venue_group")
+                    or ""
+                ),
+                "venue_year": source_record.get("venue_year") or source_record.get("openreview_venue_year"),
+            }
+        )
+    return records
+
+
+def venue_coverage_key(source_record: dict[str, Any]) -> str:
+    return "::".join(
+        [
+            str(source_record.get("venue_profile_id") or ""),
+            str(source_record.get("venue_year") or ""),
+        ]
+    )
+
+
+def append_radar_venue_coverage_to_report(report: str, venue_coverage: list[dict[str, Any]]) -> str:
+    lines = venue_coverage_report_lines(venue_coverage)
+    if not lines:
+        return report
+    return "\n".join([report.rstrip(), "", "## Venue Coverage", "", *lines, ""])
+
+
+def venue_coverage_report_lines(venue_coverage: list[dict[str, Any]]) -> list[str]:
+    lines = []
+    for record in venue_coverage:
+        profile_id = record.get("venue_profile_id") or "venue"
+        name = record.get("venue_profile_name") or profile_id
+        year = f", {record.get('venue_year')}" if record.get("venue_year") else ""
+        group = f"{record.get('venue_group')}{year}" if record.get("venue_group") else str(record.get("venue_year") or "")
+        suffix = f" ({group})" if group else ""
+        sources = ", ".join(record.get("source_ids") or [])
+        source_text = f"; sources={sources}" if sources else ""
+        lines.append(
+            f"- `{profile_id}` {name}{suffix}: "
+            f"{int(record.get('candidate_count') or 0)} candidate(s), "
+            f"{int(record.get('recommended_count') or 0)} recommended{source_text}"
+        )
+    return lines
+
+
 def build_radar_pipeline_trace(
     *,
     status: str,
@@ -1402,6 +1524,9 @@ def build_radar_history_brief(
         lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
     if source_lines:
         lines.extend(["## Source Stats", "", *source_lines, ""])
+    venue_coverage_lines = radar_brief_venue_coverage_lines([bundle["run"] for bundle in bundles])
+    if venue_coverage_lines:
+        lines.extend(["## Venue Coverage", "", *venue_coverage_lines, ""])
     error_lines = radar_brief_source_error_lines([bundle["run"] for bundle in bundles])
     if error_lines:
         lines.extend(["## Source Errors", "", *error_lines, ""])
@@ -1645,6 +1770,49 @@ def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:
         f"- `{source_id}`: {record['collected']} candidate(s), {record['runs']} run(s), "
         f"{record['failed']} failure(s)"
         for source_id, record in sorted(totals.items())
+    ]
+
+
+def radar_brief_venue_coverage_lines(runs: list[dict[str, Any]]) -> list[str]:
+    totals: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        for coverage in run.get("venue_coverage") or []:
+            if not isinstance(coverage, dict):
+                continue
+            profile_id = str(coverage.get("venue_profile_id") or "").strip()
+            if not profile_id:
+                continue
+            key = "::".join([profile_id, str(coverage.get("venue_year") or "")])
+            record = totals.setdefault(
+                key,
+                {
+                    "venue_profile_id": profile_id,
+                    "venue_profile_name": coverage.get("venue_profile_name") or profile_id,
+                    "venue_group": coverage.get("venue_group") or "",
+                    "venue_year": coverage.get("venue_year"),
+                    "source_ids": set(),
+                    "candidate_count": 0,
+                    "recommended_count": 0,
+                    "runs": 0,
+                },
+            )
+            record["candidate_count"] += int(coverage.get("candidate_count") or 0)
+            record["recommended_count"] += int(coverage.get("recommended_count") or 0)
+            record["runs"] += 1
+            for source_id in coverage.get("source_ids") or []:
+                if source_id:
+                    record["source_ids"].add(str(source_id))
+    records = sorted(
+        [{**record, "source_ids": sorted(record["source_ids"])} for record in totals.values()],
+        key=lambda record: (
+            str(record.get("venue_group") or ""),
+            str(record.get("venue_profile_id") or ""),
+            str(record.get("venue_year") or ""),
+        ),
+    )
+    return [
+        f"{line}, {int(record.get('runs') or 0)} run(s)"
+        for line, record in zip(venue_coverage_report_lines(records), records)
     ]
 
 

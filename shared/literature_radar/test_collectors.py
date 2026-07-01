@@ -834,6 +834,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["venue"], "CCS")
         self.assertIn("ACM+CCS+2026", seen_urls[0])
         self.assertEqual(paper["source_records"][0]["venue_profile_id"], "acm_ccs")
+        self.assertEqual(paper["source_records"][0]["collector_id"], "dblp_venues")
         self.assertEqual(paper["source_records"][0]["venue_group"], "security")
         self.assertEqual(paper["source_records"][0]["venue_year"], 2026)
         self.assertIn("venue_query_url", paper["source_records"][0])
@@ -964,6 +965,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertTrue(any("api.openalex.org/works" in url for url in seen_urls))
         source_record = paper["source_records"][0]
         self.assertEqual(source_record["venue_profile_id"], "acm_ccs")
+        self.assertEqual(source_record["collector_id"], "openalex_venues")
         self.assertEqual(source_record["venue_group"], "security")
         self.assertEqual(source_record["venue_year"], 2026)
         self.assertEqual(source_record["openalex_source_id"], "S123456789")
@@ -1049,6 +1051,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         source_record = paper["source_records"][0]
         self.assertEqual(source_record["venueid"], "ICLR.cc/2026/Conference")
         self.assertEqual(source_record["decision"], "Accept (poster)")
+        self.assertEqual(source_record["collector_id"], "openreview_venues")
         self.assertEqual(source_record["openreview_venue_profile_id"], "iclr")
         self.assertEqual(source_record["openreview_venue_group"], "ai_ml")
         self.assertTrue(source_record["openreview_accepted"])

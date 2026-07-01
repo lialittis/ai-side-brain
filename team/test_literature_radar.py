@@ -390,6 +390,63 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["related_item_count"], 1)
 
+    def test_run_team_literature_radar_links_recommendations_to_watched_radar_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            watched = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00013",
+                title="Watched Agentic Security Baseline",
+                abstract="Prior candidate about agentic security, LLM security, and memory safety.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00013"},
+            )
+            watched["tags"] = ["agentic-security"]
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[watched]):
+                first = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["agentic security", "memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
+            stored_watched = database.get_literature_radar_paper(watched["dedupe_key"])
+            self.assertCountEqual(
+                stored_watched["latest_recommendation"]["matched_positive_keywords"],
+                ["agentic security", "memory safety"],
+            )
+            database.mark_literature_radar_paper_review(
+                watched["dedupe_key"],
+                status="watch",
+                actor="alice",
+                now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
+            )
+            candidate = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00014",
+                title="Memory Safety for Agentic Security",
+                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00014"},
+            )
+            candidate["tags"] = ["agentic-security"]
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[candidate]):
+                second = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(first["recommendation_count"], 1)
+            context = second["recommendations"][0]["context"]
+            self.assertEqual(context["related_items"][0]["title"], "Watched Agentic Security Baseline")
+            self.assertEqual(context["related_items"][0]["id"], f"radar:{watched['dedupe_key']}")
+            self.assertIn("agentic security", context["related_items"][0]["matched_terms"])
+            self.assertIn("Related to existing context", context["relationship_summary"])
+            stored = database.list_literature_radar_recommendations(second["run_id"])[0]
+            self.assertEqual(stored["context"]["related_items"][0]["title"], "Watched Agentic Security Baseline")
+
     def test_openrouter_summary_adapter_uses_structured_output(self) -> None:
         paper = create_radar_paper(
             source_id="semantic_scholar",
@@ -536,6 +593,15 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 venue="CCS",
                 identifiers={"doi": "10.1145/ccs-example"},
                 links={"landing": "https://dblp.org/rec/conf/ccs/MemorySafety2026"},
+                source_record={
+                    "source_id": "dblp",
+                    "collector_id": "dblp_venues",
+                    "source_paper_id": "conf/ccs/MemorySafety2026",
+                    "venue_profile_id": "acm_ccs",
+                    "venue_profile_name": "ACM CCS",
+                    "venue_group": "security",
+                    "venue_year": 2026,
+                },
             )
             with mock.patch("team.literature_radar.collect_dblp_venue_publications", return_value=[paper]) as dblp_venues:
                 result = run_team_literature_radar(
@@ -554,6 +620,15 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp_venues.call_args.kwargs["venue_profiles"], ["security"])
             self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
             self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
+            self.assertEqual(result["venue_coverage"][0]["venue_profile_id"], "acm_ccs")
+            self.assertEqual(result["venue_coverage"][0]["source_ids"], ["dblp_venues"])
+            self.assertEqual(result["venue_coverage"][0]["candidate_count"], 1)
+            self.assertEqual(result["venue_coverage"][0]["recommended_count"], 1)
+            self.assertIn("## Venue Coverage", result["report"])
+            stored_run = database.get_literature_radar_run(result["run_id"])
+            self.assertEqual(stored_run["venue_coverage"][0]["venue_profile_name"], "ACM CCS")
+            paper_history = database.get_literature_radar_paper(paper["dedupe_key"])
+            self.assertEqual(paper_history["source_ids"], ["dblp", "dblp_venues"])
 
     def test_run_team_literature_radar_collects_dblp_author_publications(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -983,6 +1058,47 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(papers[0]["source_ids"], ["arxiv"])
             self.assertTrue(papers[0]["pdf_access"]["can_download"])
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "highly_relevant")
+            review_stdout = io.StringIO()
+            with contextlib.redirect_stdout(review_stdout):
+                review_code = research_cli.main(
+                    [
+                        "radar-review",
+                        "--db-path",
+                        str(db_path),
+                        papers[0]["dedupe_key"],
+                        "--status",
+                        "watch",
+                        "--actor",
+                        "alice",
+                        "--reason",
+                        "team priority",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(review_code, 0)
+            reviewed_paper = json.loads(review_stdout.getvalue())
+            self.assertEqual(reviewed_paper["review_status"], "watch")
+            self.assertEqual(reviewed_paper["reviewed_by"], "alice")
+            self.assertEqual(reviewed_paper["review_reason"], "team priority")
+            watch_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_stdout):
+                watch_code = research_cli.main(
+                    [
+                        "radar-papers",
+                        "--db-path",
+                        str(db_path),
+                        "--review",
+                        "watch",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(watch_code, 0)
+            watch_result = json.loads(watch_stdout.getvalue())
+            self.assertEqual(watch_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 0, "watch": 1})
+            self.assertEqual(watch_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            stored_recommendations = database.list_literature_radar_recommendations(result["run_id"])
+            self.assertEqual(stored_recommendations[0]["review"]["status"], "watch")
+            self.assertEqual(stored_recommendations[0]["review"]["reviewed_by"], "alice")
             self.assertEqual(report_code, 0)
             report = json.loads(report_stdout.getvalue())
             self.assertEqual(report["run"]["id"], result["run_id"])
@@ -1115,6 +1231,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "include_openreview_unaccepted": True,
                     "openalex_author_ids": ["A123456789"],
                     "seed_paper_ids": ["seed-positive"],
+                    "negative_seed_paper_ids": ["seed-negative"],
                     "venue_profiles": ["security"],
                 },
             )
@@ -1157,6 +1274,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertFalse(runner.call_args.kwargs["openreview_accepted_only"])
             self.assertEqual(runner.call_args.kwargs["openalex_author_ids"], ["A123456789"])
             self.assertEqual(runner.call_args.kwargs["seed_paper_ids"], ["seed-positive"])
+            self.assertEqual(runner.call_args.kwargs["negative_seed_paper_ids"], ["seed-negative"])
             self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security"])
             self.assertEqual(json.loads(stdout.getvalue())["run_id"], "radarrun_saved_defaults")
 

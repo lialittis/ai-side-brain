@@ -94,6 +94,7 @@ RADAR_LIST_SETTING_KEYS = {
     "dblp_author_pids",
     "openalex_author_ids",
     "seed_paper_ids",
+    "negative_seed_paper_ids",
     "openreview_invitations",
     "openreview_venue_profiles",
     "venue_profiles",
@@ -928,6 +929,10 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
         <textarea name="seed_paper_ids" placeholder="Semantic Scholar IDs">{html_escape(radar_list_form_value(settings, 'seed_paper_ids'))}</textarea>
       </label>
       <label>
+        <span class="muted">Negative seed IDs</span>
+        <textarea name="negative_seed_paper_ids" placeholder="Semantic Scholar IDs to steer away from">{html_escape(radar_list_form_value(settings, 'negative_seed_paper_ids'))}</textarea>
+      </label>
+      <label>
         <span class="muted">OpenReview invitations</span>
         <textarea name="openreview_invitations" placeholder="ICLR.cc/2026/Conference/-/Submission">{html_escape(radar_list_form_value(settings, 'openreview_invitations'))}</textarea>
       </label>
@@ -1220,6 +1225,7 @@ def render_radar_run_detail(run: dict[str, Any] | None, recommendations: list[di
     <div class="tags">{render_radar_terms("Sources", run.get("sources") or [])}</div>
     <div class="tags">{render_radar_terms("Query", run.get("query_terms") or [])}</div>
     {render_radar_source_stats(run)}
+    {render_radar_venue_coverage(run)}
     {render_radar_run_provenance(run)}
     {render_radar_error(run)}
     {render_radar_source_errors(run)}
@@ -1272,6 +1278,27 @@ def render_radar_source_stat(stat: dict[str, Any]) -> str:
         title = f' title="{html_escape(error_type + (": " + error if error else ""))}"'
     class_name = "tag warn" if status == "failed" else "tag"
     return f'<span class="{class_name}"{title}>{html_escape(source_id)}: {collected_count}</span>'
+
+
+def render_radar_venue_coverage(run: dict[str, Any]) -> str:
+    coverage = run.get("venue_coverage") or []
+    if not coverage:
+        return ""
+    chips = "".join(render_radar_venue_coverage_chip(record) for record in coverage)
+    return f'<div class="tags"><span class="muted">Venue coverage:</span> {chips}</div>'
+
+
+def render_radar_venue_coverage_chip(record: dict[str, Any]) -> str:
+    profile_id = str(record.get("venue_profile_id") or "venue")
+    label = str(record.get("venue_profile_name") or profile_id)
+    year = str(record.get("venue_year") or "").strip()
+    count = int(record.get("candidate_count") or 0)
+    recommended = int(record.get("recommended_count") or 0)
+    suffix = f" {year}" if year else ""
+    return (
+        f'<span class="tag" title="{html_escape(profile_id)}">'
+        f"{html_escape(label)}{html_escape(suffix)}: {count}/{recommended}</span>"
+    )
 
 
 def render_radar_run_provenance(run: dict[str, Any]) -> str:
@@ -2403,6 +2430,7 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         dblp_author_pids=settings["dblp_author_pids"],
         openalex_author_ids=settings["openalex_author_ids"],
         seed_paper_ids=settings["seed_paper_ids"],
+        negative_seed_paper_ids=settings["negative_seed_paper_ids"],
         openreview_invitations=settings["openreview_invitations"],
         openreview_venue_profiles=settings["openreview_venue_profiles"],
         openreview_accepted_only=not settings["include_openreview_unaccepted"],
@@ -2437,6 +2465,7 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "dblp_author_pids": split_form_list(fields.get("dblp_author_pids", "")),
         "openalex_author_ids": split_form_list(fields.get("openalex_author_ids", "")),
         "seed_paper_ids": split_form_list(fields.get("seed_paper_ids", "")),
+        "negative_seed_paper_ids": split_form_list(fields.get("negative_seed_paper_ids", "")),
         "openreview_invitations": split_form_list(fields.get("openreview_invitations", "")),
         "openreview_venue_profiles": split_form_list(fields.get("openreview_venue_profiles", "")),
         "venue_profiles": split_form_list(fields.get("venue_profiles", "")),

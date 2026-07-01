@@ -93,10 +93,13 @@ move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
 `indexes/literature-radar-papers.json` history.
 Use `review` to mark a stored paper as `watch`, `dismissed`, or `unreviewed`.
-Dismissed papers stay in history but are skipped by future Personal Radar
-recommendations, which keeps repeated low-value hits from consuming review
-slots. Review changes also update stored run recommendations so weekly or daily
-briefs show the current review state without requiring another collection run.
+Watched papers stay visible as known candidates and become context for future
+Personal Radar runs, so a new paper can be explained as related to
+watched-but-not-yet-moved work. Dismissed papers stay in history but are skipped
+by future Personal Radar recommendations and context linking, which keeps
+repeated low-value hits from consuming review slots. Review changes also update
+stored run recommendations so weekly or daily briefs show the current review
+state without requiring another collection run.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 That paper history stores the PDF-access decision metadata for each deduplicated
@@ -107,14 +110,15 @@ If one source fails during a multi-source run, Personal Radar records the run as
 `partial`, keeps recommendations from successful sources, records per-source
 candidate counts, and appends source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
-collecting again; it includes relevance, novelty, review state, context, and PDF
-policy for the top stored recommendations. Stored runs also snapshot the topic
-profile used for scoring and a phase trace for collection, PDF policy,
+collecting again; it includes relevance, novelty, review state, context, venue
+coverage, and PDF policy for the top stored recommendations. Stored runs also
+snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief
 ranking is review-aware: `watch` papers are listed before unreviewed papers, and
 `dismissed` papers are pushed behind active candidates. Stored run history also
 keeps non-secret collection settings such as limits, conference year, venue
-profiles, seed counts, and whether summaries or PDF caching were enabled.
+profiles, per-venue candidate/recommendation counts, seed counts, and whether
+summaries or PDF caching were enabled.
 
 Private memory stays under `memory/` and should not be used by Team Side-Brain.

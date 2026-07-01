@@ -114,6 +114,16 @@ class TeamResearchWebTest(unittest.TestCase):
                 links={"arxiv": "https://arxiv.org/abs/2601.00006"},
                 discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
             )
+            paper["source_records"].append(
+                {
+                    "source_id": "dblp_venues",
+                    "source_paper_id": "conf/ccs/MemorySafety2026",
+                    "venue_profile_id": "acm_ccs",
+                    "venue_profile_name": "ACM CCS",
+                    "venue_group": "security",
+                    "venue_year": 2026,
+                }
+            )
             recommendations = recommend_papers([paper], limit=1)
             recommendations[0]["summary"] = {
                 "short_summary": "A local summary for radar review.",
@@ -211,6 +221,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("OpenAlex Authors", html)
             self.assertIn("S2 References", html)
             self.assertIn("S2 Citations", html)
+            self.assertIn("Negative seed IDs", html)
             self.assertIn("OpenAlex Venues", html)
             self.assertIn("OpenReview Venues", html)
             self.assertIn("Memory Safety for Agentic Security Workflows", html)
@@ -226,6 +237,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Source stats", html)
             self.assertIn("arxiv: 1", html)
             self.assertIn("dblp: 0", html)
+            self.assertIn("Venue coverage", html)
+            self.assertIn("ACM CCS 2026: 1/1", html)
             self.assertIn("Run Provenance", html)
             self.assertIn("Collection Config", html)
             self.assertIn("max/source: 5", html)
@@ -322,6 +335,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "dblp_author_pids": "65/9612",
                         "openalex_author_ids": "A123456789",
                         "seed_paper_ids": "seed-1\nseed-2",
+                        "negative_seed_paper_ids": "negative-seed-1",
                         "openreview_invitations": "ICLR.cc/2026/Conference/-/Submission",
                         "openreview_venue_profiles": "iclr ai_ml",
                         "venue_profiles": "security systems",
@@ -358,6 +372,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(kwargs["dblp_author_pids"], ["65/9612"])
         self.assertEqual(kwargs["openalex_author_ids"], ["A123456789"])
         self.assertEqual(kwargs["seed_paper_ids"], ["seed-1", "seed-2"])
+        self.assertEqual(kwargs["negative_seed_paper_ids"], ["negative-seed-1"])
         self.assertEqual(kwargs["openreview_invitations"], ["ICLR.cc/2026/Conference/-/Submission"])
         self.assertEqual(kwargs["openreview_venue_profiles"], ["iclr", "ai_ml"])
         self.assertEqual(kwargs["dblp_venue_profiles"], ["security", "systems"])
@@ -384,6 +399,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "pdf_cache_dir": "team/data/saved-pdf-cache",
                         "pdf_cache_max_bytes": "12345",
                         "openalex_author_ids": "A123456789",
+                        "negative_seed_paper_ids": "seed-negative",
                         "venue_profiles": "security",
                         "save_defaults": "1",
                     },
@@ -403,6 +419,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(settings["pdf_cache_dir"], "team/data/saved-pdf-cache")
             self.assertEqual(settings["pdf_cache_max_bytes"], 12345)
             self.assertEqual(settings["openalex_author_ids"], ["A123456789"])
+            self.assertEqual(settings["negative_seed_paper_ids"], ["seed-negative"])
             self.assertEqual(settings["venue_profiles"], ["security"])
 
             html = render_literature_radar_page(database)
@@ -418,6 +435,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="pdf_cache_max_bytes" min="1024"', html)
             self.assertIn('value="12345"', html)
             self.assertIn(">A123456789</textarea>", html)
+            self.assertIn(">seed-negative</textarea>", html)
             self.assertIn('name="venue_profiles" placeholder="security, systems" value="security"', html)
             self.assertIn("Save as defaults", html)
 

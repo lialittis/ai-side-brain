@@ -42,6 +42,13 @@ also supports seed-paper recommendation expansion through the official
 Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
 DOI-bearing papers without downloading files. Product adapters own scheduling,
 credentials, storage, and UI.
+Venue-profile collectors annotate paper source records with conference profile,
+group, and year metadata. The shared core turns that into venue coverage
+summaries so Personal and Team runs can show which top-conference profiles
+produced candidates and recommendations. These source records keep the
+bibliographic provider source (`dblp`, `openalex`, or `openreview`) separate
+from the venue-profile `collector_id`, so run history can explain both where the
+metadata came from and which collector path found it.
 
 The core also provides product-neutral recommendation summaries. The local
 summary path uses only stored metadata, scoring reasons, and PDF-access policy;
@@ -53,7 +60,8 @@ The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
 it carries stored review state such as `watch` or `dismissed` plus the scoring
 profile snapshot, non-secret collection settings, and phase trace used for the
-run. Brief ranking is review-aware: `watch` papers are surfaced before
+run. It also carries venue coverage for DBLP, OpenAlex, and OpenReview venue
+profile runs. Brief ranking is review-aware: `watch` papers are surfaced before
 unreviewed papers, while `dismissed` papers fall behind active candidates.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain

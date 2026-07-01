@@ -11,9 +11,11 @@ from typing import Any, Callable
 from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
+    append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
     build_recommendation_report,
+    build_venue_coverage_summary,
     cache_recommendation_pdfs,
     collect_arxiv,
     collect_crossref_works,
@@ -254,6 +256,11 @@ def run_team_literature_radar(
             title="Team Literature Radar Report",
             generated_at=now,
         )
+        venue_coverage = build_venue_coverage_summary(
+            collected_papers=collected,
+            recommendations=recommendations,
+        )
+        report = append_radar_venue_coverage_to_report(report, venue_coverage)
         report = append_radar_source_stats_to_report(report, source_stats)
         report = append_radar_source_errors_to_report(report, source_errors)
     except Exception as error:
@@ -291,6 +298,7 @@ def run_team_literature_radar(
         "imported_count": len(imported),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "venue_coverage": completed_run.get("venue_coverage") or [],
         "recommendations": recommendations,
         "imported": imported,
         "report": report,
@@ -356,13 +364,28 @@ def team_radar_review_record(history: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80) -> list[dict[str, Any]]:
-    context_items = []
-    for paper in database.list_latest_relevant_papers(limit=limit):
+    context_items: list[dict[str, Any]] = []
+    seen_context_keys: set[str] = set()
+
+    def add_context_item(item: dict[str, Any]) -> None:
+        if len(context_items) >= limit:
+            return
+        context_key = str(item.get("dedupe_key") or item.get("id") or item.get("title") or "").strip()
+        if context_key and context_key in seen_context_keys:
+            return
+        if context_key:
+            seen_context_keys.add(context_key)
+        context_items.append(item)
+
+    library_limit = max(1, limit // 2) if limit > 1 else limit
+    for paper in database.list_latest_relevant_papers(limit=library_limit):
         item = paper.get("item") or {}
         screening = paper.get("screening") or {}
-        context_items.append(
+        radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+        add_context_item(
             {
                 "id": item.get("id"),
+                "dedupe_key": radar.get("dedupe_key") or "",
                 "title": item.get("title"),
                 "abstract": item.get("abstract") or "",
                 "year": item.get("year"),
@@ -373,6 +396,47 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
                 "source": "team-library",
             }
         )
+    for record in database.list_literature_radar_papers(limit=limit, review_status="watch"):
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        latest = (
+            record.get("latest_recommendation")
+            if isinstance(record.get("latest_recommendation"), dict)
+            else {}
+        )
+        add_context_item(
+            {
+                "id": f"radar:{record.get('dedupe_key') or ''}",
+                "dedupe_key": record.get("dedupe_key") or "",
+                "title": record.get("title") or paper.get("title"),
+                "abstract": paper.get("abstract") or "",
+                "year": paper.get("year"),
+                "venue": paper.get("venue") or "",
+                "tags": tags_from_radar_paper(paper),
+                "interest_terms": latest.get("matched_positive_keywords") or [],
+                "link": landing_url(paper),
+                "source": "team-radar-watch",
+                "review": team_radar_review_record(record),
+            }
+        )
+    if len(context_items) < limit and library_limit < limit:
+        for paper in database.list_latest_relevant_papers(limit=limit):
+            item = paper.get("item") or {}
+            screening = paper.get("screening") or {}
+            radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+            add_context_item(
+                {
+                    "id": item.get("id"),
+                    "dedupe_key": radar.get("dedupe_key") or "",
+                    "title": item.get("title"),
+                    "abstract": item.get("abstract") or "",
+                    "year": item.get("year"),
+                    "venue": item.get("venue") or "",
+                    "tags": paper.get("tags") or [],
+                    "interest_terms": screening.get("matched_terms") or screening.get("matched_positive_keywords") or [],
+                    "link": paper.get("link") or item.get("url") or "",
+                    "source": "team-library",
+                }
+            )
     return context_items
 
 
@@ -1180,7 +1244,7 @@ def tags_from_radar_paper(paper: dict[str, Any]) -> list[str]:
         if tag:
             tags.add(tag)
     for source_record in paper.get("source_records") or []:
-        tag = normalize_tag(str(source_record.get("source_id") or ""))
+        tag = normalize_tag(str(source_record.get("collector_id") or source_record.get("source_id") or ""))
         if tag:
             tags.add(tag)
     return sorted(tags)

@@ -942,6 +942,7 @@ def annotate_dblp_venue_paper(
     updated["source_records"] = [
         {
             **source_record,
+            "collector_id": "dblp_venues",
             "venue_profile_id": profile["id"],
             "venue_profile_name": profile["name"],
             "venue_group": profile["group"],
@@ -1290,6 +1291,7 @@ def annotate_openalex_venue_paper(
     updated["source_records"] = [
         {
             **source_record,
+            "collector_id": "openalex_venues",
             "venue_profile_id": profile["id"],
             "venue_profile_name": profile["name"],
             "venue_group": profile["group"],
@@ -1518,6 +1520,7 @@ def annotate_openreview_venue_paper(
     updated["source_records"] = [
         {
             **source_record,
+            "collector_id": "openreview_venues",
             "openreview_venue_profile_id": profile["id"],
             "openreview_venue_profile_name": profile["name"],
             "openreview_venue_group": profile["group"],

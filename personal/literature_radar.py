@@ -18,10 +18,12 @@ from shared.literature_radar import (
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
     build_recommendation_report,
     build_radar_pipeline_trace,
+    build_venue_coverage_summary,
     cache_recommendation_pdfs,
     collect_arxiv,
     collect_crossref_works,
@@ -210,6 +212,11 @@ def run_personal_literature_radar(
         title="Personal Literature Radar Report",
         generated_at=selected_now,
     )
+    venue_coverage = build_venue_coverage_summary(
+        collected_papers=collected,
+        recommendations=recommendations,
+    )
+    report = append_radar_venue_coverage_to_report(report, venue_coverage)
     report = append_radar_source_stats_to_report(report, source_stats)
     report = append_radar_source_errors_to_report(report, source_errors)
     report_path = None
@@ -245,6 +252,7 @@ def run_personal_literature_radar(
         "recommendation_count": len(recommendations),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "venue_coverage": run_record.get("venue_coverage") or venue_coverage,
         "recommendations": recommendations,
         "report": report,
         "report_path": str(report_path) if report_path else None,
@@ -357,9 +365,28 @@ def personal_radar_history_from_run_index(root: Path) -> dict[str, dict[str, Any
 
 
 def personal_radar_context_items(root: Path, *, limit: int = 120) -> list[dict[str, Any]]:
+    history_records = sorted_personal_radar_context_history(read_personal_radar_paper_history(root))
+    if history_records:
+        context_items: list[dict[str, Any]] = []
+        seen_context_keys: set[str] = set()
+        for record in history_records:
+            context_key = str(record.get("dedupe_key") or record.get("title") or "").strip()
+            if context_key and context_key in seen_context_keys:
+                continue
+            if context_key:
+                seen_context_keys.add(context_key)
+            context_items.append(personal_radar_history_context_item(record))
+            if len(context_items) >= limit:
+                return context_items
+        return context_items
+
     context_items = []
     for run in read_personal_radar_index(root):
         for recommendation in run.get("recommendations") or []:
+            review = recommendation.get("review") if isinstance(recommendation.get("review"), dict) else {}
+            review_status = str(review.get("status") or review.get("review_status") or "unreviewed").strip().lower()
+            if review_status == "dismissed":
+                continue
             context_items.append(
                 {
                     "id": recommendation.get("dedupe_key") or recommendation.get("title"),
@@ -385,6 +412,80 @@ def personal_radar_context_items(root: Path, *, limit: int = 120) -> list[dict[s
             if len(context_items) >= limit:
                 return context_items
     return context_items
+
+
+def sorted_personal_radar_context_history(records: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    active_records = [
+        record
+        for record in records.values()
+        if personal_radar_review_record(record)["status"] != "dismissed"
+        and isinstance(record.get("latest_recommendation"), dict)
+    ]
+    return sorted(
+        active_records,
+        key=lambda record: (
+            1 if personal_radar_review_record(record)["status"] == "watch" else 0,
+            str(record.get("latest_seen_at") or ""),
+            str(record.get("title") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def personal_radar_history_context_item(record: dict[str, Any]) -> dict[str, Any]:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    latest = (
+        record.get("latest_recommendation")
+        if isinstance(record.get("latest_recommendation"), dict)
+        else {}
+    )
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    return {
+        "id": record.get("dedupe_key") or record.get("title"),
+        "dedupe_key": record.get("dedupe_key"),
+        "title": record.get("title") or paper.get("title"),
+        "abstract": " ".join(
+            str(value or "")
+            for value in [
+                paper.get("abstract") or "",
+                summary.get("short_summary") or "",
+                context.get("relationship_summary") or "",
+            ]
+            if str(value or "").strip()
+        ),
+        "year": paper.get("year"),
+        "venue": paper.get("venue") or "",
+        "tags": personal_radar_paper_tags(paper),
+        "interest_terms": latest.get("matched_positive_keywords") or context.get("matched_interest_terms") or [],
+        "link": personal_radar_paper_link(paper),
+        "source": "personal-radar-watch"
+        if personal_radar_review_record(record)["status"] == "watch"
+        else "personal-radar-history",
+        "review": personal_radar_review_record(record),
+    }
+
+
+def personal_radar_paper_tags(paper: dict[str, Any]) -> list[str]:
+    tags = set()
+    for value in paper.get("tags") or []:
+        tag = normalize_personal_radar_tag(value)
+        if tag:
+            tags.add(tag)
+    for source_id in personal_radar_paper_source_ids(paper):
+        tag = normalize_personal_radar_tag(source_id)
+        if tag:
+            tags.add(tag)
+    return sorted(tags)
+
+
+def normalize_personal_radar_tag(value: Any) -> str:
+    return "-".join(str(value or "").strip().lower().lstrip("#").replace("_", "-").split())
+
+
+def personal_radar_paper_link(paper: dict[str, Any]) -> str:
+    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
+    return links.get("landing") or links.get("doi") or links.get("arxiv") or links.get("pdf") or ""
 
 
 def collect_radar_source(
@@ -872,6 +973,10 @@ def build_personal_radar_run_record(
         "recommendation_count": len(recommendations),
         "source_errors": errors,
         "source_stats": source_stats or [],
+        "venue_coverage": build_venue_coverage_summary(
+            collected_papers=collected_papers,
+            recommendations=recommendations,
+        ),
         "report_path": str(report_path) if report_path else None,
         "recommendations": [
             {
@@ -1150,6 +1255,7 @@ def build_personal_radar_paper_history_record(
             "rank": rank,
             "score": scoring.get("score"),
             "label": scoring.get("label"),
+            "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
             "novelty": recommendation.get("novelty"),
             "review": recommendation.get("review"),
             "context": recommendation.get("context"),
@@ -1173,7 +1279,7 @@ def personal_radar_paper_source_ids(paper: dict[str, Any]) -> list[str]:
     if paper.get("source_id"):
         source_ids.add(str(paper["source_id"]))
     for source_record in paper.get("source_records") or []:
-        source_id = source_record.get("source_id")
+        source_id = source_record.get("collector_id") or source_record.get("source_id")
         if source_id:
             source_ids.add(str(source_id))
     return sorted(source_ids)

@@ -299,6 +299,114 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Context: Matches active interests", second["report"])
             self.assertIn("Novelty: new this run", second["report"])
 
+    def test_run_personal_literature_radar_links_watched_paper_history_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            watched = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00012",
+                title="Watched Agentic Security Baseline",
+                abstract="Prior candidate about agentic security, LLM security, and memory safety.",
+                identifiers={"arxiv_id": "2601.00012"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00012"},
+            )
+            watched["tags"] = ["agentic-security"]
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[watched]):
+                first = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["agentic security", "memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+            history = read_personal_radar_paper_history(root)
+            self.assertCountEqual(
+                history[watched["dedupe_key"]]["latest_recommendation"]["matched_positive_keywords"],
+                ["LLM security", "memory safety"],
+            )
+            mark_personal_radar_paper_review(
+                root,
+                watched["dedupe_key"],
+                status="watch",
+                actor="alice",
+                now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
+            )
+            candidate = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00013",
+                title="Memory Safety for Agentic Security",
+                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                identifiers={"arxiv_id": "2601.00013"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00013"},
+            )
+            candidate["tags"] = ["agentic-security"]
+
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[candidate]):
+                second = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(first["recommendation_count"], 1)
+            context = second["recommendations"][0]["context"]
+            self.assertEqual(context["related_items"][0]["title"], "Watched Agentic Security Baseline")
+            self.assertEqual(context["related_items"][0]["id"], watched["dedupe_key"])
+            self.assertIn("agentic security", context["related_items"][0]["matched_tags"])
+            self.assertIn("Related to existing context", context["relationship_summary"])
+
+    def test_run_personal_literature_radar_excludes_dismissed_papers_from_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dismissed = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00014",
+                title="Dismissed Agentic Security Baseline",
+                abstract="Prior candidate about agentic security, LLM security, and memory safety.",
+                identifiers={"arxiv_id": "2601.00014"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00014"},
+            )
+            dismissed["tags"] = ["agentic-security"]
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[dismissed]):
+                run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+            mark_personal_radar_paper_review(
+                root,
+                dismissed["dedupe_key"],
+                status="dismissed",
+                actor="alice",
+                now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
+            )
+            candidate = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00015",
+                title="Memory Safety for Agentic Security",
+                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                identifiers={"arxiv_id": "2601.00015"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00015"},
+            )
+            candidate["tags"] = ["agentic-security"]
+
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[candidate]):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety", "LLM security"],
+                    max_results=1,
+                    now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+                )
+
+            context = result["recommendations"][0]["context"]
+            self.assertEqual(context["related_items"], [])
+            self.assertNotIn("Dismissed Agentic Security Baseline", context["relationship_summary"])
+
     def test_run_personal_literature_radar_uses_configured_topic_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -630,6 +738,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 venue="CCS",
                 identifiers={"doi": "10.1145/ccs-example"},
                 links={"landing": "https://dblp.org/rec/conf/ccs/MemorySafety2026"},
+                source_record={
+                    "source_id": "dblp",
+                    "collector_id": "dblp_venues",
+                    "source_paper_id": "conf/ccs/MemorySafety2026",
+                    "venue_profile_id": "acm_ccs",
+                    "venue_profile_name": "ACM CCS",
+                    "venue_group": "security",
+                    "venue_year": 2026,
+                },
             )
             with mock.patch("personal.literature_radar.collect_dblp_venue_publications", return_value=[paper]) as dblp_venues:
                 result = run_personal_literature_radar(
@@ -649,6 +766,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(dblp_venues.call_args.kwargs["venue_profiles"], ["security"])
             self.assertEqual(dblp_venues.call_args.kwargs["year"], 2026)
             self.assertEqual(dblp_venues.call_args.kwargs["max_results"], 2)
+            self.assertEqual(result["venue_coverage"][0]["venue_profile_id"], "acm_ccs")
+            self.assertEqual(result["venue_coverage"][0]["source_ids"], ["dblp_venues"])
+            self.assertEqual(result["venue_coverage"][0]["candidate_count"], 1)
+            self.assertEqual(result["venue_coverage"][0]["recommended_count"], 1)
+            self.assertIn("## Venue Coverage", result["report"])
+            runs = read_personal_radar_index(root)
+            self.assertEqual(runs[0]["venue_coverage"][0]["venue_profile_name"], "ACM CCS")
+            history = read_personal_radar_paper_history(root)
+            self.assertEqual(history[paper["dedupe_key"]]["source_ids"], ["dblp", "dblp_venues"])
 
     def test_personal_literature_radar_collects_dblp_author_publications(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

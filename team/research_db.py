@@ -13,6 +13,7 @@ from shared.literature_radar import (
     assess_pdf_access,
     add_recommendation_novelty,
     build_radar_pipeline_trace,
+    build_venue_coverage_summary,
     dedupe_key as radar_dedupe_key,
 )
 from shared.research.core import iso_timestamp, stable_id
@@ -1205,6 +1206,10 @@ class TeamResearchDatabase:
                     "error": error,
                     "source_errors": source_errors or [],
                     "source_stats": source_stats or [],
+                    "venue_coverage": build_venue_coverage_summary(
+                        collected_papers=collected_papers,
+                        recommendations=recommendations,
+                    ),
                     "pipeline_trace": build_radar_pipeline_trace(
                         status=status,
                         collected_papers=collected_papers,
@@ -1895,6 +1900,7 @@ class TeamResearchDatabase:
                 "rank": rank,
                 "score": scoring.get("score"),
                 "label": scoring.get("label"),
+                "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
                 "novelty": recommendation.get("novelty"),
                 "review": recommendation.get("review"),
                 "context": recommendation.get("context"),
@@ -2187,7 +2193,7 @@ def radar_paper_source_ids(paper: dict[str, Any]) -> list[str]:
     if paper.get("source_id"):
         source_ids.add(str(paper["source_id"]))
     for source_record in paper.get("source_records") or []:
-        source_id = source_record.get("source_id")
+        source_id = source_record.get("collector_id") or source_record.get("source_id")
         if source_id:
             source_ids.add(str(source_id))
     return sorted(source_ids)
