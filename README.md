@@ -170,6 +170,10 @@ SIDE_BRAIN_OPENROUTER_MODEL=~openai/gpt-latest
 SIDE_BRAIN_OPENROUTER_PDF_ENGINE=cloudflare-ai
 ```
 
+`.env.example` also includes commented Literature Radar scheduling variables
+for Team and Personal runs, including source presets, contact email variables,
+legal PDF-cache toggles, and official accepted-paper page examples.
+
 Using `--ai` sends the selected unprocessed inbox entries to the configured model provider. Supported providers are `openai`, `glm`, and `deepseek`. AI processing has separate incremental state from local processing and per provider/model, so local processing does not block later AI processing of the same entries.
 
 Provider selection can be done per command:

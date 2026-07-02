@@ -106,8 +106,9 @@ if [[ -n "${RADAR_OPENREVIEW_VENUES:-}" ]]; then
     ARGS+=("--openreview-venue-profile" "$venue_profile")
   done
 fi
-if [[ -n "${RADAR_OPENREVIEW_INVITATIONS:-}" ]]; then
-  read -r -a OPENREVIEW_INVITATIONS <<< "$RADAR_OPENREVIEW_INVITATIONS"
+OPENREVIEW_INVITATION_SPECS="${RADAR_OPENREVIEW_INVITATIONS:-${OPENREVIEW_INVITATIONS:-}}"
+if [[ -n "$OPENREVIEW_INVITATION_SPECS" ]]; then
+  read -r -a OPENREVIEW_INVITATIONS <<< "$OPENREVIEW_INVITATION_SPECS"
   for invitation in "${OPENREVIEW_INVITATIONS[@]}"; do
     ARGS+=("--openreview-invitation" "$invitation")
   done
@@ -120,6 +121,12 @@ if [[ -n "${RADAR_USENIX_CYCLES:-}" ]]; then
   for cycle in "${USENIX_CYCLES[@]}"; do
     ARGS+=("--usenix-cycle" "$cycle")
   done
+fi
+if [[ -n "${RADAR_OFFICIAL_ACCEPTED_PAGES:-}" ]]; then
+  while IFS= read -r page_spec; do
+    [[ -n "$page_spec" ]] || continue
+    ARGS+=("--official-accepted-page" "$page_spec")
+  done <<< "$RADAR_OFFICIAL_ACCEPTED_PAGES"
 fi
 if [[ -n "${RADAR_SEED_PAPER_IDS:-}" ]]; then
   read -r -a SEED_PAPER_IDS <<< "$RADAR_SEED_PAPER_IDS"

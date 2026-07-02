@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -315,6 +316,9 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         "pdf_cache_dir": str(args.pdf_cache_dir) if args.pdf_cache_dir else "",
         "pdf_cache_max_bytes": args.pdf_cache_max_bytes,
         "conference_year": args.conference_year or "",
+        "semantic_scholar_api_key_configured": bool(
+            args.semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        ),
         "usenix_security_cycles": selected_usenix_cycles or [],
         "official_accepted_pages": official_accepted_pages,
         "include_openreview_unaccepted": bool(args.include_openreview_unaccepted),

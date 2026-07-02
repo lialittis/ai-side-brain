@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -929,7 +930,9 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         "pdf_cache_max_bytes": args.pdf_cache_max_bytes
         or saved_radar_int(saved_defaults, "pdf_cache_max_bytes", 50 * 1024 * 1024),
         "source_contact_email": args.source_contact_email or saved_source_contact_email or "",
-        "semantic_scholar_api_key_configured": bool(args.semantic_scholar_api_key),
+        "semantic_scholar_api_key_configured": bool(
+            args.semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        ),
         "conference_year": args.conference_year or saved_radar_optional_int(saved_defaults, "conference_year") or "",
         "usenix_security_cycles": args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles"),
         "include_openreview_unaccepted": args.include_openreview_unaccepted

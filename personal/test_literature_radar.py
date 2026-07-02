@@ -1011,6 +1011,20 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                     ]
                 )
 
+            env_key_stdout = io.StringIO()
+            with mock.patch.dict("os.environ", {"SEMANTIC_SCHOLAR_API_KEY": "personal-env-secret"}, clear=False):
+                with contextlib.redirect_stdout(env_key_stdout):
+                    env_key_code = personal_literature_radar.main(
+                        [
+                            "settings",
+                            "--root-path",
+                            str(root),
+                            "--source",
+                            "semantic_scholar",
+                            "--json",
+                        ]
+                    )
+
         self.assertEqual(json_code, 0)
         payload = json.loads(json_stdout.getvalue())
         self.assertTrue(payload["success"])
@@ -1062,6 +1076,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertIn("status=blocked", text)
         self.assertIn("missing required for semantic_scholar_recommendations", text)
         self.assertIn("missing required for openreview", text)
+        self.assertEqual(env_key_code, 0)
+        env_key_payload = json.loads(env_key_stdout.getvalue())
+        self.assertTrue(env_key_payload["settings"]["semantic_scholar_api_key_configured"])
+        self.assertEqual(env_key_payload["source_readiness"]["status"], "ready")
+        self.assertNotIn("personal-env-secret", json.dumps(env_key_payload))
 
     def test_personal_literature_radar_cli_status_combines_settings_and_queue(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -2067,6 +2067,20 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     ]
                 )
 
+            env_key_stdout = io.StringIO()
+            with mock.patch.dict("os.environ", {"SEMANTIC_SCHOLAR_API_KEY": "env-secret-key"}, clear=False):
+                with contextlib.redirect_stdout(env_key_stdout):
+                    env_key_code = research_cli.main(
+                        [
+                            "radar-settings",
+                            "--db-path",
+                            str(db_path),
+                            "--source",
+                            "semantic_scholar",
+                            "--json",
+                        ]
+                    )
+
         self.assertEqual(json_code, 0)
         payload = json.loads(json_stdout.getvalue())
         self.assertTrue(payload["success"])
@@ -2126,6 +2140,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
         )
         self.assertNotIn("secret-key", json.dumps(preset_payload))
+        self.assertEqual(env_key_code, 0)
+        env_key_payload = json.loads(env_key_stdout.getvalue())
+        self.assertTrue(env_key_payload["settings"]["semantic_scholar_api_key_configured"])
+        self.assertEqual(env_key_payload["source_readiness"]["status"], "ready")
+        self.assertNotIn("env-secret-key", json.dumps(env_key_payload))
 
     def test_cli_radar_status_combines_settings_and_queue_without_running_collectors(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

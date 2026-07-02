@@ -50,6 +50,11 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             copy_script_workspace(workspace, ["team/scripts/check_literature_radar_status.sh"])
             fake_python = write_fake_python(workspace)
             output_dir = workspace / "team-status"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
 
             run_script(
                 workspace / "team/scripts/check_literature_radar_status.sh",
@@ -60,6 +65,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_STATUS_QUEUE_LIMIT": "17",
                     "RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "48",
                     "RADAR_STATUS_QUEUE_TRIAGE_ACTION": "import",
+                    "RADAR_SOURCE_PRESET": "team_security_daily",
+                    "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
+                    "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
+                    "RADAR_RECOMMENDATION_LIMIT": "12",
                     "RADAR_USE_SAVED_DEFAULTS": "1",
                     "RADAR_WRITE_LATEST": "1",
                 },
@@ -72,6 +81,15 @@ class LiteratureRadarScriptTest(unittest.TestCase):
 
             self.assertEqual(latest_settings["command"], "radar-settings")
             self.assertIn("--use-saved-defaults", latest_settings["args"])
+            self.assertIn("--source-preset", latest_settings["args"])
+            self.assertIn("team_security_daily", latest_settings["args"])
+            self.assertIn("--openreview-invitation", latest_settings["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_settings["args"])
+            self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_settings["args"])
+            self.assertIn("--limit", latest_settings["args"])
+            self.assertIn("12", latest_settings["args"])
             self.assertEqual(latest_queue["command"], "radar-queue")
             self.assertIn("--limit", latest_queue["args"])
             self.assertIn("17", latest_queue["args"])
@@ -115,12 +133,66 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_status_json["command"], "radar-status")
             self.assertIn("--ignore-saved-defaults", latest_status_json["args"])
 
+    def test_team_status_script_reads_official_pages_from_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(workspace, ["team/scripts/check_literature_radar_status.sh"])
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "team-status"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
+            (workspace / ".env").write_text(
+                "\n".join(
+                    [
+                        "RADAR_SOURCE_PRESET=team_security_daily",
+                        "RADAR_STATUS_QUEUE_LIMIT=5",
+                        "RADAR_OFFICIAL_ACCEPTED_PAGES=$'"
+                        + official_pages[0]
+                        + "\\n"
+                        + official_pages[1]
+                        + "'",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            run_script(
+                workspace / "team/scripts/check_literature_radar_status.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "RADAR_STATUS_OUTPUT_DIR": str(output_dir),
+                    "RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_settings = read_json(output_dir / "literature-radar-status-settings-latest.json")
+            latest_queue = read_json(output_dir / "literature-radar-status-queue-latest.json")
+
+            self.assertEqual(latest_settings["command"], "radar-settings")
+            self.assertIn("--source-preset", latest_settings["args"])
+            self.assertIn("team_security_daily", latest_settings["args"])
+            self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_settings["args"])
+            self.assertEqual(latest_queue["command"], "radar-queue")
+            self.assertIn("--limit", latest_queue["args"])
+            self.assertIn("5", latest_queue["args"])
+
     def test_personal_status_script_writes_non_collecting_status_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspace"
             copy_script_workspace(workspace, ["scripts/check_personal_literature_radar_status.sh"])
             fake_python = write_fake_python(workspace)
             output_dir = workspace / "personal-status"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
 
             run_script(
                 workspace / "scripts/check_personal_literature_radar_status.sh",
@@ -133,6 +205,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "72",
                     "PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION": "skim",
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
+                    "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -145,6 +218,9 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_settings["command"], "settings")
             self.assertIn("--source-preset", latest_settings["args"])
             self.assertIn("security_memory_agentic_daily", latest_settings["args"])
+            self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_settings["args"])
             self.assertEqual(latest_queue["command"], "queue")
             self.assertIn("--limit", latest_queue["args"])
             self.assertIn("11", latest_queue["args"])
@@ -155,12 +231,70 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_status_json["command"], "status")
             self.assertIn("--queue-limit", latest_status_json["args"])
             self.assertIn("11", latest_status_json["args"])
+            self.assertEqual(latest_status_json["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_status_json["args"])
             self.assertIn("--triage-action", latest_status_json["args"])
             self.assertIn("skim", latest_status_json["args"])
             self.assertIn("status text status", latest_status)
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".txt"))
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".json"))
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-queue-", ".json"))
+
+    def test_personal_status_script_reads_official_pages_from_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(workspace, ["scripts/check_personal_literature_radar_status.sh"])
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "personal-status"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
+            (workspace / ".env").write_text(
+                "\n".join(
+                    [
+                        "PERSONAL_RADAR_SOURCE_PRESET=security_memory_agentic_daily",
+                        "PERSONAL_RADAR_STATUS_QUEUE_LIMIT=6",
+                        "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES=$'"
+                        + official_pages[0]
+                        + "\\n"
+                        + official_pages[1]
+                        + "'",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            run_script(
+                workspace / "scripts/check_personal_literature_radar_status.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "PERSONAL_RADAR_ROOT": str(workspace),
+                    "PERSONAL_RADAR_STATUS_OUTPUT_DIR": str(output_dir),
+                    "PERSONAL_RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_settings = read_json(output_dir / "personal-literature-radar-status-settings-latest.json")
+            latest_queue = read_json(output_dir / "personal-literature-radar-status-queue-latest.json")
+            latest_status_json = read_json(output_dir / "personal-literature-radar-status-latest.json")
+
+            self.assertEqual(latest_settings["command"], "settings")
+            self.assertIn("--source-preset", latest_settings["args"])
+            self.assertIn("security_memory_agentic_daily", latest_settings["args"])
+            self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_settings["args"])
+            self.assertEqual(latest_queue["command"], "queue")
+            self.assertIn("--limit", latest_queue["args"])
+            self.assertIn("6", latest_queue["args"])
+            self.assertEqual(latest_status_json["command"], "status")
+            self.assertEqual(latest_status_json["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_status_json["args"])
 
     def test_team_scripts_refresh_latest_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -175,6 +309,11 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             fake_python = write_fake_python(workspace)
             output_dir = workspace / "team-output"
             brief_dir = workspace / "team-brief"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
 
             run_script(
                 workspace / "team/scripts/run_literature_radar.sh",
@@ -184,6 +323,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_OUTPUT_DIR": str(output_dir),
                     "RADAR_SOURCE_PRESET": "team_security_daily",
                     "RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
+                    "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "RADAR_QUEUE_TRIAGE_ACTION": "compare",
                     "RADAR_WRITE_LATEST": "1",
                 },
@@ -204,12 +344,18 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("team_security_daily", latest_run["args"])
             self.assertIn("--openreview-invitation", latest_run["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_run["args"])
+            self.assertEqual(latest_run["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_run["args"])
             latest_settings = read_json(output_dir / "literature-radar-settings-latest.json")
             self.assertEqual(latest_settings["command"], "radar-settings")
             self.assertIn("--source-preset", latest_settings["args"])
             self.assertIn("team_security_daily", latest_settings["args"])
             self.assertIn("--openreview-invitation", latest_settings["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_settings["args"])
+            self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_settings["args"])
             self.assertIn(
                 "radar-settings text settings",
                 (output_dir / "literature-radar-settings-latest.txt").read_text(),
@@ -256,6 +402,11 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             fake_python = write_fake_python(workspace)
             output_dir = workspace / "personal-output"
             brief_dir = workspace / "personal-brief"
+            official_pages = [
+                "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                "https://www.ieee-security.org/accepted-papers.html",
+                "ccs | ACM CCS 2026 | 2026 | https://www.sigsac.org/ccs/CCS2026/accepted-papers.html",
+            ]
 
             run_script(
                 workspace / "scripts/run_personal_literature_radar_cycle.sh",
@@ -266,7 +417,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_OUTPUT_DIR": str(output_dir),
                     "PERSONAL_RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
-                    "PERSONAL_RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
+                    "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
+                    "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "PERSONAL_RADAR_QUEUE_TRIAGE_ACTION": "watch",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
@@ -278,12 +430,18 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("security_memory_agentic_daily", latest_personal_run["args"])
             self.assertIn("--openreview-invitation", latest_personal_run["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_run["args"])
+            self.assertEqual(latest_personal_run["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_personal_run["args"])
             latest_personal_settings = read_json(output_dir / "personal-literature-radar-settings-latest.json")
             self.assertEqual(latest_personal_settings["command"], "settings")
             self.assertIn("--source-preset", latest_personal_settings["args"])
             self.assertIn("security_memory_agentic_daily", latest_personal_settings["args"])
             self.assertIn("--openreview-invitation", latest_personal_settings["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_settings["args"])
+            self.assertEqual(latest_personal_settings["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_personal_settings["args"])
             latest_personal_queue = read_json(output_dir / "personal-literature-radar-queue-latest.json")
             self.assertEqual(latest_personal_queue["command"], "queue")
             self.assertIn("--triage-action", latest_personal_queue["args"])

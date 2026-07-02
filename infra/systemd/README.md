@@ -107,9 +107,11 @@ writes combined `personal-literature-radar-status-*.json` snapshots from
 
 The Team cycle and Team collection services set `RADAR_USE_SAVED_DEFAULTS=1`,
 so scheduled runs start from the defaults saved in `/radar`. Environment
-variables in `.env` can still override the script behavior. Brief timers write
-Markdown and JSON roll-ups to `team/logs/` and `memory/06_Logs/` by default;
-they do not call external paper sources.
+variables in `.env` can still override the script behavior; `.env.example`
+includes a commented Literature Radar section with source presets, contact
+email variables, legal PDF-cache toggles, and official accepted-page examples.
+Brief timers write Markdown and JSON roll-ups to `team/logs/` and
+`memory/06_Logs/` by default; they do not call external paper sources.
 Collection timers also write read-only settings/readiness snapshots and active
 queue snapshots by default: JSON and text `literature-radar-settings-*` files and
 `literature-radar-queue-*` under `team/logs/`, plus

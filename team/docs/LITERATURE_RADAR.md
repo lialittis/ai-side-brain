@@ -612,7 +612,12 @@ team/scripts/check_literature_radar_status.sh
 The status script runs only `radar-settings` and `radar-queue`, writes
 timestamped plus `latest` status/settings/queue snapshots under `team/logs/`.
 It also writes combined `literature-radar-status-*.json` snapshots from
-`radar-status`. It does not download PDFs or call AI.
+`radar-status`. It does not download PDFs or call AI. Its settings preflight
+accepts the same `RADAR_SOURCE_PRESET`, `RADAR_SOURCES`, venue, author, seed,
+official-page, PDF-cache, and summary environment variables as the scheduled
+collection script, so `.env`-driven deployments can validate their run
+configuration without collecting sources. See the commented Literature Radar
+section in `.env.example` for a server-friendly starting template.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
@@ -653,7 +658,8 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS`: freshness threshold for status queue
   health; defaults to `RADAR_FRESHNESS_MAX_AGE_HOURS` or `36`.
 - `RADAR_STATUS_USE_SAVED_DEFAULTS=0`: make the status settings preflight ignore
-  saved `/radar` defaults.
+  saved `/radar` defaults; explicit `RADAR_*` source/settings environment
+  variables are still applied to the preflight snapshot.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
 - `RADAR_QUEUE_TRIAGE_ACTION`: optional scheduled queue triage-action filter,
@@ -665,6 +671,13 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
   `RADAR_SUMMARY_LIMIT`.
 - `RADAR_CONFERENCE_YEAR`, `RADAR_USENIX_CYCLES`.
+- `RADAR_OFFICIAL_ACCEPTED_PAGES`: newline-delimited official accepted-paper
+  page specs, one per line, using
+  `source_id | venue name | year | https://official.example/accepted-papers`.
+  This is for stable official venue pages that do not yet have a dedicated
+  source wrapper. The collection and status scripts both pass this into the
+  settings/preflight snapshot, so operators can verify the configured pages
+  before or after scheduled runs.
 - `RADAR_DBLP_VENUES`: space-separated DBLP venue profile/group selectors for
   the `dblp_venues` source.
 - `RADAR_DBLP_AUTHOR_PIDS`: space-separated DBLP person PIDs for the
@@ -676,7 +689,8 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_OPENREVIEW_INVITATIONS`: space-separated explicit OpenReview
   invitation IDs for conference workshops or other venues whose IDs are not
   encoded as stable presets; this automatically enables the `openreview`
-  source in the scheduled run.
+  source in the scheduled run. Generic `OPENREVIEW_INVITATIONS` is accepted as
+  a fallback when `RADAR_OPENREVIEW_INVITATIONS` is unset.
 - `RADAR_OPENREVIEW_INCLUDE_UNACCEPTED=1`: include non-accepted OpenReview
   submissions for preset venue runs.
 - `RADAR_SEED_PAPER_IDS`, `RADAR_NEGATIVE_SEED_PAPER_IDS`: space-separated
@@ -694,6 +708,30 @@ It reads `.env` first and supports these optional variables:
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`,
   `RADAR_SOURCE_CONTACT_EMAIL`, `OPENALEX_MAILTO`, `CROSSREF_MAILTO`,
   `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
+
+### Daily Team Operating Loop
+
+For a server deployment, the intended daily path is:
+
+1. Configure `.env` from `.env.example`, preferably with
+   `RADAR_SOURCE_PRESET=team_security_daily`, a contact email, and any explicit
+   OpenReview or official accepted-paper pages.
+2. Run `team/scripts/check_literature_radar_status.sh` before enabling a timer.
+   Confirm `literature-radar-status-settings-latest.txt` does not show blocked
+   required sources, and use warnings for missing contact/API settings as
+   operator actions rather than team-member review work.
+3. Enable or manually run `team/scripts/run_literature_radar_cycle.sh`; it
+   collects papers, writes stable `literature-radar-latest.*`,
+   `literature-radar-queue-latest.*`, `literature-radar-status-latest.*`, and
+   `literature-radar-brief-latest.*` snapshots, then builds the stored brief.
+4. Team members review `/radar/queue?limit=20` for the active daily queue, or
+   open `/radar/brief` for a weekly-style roll-up. From those pages they can
+   watch, dismiss, or add papers to the main Team library without reading raw
+   log files.
+5. If the queue is empty or stale, inspect `/radar/status.json?limit=20` or the
+   latest status text file first. The status payload separates source
+   readiness, latest-run freshness, source errors, OA/PDF enrichment, and queue
+   counts so operational problems do not look like low research signal.
 
 Example cron entry for 07:30 daily:
 
@@ -754,7 +792,8 @@ Recommended next MVP order:
    one line per page:
    `source_id | venue name | year | https://official.example/accepted-papers`;
    the same line format is available from Team and Personal CLI with
-   `--official-accepted-page`;
+   `--official-accepted-page`, and from scheduled runs with
+   `RADAR_OFFICIAL_ACCEPTED_PAGES` or `PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES`;
 2. more OpenReview workshop presets for recurring safety, alignment,
    interpretability, and adversarial ML workshops when their invitation IDs are
    stable enough to encode;

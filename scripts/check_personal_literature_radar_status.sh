@@ -79,8 +79,9 @@ if [[ -n "${PERSONAL_RADAR_OPENREVIEW_VENUES:-}" ]]; then
     SETTINGS_ARGS+=("--openreview-venue-profile" "$venue_profile")
   done
 fi
-if [[ -n "${PERSONAL_RADAR_OPENREVIEW_INVITATIONS:-}" ]]; then
-  read -r -a OPENREVIEW_INVITATIONS <<< "$PERSONAL_RADAR_OPENREVIEW_INVITATIONS"
+OPENREVIEW_INVITATION_SPECS="${PERSONAL_RADAR_OPENREVIEW_INVITATIONS:-${OPENREVIEW_INVITATIONS:-}}"
+if [[ -n "$OPENREVIEW_INVITATION_SPECS" ]]; then
+  read -r -a OPENREVIEW_INVITATIONS <<< "$OPENREVIEW_INVITATION_SPECS"
   for invitation in "${OPENREVIEW_INVITATIONS[@]}"; do
     SETTINGS_ARGS+=("--openreview-invitation" "$invitation")
   done
@@ -93,6 +94,12 @@ if [[ -n "${PERSONAL_RADAR_USENIX_CYCLES:-}" ]]; then
   for cycle in "${USENIX_CYCLES[@]}"; do
     SETTINGS_ARGS+=("--usenix-cycle" "$cycle")
   done
+fi
+if [[ -n "${PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES:-}" ]]; then
+  while IFS= read -r page_spec; do
+    [[ -n "$page_spec" ]] || continue
+    SETTINGS_ARGS+=("--official-accepted-page" "$page_spec")
+  done <<< "$PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES"
 fi
 if [[ -n "${PERSONAL_RADAR_DBLP_AUTHOR_PIDS:-}" ]]; then
   read -r -a DBLP_AUTHOR_PIDS <<< "$PERSONAL_RADAR_DBLP_AUTHOR_PIDS"

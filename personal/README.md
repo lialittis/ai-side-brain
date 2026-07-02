@@ -94,6 +94,28 @@ The cycle script is the simplest daily command: it runs collection, writes queue
 and combined status snapshots, then builds the stored brief. Set
 `PERSONAL_RADAR_CYCLE_RUN_COLLECTION=0` or
 `PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
+
+The intended daily Personal Radar loop is:
+
+1. Configure `.env` from `.env.example`, usually with
+   `PERSONAL_RADAR_SOURCE_PRESET=security_memory_agentic_daily`, a contact
+   email, and any explicit OpenReview or official accepted-paper pages.
+2. Run `scripts/check_personal_literature_radar_status.sh` before enabling a
+   timer. Confirm `personal-literature-radar-status-settings-latest.json` has
+   no blocked required sources; treat missing API/contact warnings as operator
+   setup work rather than paper-review work.
+3. Run or enable `scripts/run_personal_literature_radar_cycle.sh`. It collects
+   candidates, writes stable latest snapshots, and builds the stored brief from
+   local run history.
+4. Use `python scripts/personal_literature_radar.py queue` for the active daily
+   review list, or `python scripts/personal_literature_radar.py brief --days 7`
+   for a weekly-style roll-up.
+5. If the queue is empty or stale, inspect
+   `personal-literature-radar-status-latest.txt` or
+   `personal-literature-radar-status-latest.json` first. The status payload
+   separates source readiness, latest-run freshness, source errors, OA/PDF
+   enrichment, and queue counts.
+
 To check Personal Radar readiness and latest-run queue health without collecting
 paper sources, run:
 
@@ -147,6 +169,9 @@ preview with PDF access summary, recent activity, index paths, and the generated
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
 `PERSONAL_RADAR_DBLP_AUTHOR_PIDS`, `PERSONAL_RADAR_OPENALEX_AUTHOR_IDS`,
 `PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_OPENREVIEW_INVITATIONS`,
+or generic `OPENREVIEW_INVITATIONS`,
+`PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES` (newline-delimited
+`source_id | venue name | year | URL` official accepted-paper pages),
 `PERSONAL_RADAR_SEED_PAPER_IDS`,
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
@@ -159,7 +184,9 @@ activity snapshot window and size. Use
 threshold for queue and brief snapshots. The status script also supports
 `PERSONAL_RADAR_STATUS_OUTPUT_DIR`, `PERSONAL_RADAR_STATUS_QUEUE_LIMIT`, and
 `PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION`, and
-`PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status snapshots. Use
+`PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status snapshots. It uses
+the same `PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES` value for settings/preflight
+snapshots. Use
 `PERSONAL_RADAR_WRITE_SETTINGS=0`
 to skip preflight snapshots, and `PERSONAL_RADAR_WRITE_ACTIVITY=0` to skip
 activity snapshots. Use `PERSONAL_RADAR_WRITE_STATUS=0` to skip status snapshots

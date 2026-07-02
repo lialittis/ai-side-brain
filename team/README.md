@@ -140,11 +140,20 @@ recommendations and import only the papers the team wants to track in the main l
 paper relevance. The queue also shows latest-run health and source-error counts
 when a scheduled run exists, even if no papers were stored. The Radar form can save source choices, tracked authors, seed
 papers, venue profiles, conference year, USENIX cycles, source contact email,
-PDF cache settings, source presets, and run limits as reusable Team defaults.
+official accepted-paper pages, PDF cache settings, source presets, and run
+limits as reusable Team defaults.
 Use the `Team Security Daily` preset for the current security, memory-safety,
 and agentic-security workflow; it combines latest paper APIs with DBLP/OpenReview
 venue profiles plus USENIX Security and NDSS accepted-paper pages. Scheduled
 runs can also set `RADAR_SOURCE_PRESET=team_security_daily`.
+For venue pages that do not yet have a dedicated wrapper, scheduled runs can set
+`RADAR_OFFICIAL_ACCEPTED_PAGES` with one newline-delimited
+`source_id | venue name | year | URL` entry per official accepted-paper page;
+the status script uses the same variable for settings/preflight snapshots.
+`team/scripts/check_literature_radar_status.sh` also accepts the same
+env-driven source preset, source list, venue, author, seed, official-page,
+PDF-cache, and summary settings as the scheduled collection script, so server
+deployments can validate `.env` configuration without collecting papers.
 Radar settings JSON and CLI preflight output include DBLP/OpenAlex required
 top-venue coverage counts, so operators can tell whether the current selectors
 cover all configured security, systems, PL/memory-safety, and
@@ -161,6 +170,10 @@ snapshots under `team/logs/` by default. Scheduled scripts also
 refresh stable `literature-radar-latest.*`,
 `literature-radar-queue-latest.*`, and `literature-radar-brief-latest.*` files
 unless `RADAR_WRITE_LATEST=0`.
+Daily operation is: configure `.env`, run
+`team/scripts/check_literature_radar_status.sh` to validate readiness, run or
+enable `team/scripts/run_literature_radar_cycle.sh`, then review
+`/radar/queue?limit=20` or `/radar/brief` from the web UI.
 Radar signal lines are persisted in stored run recommendations, paper history,
 and imported library-item metadata, so future API or notification surfaces can
 reuse the same explanation without reprocessing the paper.
