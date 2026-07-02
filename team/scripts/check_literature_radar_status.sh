@@ -154,6 +154,21 @@ if [[ -n "${RADAR_SOURCE_CONTACT_EMAIL:-}" ]]; then
   SETTINGS_ARGS+=("--source-contact-email" "$RADAR_SOURCE_CONTACT_EMAIL")
   SETTINGS_TEXT_ARGS+=("--source-contact-email" "$RADAR_SOURCE_CONTACT_EMAIL")
 fi
+OPENALEX_MAILTO_VALUE="${RADAR_OPENALEX_MAILTO:-${OPENALEX_MAILTO:-}}"
+if [[ -n "$OPENALEX_MAILTO_VALUE" ]]; then
+  SETTINGS_ARGS+=("--openalex-mailto" "$OPENALEX_MAILTO_VALUE")
+  SETTINGS_TEXT_ARGS+=("--openalex-mailto" "$OPENALEX_MAILTO_VALUE")
+fi
+CROSSREF_MAILTO_VALUE="${RADAR_CROSSREF_MAILTO:-${CROSSREF_MAILTO:-}}"
+if [[ -n "$CROSSREF_MAILTO_VALUE" ]]; then
+  SETTINGS_ARGS+=("--crossref-mailto" "$CROSSREF_MAILTO_VALUE")
+  SETTINGS_TEXT_ARGS+=("--crossref-mailto" "$CROSSREF_MAILTO_VALUE")
+fi
+UNPAYWALL_EMAIL_VALUE="${RADAR_UNPAYWALL_EMAIL:-${UNPAYWALL_EMAIL:-}}"
+if [[ -n "$UNPAYWALL_EMAIL_VALUE" ]]; then
+  SETTINGS_ARGS+=("--unpaywall-email" "$UNPAYWALL_EMAIL_VALUE")
+  SETTINGS_TEXT_ARGS+=("--unpaywall-email" "$UNPAYWALL_EMAIL_VALUE")
+fi
 if [[ -n "${RADAR_AUTHOR_IDS:-}" ]]; then
   read -r -a AUTHOR_IDS <<< "$RADAR_AUTHOR_IDS"
   for author_id in "${AUTHOR_IDS[@]}"; do
@@ -197,6 +212,25 @@ if [[ -n "$QUEUE_TRIAGE_ACTION" ]]; then
   QUEUE_TEXT_ARGS+=("--triage-action" "$QUEUE_TRIAGE_ACTION")
   STATUS_ARGS+=("--triage-action" "$QUEUE_TRIAGE_ACTION")
 fi
+
+for ((i = 2; i < ${#SETTINGS_ARGS[@]}; i++)); do
+  case "${SETTINGS_ARGS[$i]}" in
+    --use-saved-defaults)
+      ;;
+    --db-path)
+      i=$((i + 1))
+      ;;
+    --limit)
+      if (( i + 1 < ${#SETTINGS_ARGS[@]} )); then
+        STATUS_ARGS+=("--recommendation-limit" "${SETTINGS_ARGS[$((i + 1))]}")
+        i=$((i + 1))
+      fi
+      ;;
+    *)
+      STATUS_ARGS+=("${SETTINGS_ARGS[$i]}")
+      ;;
+  esac
+done
 
 "$PYTHON_BIN" "${SETTINGS_ARGS[@]}" --json > "$SETTINGS_JSON_PATH"
 "$PYTHON_BIN" "${SETTINGS_TEXT_ARGS[@]}" > "$SETTINGS_TEXT_PATH"

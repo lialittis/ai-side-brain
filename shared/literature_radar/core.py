@@ -1165,6 +1165,50 @@ def radar_topic_keyword_profile(keyword: str, topic_profile: dict[str, Any] | No
     }
 
 
+def radar_topic_profile_keyword_profiles(topic_profile: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Return display-ready match/dampen terms for each topic in a topic profile."""
+    selected_profile = topic_profile or default_radar_topic_profile()
+    topics = selected_profile.get("topics") if isinstance(selected_profile.get("topics"), dict) else {}
+    profiles = []
+    for topic_id, topic in topics.items():
+        if not isinstance(topic, dict):
+            continue
+        profiles.append(
+            {
+                "keyword": str(topic_id),
+                "topic_id": str(topic_id),
+                "topic_ids": [str(topic_id)],
+                "positive_keywords": unique_radar_topic_terms(list(topic.get("positive_keywords") or [])),
+                "negative_keywords": unique_radar_topic_terms(list(topic.get("negative_keywords") or [])),
+            }
+        )
+    return profiles
+
+
+def format_radar_keyword_profile(profile: dict[str, Any]) -> str:
+    """Format a radar keyword/topic profile for compact CLI settings output."""
+    keyword = str(profile.get("keyword") or profile.get("topic_id") or "interest")
+    weight = profile.get("weight")
+    positives = [
+        str(term)
+        for term in profile.get("positive_keywords") or []
+        if str(term).strip().lower() != keyword.strip().lower()
+    ][:4]
+    negatives = [str(term) for term in profile.get("negative_keywords") or []][:2]
+    weight_text = ""
+    if weight is not None and str(weight).strip():
+        try:
+            weight_text = str(int(weight))
+        except (TypeError, ValueError):
+            weight_text = str(weight).strip()
+    parts = [f"{keyword}={weight_text}" if weight_text else keyword]
+    if positives:
+        parts.append(f"matches {', '.join(positives)}")
+    if negatives:
+        parts.append(f"dampens {', '.join(negatives)}")
+    return "; ".join(parts)
+
+
 def unique_radar_topic_terms(values: list[Any]) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
@@ -1306,6 +1350,9 @@ def build_paper_source_provenance(
         "source_name": str(policy.get("name") or ""),
         "source_class": str(policy.get("source_class") or "unknown"),
         "authoritative_metadata": bool(policy.get("authoritative_metadata")),
+        "configured_source_id": normalize_spaces(str(selected_source_record.get("configured_source_id") or "")),
+        "venue_profile_id": normalize_spaces(str(selected_source_record.get("venue_profile_id") or "")),
+        "venue_group": normalize_spaces(str(selected_source_record.get("venue_group") or "")),
         "source_paper_id": normalize_spaces(source_paper_id),
         "source_url": source_url,
         "landing_url": clean_links.get("landing", ""),
@@ -4338,6 +4385,7 @@ def empty_radar_source_provenance_summary() -> dict[str, Any]:
         "with_oa_status": 0,
         "with_license": 0,
         "source_ids": {},
+        "configured_source_ids": {},
         "source_classes": {},
     }
 
@@ -4353,7 +4401,7 @@ def merge_radar_source_provenance_summary(target: dict[str, Any], summary: dict[
         "with_license",
     ):
         target[key] = int(target.get(key) or 0) + int(summary.get(key) or 0)
-    for key in ("source_ids", "source_classes"):
+    for key in ("source_ids", "configured_source_ids", "source_classes"):
         target_counts = target.setdefault(key, {})
         for value, count in (summary.get(key) or {}).items():
             selected_value = str(value or "unknown").strip() or "unknown"
@@ -5215,6 +5263,7 @@ def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, di
         "with_oa_status": 0,
         "with_license": 0,
         "source_ids": {},
+        "configured_source_ids": {},
         "source_classes": {},
     }
     for record in values:
@@ -5227,8 +5276,13 @@ def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, di
         else:
             summary["secondary"] += 1
         source_id = str(provenance.get("source_id") or "unknown").strip() or "unknown"
+        configured_source_id = str(provenance.get("configured_source_id") or "").strip()
         source_class = str(provenance.get("source_class") or "unknown").strip() or "unknown"
         summary["source_ids"][source_id] = int(summary["source_ids"].get(source_id, 0)) + 1
+        if configured_source_id:
+            summary["configured_source_ids"][configured_source_id] = (
+                int(summary["configured_source_ids"].get(configured_source_id, 0)) + 1
+            )
         summary["source_classes"][source_class] = int(summary["source_classes"].get(source_class, 0)) + 1
         if provenance.get("source_url"):
             summary["with_source_url"] += 1
@@ -5239,6 +5293,7 @@ def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, di
         if provenance.get("license"):
             summary["with_license"] += 1
     summary["source_ids"] = dict(sorted(summary["source_ids"].items()))
+    summary["configured_source_ids"] = dict(sorted(summary["configured_source_ids"].items()))
     summary["source_classes"] = dict(sorted(summary["source_classes"].items()))
     return summary
 
@@ -5264,6 +5319,11 @@ def format_radar_source_provenance_summary(summary: dict[str, Any]) -> str:
         for source_id, count in sorted((summary.get("source_ids") or {}).items())
         if int(count or 0) > 0
     )
+    configured_source_text = ", ".join(
+        f"{source_id}={int(count)}"
+        for source_id, count in sorted((summary.get("configured_source_ids") or {}).items())
+        if int(count or 0) > 0
+    )
     parts = [
         "Source provenance:",
         f"total={int(summary.get('total') or 0)}",
@@ -5276,6 +5336,8 @@ def format_radar_source_provenance_summary(summary: dict[str, Any]) -> str:
         parts.append(f"classes={class_text}")
     if source_text:
         parts.append(f"sources={source_text}")
+    if configured_source_text:
+        parts.append(f"configured_sources={configured_source_text}")
     return " | ".join(parts)
 
 
@@ -5717,6 +5779,10 @@ def source_provenance_report_text(provenance: dict[str, Any]) -> str:
         f"class={provenance.get('source_class') or 'unknown'}",
         f"metadata={metadata}",
     ]
+    if provenance.get("configured_source_id"):
+        parts.append(f"configured_source={provenance.get('configured_source_id')}")
+    if provenance.get("venue_profile_id"):
+        parts.append(f"venue_profile={provenance.get('venue_profile_id')}")
     if provenance.get("source_url"):
         parts.append(f"url={provenance.get('source_url')}")
     if provenance.get("pdf_url"):

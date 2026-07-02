@@ -40,6 +40,7 @@ from shared.literature_radar import (
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
+    format_radar_keyword_profile,
     format_radar_oa_enrichment,
     format_radar_pipeline_summary,
     format_radar_source_provenance_summary,
@@ -82,6 +83,7 @@ from shared.literature_radar import (
     radar_supported_source_ids,
     radar_text_discussion_terms,
     radar_topic_keyword_profile,
+    radar_topic_profile_keyword_profiles,
     radar_triage_action_options,
     radar_triage_summary,
     radar_trend_signal_options,
@@ -267,6 +269,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(len(papers), 1)
         self.assertEqual(papers[0]["source_id"], "official_accepted_pages")
         self.assertEqual(papers[0]["source_records"][0]["configured_source_id"], "ieee_sp")
+        self.assertEqual(papers[0]["source_provenance"]["configured_source_id"], "ieee_sp")
+        self.assertEqual(papers[0]["source_provenance"]["venue_profile_id"], "ieee_sp")
         self.assertEqual(papers[0]["source_provenance"]["source_class"], "official_accepted_page")
         self.assertTrue(papers[0]["source_provenance"]["authoritative_metadata"])
 
@@ -501,6 +505,31 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(memory["topic_ids"], ["memory_safety"])
         self.assertIn("use-after-free", memory["positive_keywords"])
         self.assertIn("human memory", memory["negative_keywords"])
+
+    def test_topic_profile_keyword_profiles_are_display_ready(self) -> None:
+        profiles = radar_topic_profile_keyword_profiles(default_radar_topic_profile())
+        memory = next(profile for profile in profiles if profile["keyword"] == "memory_safety")
+
+        self.assertEqual(memory["topic_ids"], ["memory_safety"])
+        self.assertIn("memory safety", memory["positive_keywords"])
+        self.assertIn("use-after-free", memory["positive_keywords"])
+        self.assertIn("human memory", memory["negative_keywords"])
+        self.assertEqual(
+            format_radar_keyword_profile(memory),
+            "memory_safety; matches memory safety, spatial memory safety, temporal memory safety, use-after-free; "
+            "dampens biological memory, human memory",
+        )
+        self.assertEqual(
+            format_radar_keyword_profile(
+                {
+                    "keyword": "agentic security",
+                    "weight": 90,
+                    "positive_keywords": ["agentic security", "LLM security"],
+                    "negative_keywords": ["generic AI application"],
+                }
+            ),
+            "agentic security=90; matches LLM security; dampens generic AI application",
+        )
 
     def test_builds_pipeline_trace_for_separated_radar_phases(self) -> None:
         paper = create_radar_paper(
@@ -913,6 +942,20 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "pdf": "https://arxiv.org/pdf/2601.00055.pdf",
             },
         )
+        official_page_paper = create_radar_paper(
+            source_id="official_accepted_pages",
+            source_paper_id="official_accepted_pages:ieee-sp-2026",
+            title="Official Page Provenance",
+            year=2026,
+            links={"source_page": "https://www.ieee-security.org/accepted-papers.html"},
+            source_record={
+                "source_id": "official_accepted_pages",
+                "configured_source_id": "ieee_sp",
+                "venue_profile_id": "ieee_sp",
+                "venue_group": "security",
+                "source_page": "https://www.ieee-security.org/accepted-papers.html",
+            },
+        )
         trend_record = {
             "paper": {
                 "source_provenance": {
@@ -924,19 +967,29 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             }
         }
 
-        summary = radar_source_provenance_summary([{"paper": arxiv_paper}, trend_record, {"title": "missing"}])
+        summary = radar_source_provenance_summary(
+            [{"paper": arxiv_paper}, {"paper": official_page_paper}, trend_record, {"title": "missing"}]
+        )
 
-        self.assertEqual(summary["total"], 2)
-        self.assertEqual(summary["authoritative"], 1)
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["authoritative"], 2)
         self.assertEqual(summary["secondary"], 1)
-        self.assertEqual(summary["with_source_url"], 2)
+        self.assertEqual(summary["with_source_url"], 3)
         self.assertEqual(summary["with_pdf_url"], 1)
-        self.assertEqual(summary["source_ids"], {"arxiv": 1, "hugging_face_papers": 1})
-        self.assertEqual(summary["source_classes"], {"primary_metadata": 1, "trend_signal": 1})
+        self.assertEqual(
+            summary["source_ids"],
+            {"arxiv": 1, "hugging_face_papers": 1, "official_accepted_pages": 1},
+        )
+        self.assertEqual(summary["configured_source_ids"], {"ieee_sp": 1})
+        self.assertEqual(
+            summary["source_classes"],
+            {"official_accepted_page": 1, "primary_metadata": 1, "trend_signal": 1},
+        )
         formatted = format_radar_source_provenance_summary(summary)
         self.assertIn("Source provenance:", formatted)
-        self.assertIn("authoritative=1", formatted)
-        self.assertIn("classes=primary_metadata=1, trend_signal=1", formatted)
+        self.assertIn("authoritative=2", formatted)
+        self.assertIn("classes=official_accepted_page=1, primary_metadata=1, trend_signal=1", formatted)
+        self.assertIn("configured_sources=ieee_sp=1", formatted)
 
     def test_reports_radar_run_freshness(self) -> None:
         now = datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc)

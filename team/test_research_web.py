@@ -1105,6 +1105,11 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["settings"]["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
         self.assertIn('<option value="team_security_daily" selected>Team Security Daily</option>', html)
         self.assertIn("preset: Team Security Daily", html)
+        self.assertIn("Interest Match Terms", html)
+        self.assertIn("LLM security", html)
+        self.assertIn("prompt injection", html)
+        self.assertIn("use-after-free", html)
+        self.assertIn("generic AI application", html)
 
     def test_literature_radar_status_payload_combines_settings_and_queue(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

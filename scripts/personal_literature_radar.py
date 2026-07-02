@@ -32,6 +32,7 @@ from personal.literature_radar import (
 )
 from shared.literature_radar import (
     build_radar_preflight_payload,
+    format_radar_keyword_profile,
     format_radar_context_summary,
     format_radar_oa_enrichment,
     format_radar_pipeline_summary,
@@ -51,6 +52,7 @@ from shared.literature_radar import (
     radar_source_preset,
     radar_source_presets,
     radar_supported_source_ids,
+    radar_topic_profile_keyword_profiles,
     parse_official_accepted_page_specs,
     source_provenance_report_text,
 )
@@ -349,7 +351,7 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         args.root_path,
         topic_profile_path=args.topic_profile,
     )
-    return build_radar_preflight_payload(
+    payload = build_radar_preflight_payload(
         kind="personal_literature_radar_settings",
         settings=settings,
         sources=selected_sources,
@@ -365,6 +367,8 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
             "topic_profile": str(args.topic_profile) if args.topic_profile else "indexes/literature-radar-topic-profile.json",
         },
     )
+    payload["topic_keyword_profiles"] = radar_topic_profile_keyword_profiles(topic_profile)
+    return payload
 
 
 def build_personal_literature_radar_status_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -414,6 +418,12 @@ def print_settings(result: dict[str, Any]) -> None:
     )
     if scoring_profile_summary:
         print(f"Scoring: {scoring_profile_summary.get('description') or scoring_profile_summary.get('name')}")
+    topic_profiles = result.get("topic_keyword_profiles") if isinstance(result.get("topic_keyword_profiles"), list) else []
+    if topic_profiles:
+        print("Topic profiles:")
+        for profile in topic_profiles[:8]:
+            if isinstance(profile, dict):
+                print(f"- {format_radar_keyword_profile(profile)}")
     venue_profile_summary = (
         result.get("venue_profile_summary") if isinstance(result.get("venue_profile_summary"), dict) else {}
     )

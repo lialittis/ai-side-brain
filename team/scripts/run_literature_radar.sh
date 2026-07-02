@@ -137,6 +137,18 @@ fi
 if [[ -n "${RADAR_SOURCE_CONTACT_EMAIL:-}" ]]; then
   ARGS+=("--source-contact-email" "$RADAR_SOURCE_CONTACT_EMAIL")
 fi
+OPENALEX_MAILTO_VALUE="${RADAR_OPENALEX_MAILTO:-${OPENALEX_MAILTO:-}}"
+if [[ -n "$OPENALEX_MAILTO_VALUE" ]]; then
+  ARGS+=("--openalex-mailto" "$OPENALEX_MAILTO_VALUE")
+fi
+CROSSREF_MAILTO_VALUE="${RADAR_CROSSREF_MAILTO:-${CROSSREF_MAILTO:-}}"
+if [[ -n "$CROSSREF_MAILTO_VALUE" ]]; then
+  ARGS+=("--crossref-mailto" "$CROSSREF_MAILTO_VALUE")
+fi
+UNPAYWALL_EMAIL_VALUE="${RADAR_UNPAYWALL_EMAIL:-${UNPAYWALL_EMAIL:-}}"
+if [[ -n "$UNPAYWALL_EMAIL_VALUE" ]]; then
+  ARGS+=("--unpaywall-email" "$UNPAYWALL_EMAIL_VALUE")
+fi
 if [[ -n "${RADAR_AUTHOR_IDS:-}" ]]; then
   read -r -a AUTHOR_IDS <<< "$RADAR_AUTHOR_IDS"
   for author_id in "${AUTHOR_IDS[@]}"; do

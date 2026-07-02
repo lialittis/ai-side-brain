@@ -530,6 +530,23 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       border-top: 1px solid var(--line);
     }}
     .radar-status h2 {{ margin-bottom: 0; }}
+    .radar-section-label {{
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }}
+    .radar-interest-profiles {{
+      display: grid;
+      gap: 7px;
+    }}
+    .radar-interest-row {{
+      display: grid;
+      gap: 5px;
+      justify-items: start;
+    }}
+    .radar-interest-row .interest-profile {{ justify-content: flex-start; }}
     .radar-source-grid {{
       display: grid;
       grid-template-columns: 1fr;
@@ -1089,6 +1106,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     <div class="radar-status">
       <h2>Radar Profile</h2>
       <div class="tags">{''.join(chips)}</div>
+      {render_radar_interest_profiles(database)}
       {readiness}
     </div>
     """
@@ -1121,6 +1139,48 @@ def radar_settings_scoring_label(database: TeamResearchDatabase) -> str:
         return "no weighted interests"
     suffix = f" +{len(interests) - 3}" if len(interests) > 3 else ""
     return ", ".join(parts) + suffix
+
+
+def render_radar_interest_profiles(database: TeamResearchDatabase) -> str:
+    profiles = team_interest_keyword_profiles(database)
+    if not profiles:
+        return ""
+    rows = []
+    for profile in profiles[:6]:
+        keyword = str(profile.get("keyword") or "interest")
+        weight = int(profile.get("weight") or 0)
+        positive = [
+            str(term)
+            for term in profile.get("positive_keywords") or []
+            if normalize_inline_text(term).lower() != normalize_inline_text(keyword).lower()
+        ][:4]
+        negative = [str(term) for term in profile.get("negative_keywords") or []][:2]
+        chips = [
+            f'<span class="tag" title="Matched by {html_escape(keyword)}">{html_escape(term)}</span>'
+            for term in positive
+        ]
+        chips.extend(
+            f'<span class="tag warn" title="Dampens {html_escape(keyword)}">{html_escape(term)}</span>'
+            for term in negative
+        )
+        rows.append(
+            f"""
+            <div class="radar-interest-row">
+              <span class="tag good">{html_escape(keyword)}={weight}</span>
+              <div class="interest-profile">{''.join(chips)}</div>
+            </div>
+            """
+        )
+    suffix = ""
+    if len(profiles) > 6:
+        suffix = f'<span class="tag">+{len(profiles) - 6} more interests</span>'
+    return f"""
+    <div class="radar-interest-profiles" aria-label="Team interest match terms">
+      <div class="radar-section-label">Interest Match Terms</div>
+      {''.join(rows)}
+      {suffix}
+    </div>
+    """
 
 
 def render_radar_settings_readiness(settings: dict[str, Any]) -> str:
@@ -1239,13 +1299,17 @@ def build_literature_radar_status_payload(
     now: Any | None = None,
     freshness_max_age_hours: int = 36,
     use_saved_defaults: bool = True,
+    settings: dict[str, Any] | None = None,
     triage_action: str = "",
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     selected_triage_action = clean_triage_action(triage_action)
+    selected_settings = settings
+    if selected_settings is None and not use_saved_defaults:
+        selected_settings = default_radar_form_settings(source_preset="custom")
     settings_payload = build_literature_radar_settings_payload(
         database,
-        settings=None if use_saved_defaults else default_radar_form_settings(source_preset="custom"),
+        settings=selected_settings,
     )
     queue_payload = build_team_literature_radar_queue_payload(
         database,

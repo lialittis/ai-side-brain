@@ -61,6 +61,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 cwd=workspace,
                 env={
                     "PYTHON_BIN": str(fake_python),
+                    "RADAR_DB_PATH": str(workspace / "team.sqlite3"),
                     "RADAR_STATUS_OUTPUT_DIR": str(output_dir),
                     "RADAR_STATUS_QUEUE_LIMIT": "17",
                     "RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "48",
@@ -69,6 +70,9 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "RADAR_RECOMMENDATION_LIMIT": "12",
+                    "RADAR_OPENALEX_MAILTO": "openalex-team@example.org",
+                    "CROSSREF_MAILTO": "crossref-generic@example.org",
+                    "UNPAYWALL_EMAIL": "unpaywall-generic@example.org",
                     "RADAR_USE_SAVED_DEFAULTS": "1",
                     "RADAR_WRITE_LATEST": "1",
                 },
@@ -80,6 +84,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             latest_status = (output_dir / "literature-radar-status-latest.txt").read_text(encoding="utf-8")
 
             self.assertEqual(latest_settings["command"], "radar-settings")
+            self.assertEqual(latest_settings["args"].count("--db-path"), 1)
+            self.assertIn(str(workspace / "team.sqlite3"), latest_settings["args"])
             self.assertIn("--use-saved-defaults", latest_settings["args"])
             self.assertIn("--source-preset", latest_settings["args"])
             self.assertIn("team_security_daily", latest_settings["args"])
@@ -90,6 +96,12 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 self.assertIn(official_page, latest_settings["args"])
             self.assertIn("--limit", latest_settings["args"])
             self.assertIn("12", latest_settings["args"])
+            self.assertIn("--openalex-mailto", latest_settings["args"])
+            self.assertIn("openalex-team@example.org", latest_settings["args"])
+            self.assertIn("--crossref-mailto", latest_settings["args"])
+            self.assertIn("crossref-generic@example.org", latest_settings["args"])
+            self.assertIn("--unpaywall-email", latest_settings["args"])
+            self.assertIn("unpaywall-generic@example.org", latest_settings["args"])
             self.assertEqual(latest_queue["command"], "radar-queue")
             self.assertIn("--limit", latest_queue["args"])
             self.assertIn("17", latest_queue["args"])
@@ -98,8 +110,25 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("--triage-action", latest_queue["args"])
             self.assertIn("import", latest_queue["args"])
             self.assertEqual(latest_status_json["command"], "radar-status")
+            self.assertEqual(latest_status_json["args"].count("--db-path"), 1)
+            self.assertIn(str(workspace / "team.sqlite3"), latest_status_json["args"])
             self.assertIn("--limit", latest_status_json["args"])
             self.assertIn("17", latest_status_json["args"])
+            self.assertIn("--source-preset", latest_status_json["args"])
+            self.assertIn("team_security_daily", latest_status_json["args"])
+            self.assertIn("--recommendation-limit", latest_status_json["args"])
+            self.assertIn("12", latest_status_json["args"])
+            self.assertIn("--openreview-invitation", latest_status_json["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_status_json["args"])
+            self.assertEqual(latest_status_json["args"].count("--official-accepted-page"), 2)
+            for official_page in official_pages:
+                self.assertIn(official_page, latest_status_json["args"])
+            self.assertIn("--openalex-mailto", latest_status_json["args"])
+            self.assertIn("openalex-team@example.org", latest_status_json["args"])
+            self.assertIn("--crossref-mailto", latest_status_json["args"])
+            self.assertIn("crossref-generic@example.org", latest_status_json["args"])
+            self.assertIn("--unpaywall-email", latest_status_json["args"])
+            self.assertIn("unpaywall-generic@example.org", latest_status_json["args"])
             self.assertIn("--triage-action", latest_status_json["args"])
             self.assertIn("import", latest_status_json["args"])
             self.assertIn("radar-status text status", latest_status)
@@ -206,6 +235,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION": "skim",
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
                     "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
+                    "RADAR_SOURCE_CONTACT_EMAIL": "shared-contact@example.org",
+                    "PERSONAL_RADAR_OPENALEX_MAILTO": "openalex-personal@example.org",
+                    "CROSSREF_MAILTO": "crossref-generic@example.org",
+                    "UNPAYWALL_EMAIL": "unpaywall-generic@example.org",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -221,6 +254,14 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
             for official_page in official_pages:
                 self.assertIn(official_page, latest_settings["args"])
+            self.assertIn("--source-contact-email", latest_settings["args"])
+            self.assertIn("shared-contact@example.org", latest_settings["args"])
+            self.assertIn("--openalex-mailto", latest_settings["args"])
+            self.assertIn("openalex-personal@example.org", latest_settings["args"])
+            self.assertIn("--crossref-mailto", latest_settings["args"])
+            self.assertIn("crossref-generic@example.org", latest_settings["args"])
+            self.assertIn("--unpaywall-email", latest_settings["args"])
+            self.assertIn("unpaywall-generic@example.org", latest_settings["args"])
             self.assertEqual(latest_queue["command"], "queue")
             self.assertIn("--limit", latest_queue["args"])
             self.assertIn("11", latest_queue["args"])
@@ -325,6 +366,9 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "RADAR_QUEUE_TRIAGE_ACTION": "compare",
+                    "OPENALEX_MAILTO": "openalex-generic@example.org",
+                    "RADAR_CROSSREF_MAILTO": "crossref-team@example.org",
+                    "RADAR_UNPAYWALL_EMAIL": "unpaywall-team@example.org",
                     "RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -344,6 +388,12 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("team_security_daily", latest_run["args"])
             self.assertIn("--openreview-invitation", latest_run["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_run["args"])
+            self.assertIn("--openalex-mailto", latest_run["args"])
+            self.assertIn("openalex-generic@example.org", latest_run["args"])
+            self.assertIn("--crossref-mailto", latest_run["args"])
+            self.assertIn("crossref-team@example.org", latest_run["args"])
+            self.assertIn("--unpaywall-email", latest_run["args"])
+            self.assertIn("unpaywall-team@example.org", latest_run["args"])
             self.assertEqual(latest_run["args"].count("--official-accepted-page"), 2)
             for official_page in official_pages:
                 self.assertIn(official_page, latest_run["args"])
@@ -353,6 +403,12 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("team_security_daily", latest_settings["args"])
             self.assertIn("--openreview-invitation", latest_settings["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_settings["args"])
+            self.assertIn("--openalex-mailto", latest_settings["args"])
+            self.assertIn("openalex-generic@example.org", latest_settings["args"])
+            self.assertIn("--crossref-mailto", latest_settings["args"])
+            self.assertIn("crossref-team@example.org", latest_settings["args"])
+            self.assertIn("--unpaywall-email", latest_settings["args"])
+            self.assertIn("unpaywall-team@example.org", latest_settings["args"])
             self.assertEqual(latest_settings["args"].count("--official-accepted-page"), 2)
             for official_page in official_pages:
                 self.assertIn(official_page, latest_settings["args"])
@@ -464,6 +520,10 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "PERSONAL_RADAR_QUEUE_TRIAGE_ACTION": "watch",
+                    "RADAR_SOURCE_CONTACT_EMAIL": "shared-contact@example.org",
+                    "OPENALEX_MAILTO": "openalex-generic@example.org",
+                    "PERSONAL_RADAR_CROSSREF_MAILTO": "crossref-personal@example.org",
+                    "PERSONAL_RADAR_UNPAYWALL_EMAIL": "unpaywall-personal@example.org",
                     "PERSONAL_RADAR_CYCLE_INBOX_QUEUE": "1",
                     "PERSONAL_RADAR_INBOX_QUEUE_LIMIT": "9",
                     "PERSONAL_RADAR_INBOX_QUEUE_MIN_SCORE": "70",
@@ -479,6 +539,14 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("security_memory_agentic_daily", latest_personal_run["args"])
             self.assertIn("--openreview-invitation", latest_personal_run["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_run["args"])
+            self.assertIn("--source-contact-email", latest_personal_run["args"])
+            self.assertIn("shared-contact@example.org", latest_personal_run["args"])
+            self.assertIn("--openalex-mailto", latest_personal_run["args"])
+            self.assertIn("openalex-generic@example.org", latest_personal_run["args"])
+            self.assertIn("--crossref-mailto", latest_personal_run["args"])
+            self.assertIn("crossref-personal@example.org", latest_personal_run["args"])
+            self.assertIn("--unpaywall-email", latest_personal_run["args"])
+            self.assertIn("unpaywall-personal@example.org", latest_personal_run["args"])
             self.assertEqual(latest_personal_run["args"].count("--official-accepted-page"), 2)
             for official_page in official_pages:
                 self.assertIn(official_page, latest_personal_run["args"])
@@ -488,6 +556,14 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("security_memory_agentic_daily", latest_personal_settings["args"])
             self.assertIn("--openreview-invitation", latest_personal_settings["args"])
             self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_settings["args"])
+            self.assertIn("--source-contact-email", latest_personal_settings["args"])
+            self.assertIn("shared-contact@example.org", latest_personal_settings["args"])
+            self.assertIn("--openalex-mailto", latest_personal_settings["args"])
+            self.assertIn("openalex-generic@example.org", latest_personal_settings["args"])
+            self.assertIn("--crossref-mailto", latest_personal_settings["args"])
+            self.assertIn("crossref-personal@example.org", latest_personal_settings["args"])
+            self.assertIn("--unpaywall-email", latest_personal_settings["args"])
+            self.assertIn("unpaywall-personal@example.org", latest_personal_settings["args"])
             self.assertEqual(latest_personal_settings["args"].count("--official-accepted-page"), 2)
             for official_page in official_pages:
                 self.assertIn(official_page, latest_personal_settings["args"])

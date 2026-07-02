@@ -1155,6 +1155,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             "system_security",
             [topic["id"] for topic in payload["scoring_profile"]["topics"]],
         )
+        memory_profile = next(
+            profile for profile in payload["topic_keyword_profiles"] if profile["keyword"] == "memory_safety"
+        )
+        self.assertIn("use-after-free", memory_profile["positive_keywords"])
+        self.assertIn("human memory", memory_profile["negative_keywords"])
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["missing_count"], 12)
@@ -1165,6 +1170,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertIn("Personal Literature Radar Settings", text)
         self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenReview Venues", text)
         self.assertIn("Scoring: Security, memory safety, and agentic security radar", text)
+        self.assertIn("Topic profiles:", text)
+        self.assertIn("memory_safety; matches memory safety, spatial memory safety", text)
+        self.assertIn("dampens biological memory, human memory", text)
         self.assertIn("Venue profiles:", text)
         self.assertIn(
             "DBLP/OpenAlex: USENIX Security, IEEE Symposium on Security and Privacy, ACM CCS, NDSS; +2 more (top venues 6/18)",

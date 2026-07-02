@@ -230,7 +230,11 @@ by Personal Radar and the CLI.
 The Radar Profile block also shows pre-run source readiness for the saved form
 settings. It flags missing required inputs such as seed paper IDs or OpenReview
 invitation IDs before a team member starts a run, and it shows recommended
-configuration such as OpenAlex or Crossref contact mail.
+configuration such as OpenAlex or Crossref contact mail. The same block shows
+read-only Interest Match Terms for the current team sliders, including expanded
+shared-core aliases that match a paper and warning terms that dampen relevance,
+so team members can see what the run will consider relevant before spending API
+or AI calls.
 The same read-only settings and readiness contract is available as local JSON at
 `/radar/settings.json`, so automation can verify source selection and readiness
 without starting collectors, downloading PDFs, or calling AI. The JSON also
@@ -270,6 +274,9 @@ venue selectors.
 `radar-status` is also read-only. It combines the saved-defaults settings
 preflight with the latest stored queue health in one payload for server checks,
 dashboards, and status scripts without collecting sources.
+It accepts the same source, venue, author, seed, contact, summary, and PDF-cache
+preflight overrides as `radar-settings`; use `--recommendation-limit` there
+because `radar-status --limit` controls the queue size.
 
 Useful options:
 
@@ -510,6 +517,9 @@ and follow-up lanes as the browser queue.
 latest-run health and queue data, including each queued paper's normalized
 identifiers, source link maps, and best paper link for dashboards. They do not
 collect sources, download PDFs, or call AI.
+The status command can receive the same source/contact/OA preflight overrides
+as `radar-settings`, with `--recommendation-limit` for the embedded settings
+recommendation limit.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
@@ -646,12 +656,13 @@ team/scripts/check_literature_radar_status.sh
 The status script runs only `radar-settings` and `radar-queue`, writes
 timestamped plus `latest` status/settings/queue snapshots under `team/logs/`.
 It also writes combined `literature-radar-status-*.json` snapshots from
-`radar-status`. It does not download PDFs or call AI. Its settings preflight
-accepts the same `RADAR_SOURCE_PRESET`, `RADAR_SOURCES`, venue, author, seed,
-official-page, PDF-cache, and summary environment variables as the scheduled
-collection script, so `.env`-driven deployments can validate their run
-configuration without collecting sources. See the commented Literature Radar
-section in `.env.example` for a server-friendly starting template.
+`radar-status`. It does not download PDFs or call AI. Its settings preflight and
+combined status payload accept the same `RADAR_SOURCE_PRESET`, `RADAR_SOURCES`,
+venue, author, seed, official-page, API-etiquette, OA-enrichment, PDF-cache, and
+summary environment variables as the scheduled collection script, so
+`.env`-driven deployments can validate their run configuration without
+collecting sources. See the commented Literature Radar section in `.env.example`
+for a server-friendly starting template.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
@@ -718,6 +729,12 @@ It reads `.env` first and supports these optional variables:
   `dblp_authors` source.
 - `RADAR_OPENALEX_AUTHOR_IDS`: space-separated OpenAlex author IDs for the
   `openalex_authors` source.
+- `RADAR_OPENALEX_MAILTO`: Team-specific OpenAlex contact email for polite-pool
+  requests; generic `OPENALEX_MAILTO` is accepted as a fallback.
+- `RADAR_CROSSREF_MAILTO`: Team-specific Crossref contact email; generic
+  `CROSSREF_MAILTO` is accepted as a fallback.
+- `RADAR_UNPAYWALL_EMAIL`: Team-specific Unpaywall email for legal OA/PDF and
+  license enrichment; generic `UNPAYWALL_EMAIL` is accepted as a fallback.
 - `RADAR_OPENREVIEW_VENUES`: space-separated OpenReview venue profile/group
   selectors for the `openreview_venues` source.
 - `RADAR_OPENREVIEW_INVITATIONS`: space-separated explicit OpenReview
@@ -740,8 +757,9 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_FRESHNESS_MAX_AGE_HOURS`: latest-run freshness threshold for queue and
   brief snapshots; default `36`.
 - API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`,
-  `RADAR_SOURCE_CONTACT_EMAIL`, `OPENALEX_MAILTO`, `CROSSREF_MAILTO`,
-  `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
+  `RADAR_SOURCE_CONTACT_EMAIL`, `RADAR_OPENALEX_MAILTO`,
+  `RADAR_CROSSREF_MAILTO`, `RADAR_UNPAYWALL_EMAIL`, `OPENALEX_MAILTO`,
+  `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
 
 ### Daily Team Operating Loop
 

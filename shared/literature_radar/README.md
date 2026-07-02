@@ -283,9 +283,20 @@ Current implemented collectors:
   sources, source policy/readiness, non-secret collection config, trend-signal
   option metadata, and the active relevance scoring profile summary without
   starting collectors or calling AI.
+- `radar_topic_profile_keyword_profiles(...)` and
+  `format_radar_keyword_profile(...)` expose the active match/dampen terms in a
+  compact form, so Personal CLI settings and Team settings JSON can explain how
+  lightweight interests map onto the shared security, memory-safety, and
+  agentic-security vocabulary before a run starts.
 - `radar_run_health_action(...)` turns latest-run status, source readiness,
   source coverage, errors, and freshness into one machine-readable next step for
   daily queue JSON, CLI output, and Team web health chips.
+- Configured official accepted-paper pages keep their generic
+  `official_accepted_pages` source policy while also carrying
+  `configured_source_id` and `venue_profile_id` in per-paper provenance and
+  aggregate source-provenance summaries. This lets queue and brief output show
+  which stable venue page, such as `ieee_sp` or `acm_ccs`, contributed a
+  candidate before a dedicated wrapper exists.
 
 Collector parsers are pure functions and are tested with offline fixtures. This
 keeps scheduling and network failure handling outside the core.

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     format_radar_context_summary,
+    format_radar_keyword_profile,
     format_radar_oa_enrichment,
     format_radar_pipeline_summary,
     format_radar_run_health_action,
@@ -261,6 +262,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--ignore-saved-defaults",
         action="store_true",
         help="use built-in Radar defaults instead of defaults saved by the web UI",
+    )
+    radar_status.add_argument("--source-preset", choices=[preset["id"] for preset in team_radar_source_presets()])
+    radar_status.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    radar_status.add_argument("--max-results", type=int)
+    radar_status.add_argument("--recommendation-limit", type=int, help="recommendation limit for the embedded settings preflight")
+    radar_status.add_argument("--summarize", action="store_true")
+    radar_status.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
+    radar_status.add_argument("--summary-limit", type=int)
+    radar_status.add_argument("--semantic-scholar-api-key")
+    radar_status.add_argument("--dblp-author-pid", action="append", default=[])
+    radar_status.add_argument("--semantic-scholar-author-id", action="append", default=[])
+    radar_status.add_argument("--seed-paper-id", action="append", default=[])
+    radar_status.add_argument("--negative-seed-paper-id", action="append", default=[])
+    radar_status.add_argument("--source-contact-email")
+    radar_status.add_argument("--openalex-mailto")
+    radar_status.add_argument("--openalex-author-id", action="append", default=[])
+    radar_status.add_argument("--openreview-invitation", action="append", default=[])
+    radar_status.add_argument("--openreview-venue-profile", action="append", default=[])
+    radar_status.add_argument("--include-openreview-unaccepted", action="store_true")
+    radar_status.add_argument("--crossref-mailto")
+    radar_status.add_argument("--unpaywall-email")
+    radar_status.add_argument("--cache-pdfs", action="store_true")
+    radar_status.add_argument("--pdf-cache-dir", type=Path)
+    radar_status.add_argument("--pdf-cache-max-bytes", type=int)
+    radar_status.add_argument("--conference-year", type=int)
+    radar_status.add_argument("--venue-profile", action="append", default=[])
+    radar_status.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    radar_status.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page for the embedded settings preflight",
     )
     radar_status.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -767,7 +800,7 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print("Interest profiles:")
         for profile in interest_profiles[:8]:
             if isinstance(profile, dict):
-                print(f"- {format_radar_interest_profile(profile)}")
+                print(f"- {format_radar_keyword_profile(profile)}")
     venue_profile_summary = (
         result.get("venue_profile_summary") if isinstance(result.get("venue_profile_summary"), dict) else {}
     )
@@ -797,23 +830,6 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print(f"Web: {links.get('html') or '/radar'}")
         print(f"Queue JSON: {links.get('queue_json') or '/radar/queue.json?limit=20'}")
         print(f"Brief JSON: {links.get('brief_json') or '/radar/brief.json?days=7&limit=20'}")
-
-
-def format_radar_interest_profile(profile: dict[str, Any]) -> str:
-    keyword = str(profile.get("keyword") or "interest")
-    weight = int(profile.get("weight") or 0)
-    positives = [
-        str(term)
-        for term in profile.get("positive_keywords") or []
-        if str(term).strip().lower() != keyword.strip().lower()
-    ][:4]
-    negatives = [str(term) for term in profile.get("negative_keywords") or []][:2]
-    parts = [f"{keyword}={weight}"]
-    if positives:
-        parts.append(f"matches {', '.join(positives)}")
-    if negatives:
-        parts.append(f"dampens {', '.join(negatives)}")
-    return "; ".join(parts)
 
 
 def print_radar_status(result: dict[str, Any]) -> None:
@@ -982,11 +998,14 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
     selected_source_preset = args.source_preset or (
         None if args.source else saved_radar_text(saved_defaults, "source_preset")
     )
+    recommendation_limit = getattr(args, "recommendation_limit", None)
+    if recommendation_limit is None:
+        recommendation_limit = getattr(args, "limit", None)
     settings = {
         "source_preset": selected_source_preset or "custom",
         "sources": args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES),
         "max_results": args.max_results or saved_radar_int(saved_defaults, "max_results", 20),
-        "limit": args.limit or saved_radar_int(saved_defaults, "limit", 10),
+        "limit": recommendation_limit or saved_radar_int(saved_defaults, "limit", 10),
         "summarize": args.summarize or bool(saved_defaults.get("summarize")) or summary_provider == "openrouter",
         "summary_provider": summary_provider,
         "summary_limit": args.summary_limit,
@@ -1228,11 +1247,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-status":
+        args.use_saved_defaults = not args.ignore_saved_defaults
         result = build_literature_radar_status_payload(
             database,
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             use_saved_defaults=not args.ignore_saved_defaults,
+            settings=radar_settings_from_cli_args(database, args),
             triage_action=args.triage_action,
         )
         if args.json:

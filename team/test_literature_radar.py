@@ -2324,6 +2324,25 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     ]
                 )
 
+            override_stdout = io.StringIO()
+            with contextlib.redirect_stdout(override_stdout):
+                override_code = research_cli.main(
+                    [
+                        "radar-status",
+                        "--db-path",
+                        str(db_path),
+                        "--source",
+                        "openalex",
+                        "--recommendation-limit",
+                        "12",
+                        "--openalex-mailto",
+                        "radar-status@example.org",
+                        "--unpaywall-email",
+                        "oa-status@example.org",
+                        "--json",
+                    ]
+                )
+
         self.assertEqual(json_code, 0)
         payload = json.loads(json_stdout.getvalue())
         self.assertEqual(payload["kind"], "team_literature_radar_status")
@@ -2343,6 +2362,13 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         ignore_payload = json.loads(ignore_stdout.getvalue())
         self.assertEqual(ignore_payload["settings"]["settings"]["sources"], list(DEFAULT_RADAR_SOURCES))
         self.assertNotEqual(ignore_payload["settings"]["settings"]["sources"], ["arxiv", "openalex"])
+        self.assertEqual(override_code, 0)
+        override_payload = json.loads(override_stdout.getvalue())
+        self.assertEqual(override_payload["settings"]["settings"]["sources"], ["openalex"])
+        self.assertEqual(override_payload["settings"]["settings"]["limit"], 12)
+        self.assertEqual(override_payload["settings"]["source_readiness"]["status"], "ready")
+        self.assertEqual(override_payload["settings"]["oa_enrichment"]["status"], "ready")
+        self.assertTrue(override_payload["settings"]["oa_enrichment"]["configured"])
 
     def test_cli_radar_run_explicit_args_override_saved_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

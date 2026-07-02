@@ -68,11 +68,14 @@ python scripts/personal_literature_radar.py brief --days 7 --json
 ```
 
 `settings` is a read-only preflight command. It prints selected sources, active
-topic-profile scoring summary, expanded venue profile summary, source policy,
-source readiness, and optional trend-signal metadata without collecting
-metadata, downloading PDFs, or calling AI. Use it before enabling a cron/systemd
-job or after changing source, topic-profile, seed, author, venue, or
-contact-email environment variables.
+topic-profile scoring summary, expanded topic match/dampen terms, expanded
+venue profile summary, source policy, source readiness, and optional
+trend-signal metadata without collecting metadata, downloading PDFs, or calling
+AI. The JSON payload includes `topic_keyword_profiles`, so automation can verify
+which terms the current Personal Radar profile will match or dampen before a
+scheduled run. Use it before enabling a cron/systemd job or after changing
+source, topic-profile, seed, author, venue, or contact-email environment
+variables.
 
 For periodic personal reports, run the one-shot script from cron or a systemd
 timer:
@@ -182,6 +185,8 @@ or generic `OPENREVIEW_INVITATIONS`,
 `source_id | venue name | year | URL` official accepted-paper pages),
 `PERSONAL_RADAR_SEED_PAPER_IDS`,
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
+`PERSONAL_RADAR_OPENALEX_MAILTO`, `PERSONAL_RADAR_CROSSREF_MAILTO`,
+`PERSONAL_RADAR_UNPAYWALL_EMAIL`,
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes, and
@@ -208,9 +213,11 @@ variables include
 OpenRouter summaries require `OPENROUTER_API_KEY`.
 `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL` is a fallback contact address for
 OpenAlex, Crossref, and Unpaywall. If it is unset, `RADAR_SOURCE_CONTACT_EMAIL`
-is also accepted as a shared local fallback. Service-specific environment
-variables such as `OPENALEX_MAILTO`, `CROSSREF_MAILTO`, and `UNPAYWALL_EMAIL`
-still take precedence.
+is also accepted as a shared local fallback by the Python runner. Scheduled
+Personal scripts pass service-specific overrides first:
+`PERSONAL_RADAR_OPENALEX_MAILTO`, `PERSONAL_RADAR_CROSSREF_MAILTO`, and
+`PERSONAL_RADAR_UNPAYWALL_EMAIL`; generic `OPENALEX_MAILTO`,
+`CROSSREF_MAILTO`, and `UNPAYWALL_EMAIL` are accepted as fallbacks.
 
 Semantic Scholar runs can use recommendations, references, citations, or tracked
 authors to expand around papers and researchers you already care about. Personal
