@@ -162,10 +162,12 @@ Stored daily or weekly briefs are also available as local JSON at
 the HTML brief and CLI `radar-brief --json`; it does not collect sources,
 download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
 health and freshness, limits, run count, review counts, the active queue preview
-with PDF access summary, aggregate `provenance_summary`, recent team Radar activity from the audit log, and
-links back to the Team Radar pages. The Markdown brief also includes a Team
-Activity section when watch, dismiss, clear, or import decisions occurred inside
-the requested window.
+with PDF access summary, structured `source_readiness`, `pipeline_summary`,
+`oa_enrichment`, aggregate `provenance_summary`, recent team Radar activity from
+the audit log, and links back to the Team Radar pages. The Markdown brief
+includes source readiness, pipeline trace, and OA enrichment readiness sections, and
+also includes a Team Activity section when watch, dismiss, clear, or import
+decisions occurred inside the requested window.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -459,9 +461,10 @@ optional API/contact warnings. Sources missing required config are skipped as
 collector failures. If every selected source is skipped this way, the stored
 run status is `blocked`; if other sources still collect, the run is `partial`.
 Source errors are shown in the Radar page and
-report. Generated Markdown reports include `Source Readiness` and `Source
-Coverage` before detailed `Source Stats`, so a daily or weekly review can tell
-whether the radar was misconfigured, quiet, or under-collected. Venue-profile runs also show `Venue Coverage` in the report
+report. Generated Markdown reports include `Source Readiness`, `OA Enrichment`,
+and `Source Coverage` before detailed `Source Stats`, so a daily or weekly
+review can tell whether the radar was misconfigured, missing legal OA/PDF
+enrichment, quiet, or under-collected. Venue-profile runs also show `Venue Coverage` in the report
 and Radar page, including candidate and recommendation counts per conference
 profile/year.
 
@@ -482,8 +485,9 @@ venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
 were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
 Brief`. The browser brief shows a compact health summary before the Markdown:
-latest-run freshness, source coverage, review queue counts, source provenance,
-and PDF access for the active queue. The matching JSON payload is available
+latest-run freshness, source coverage, source readiness, pipeline phase status,
+OA enrichment readiness, review queue counts, source provenance, and PDF access
+for the active queue. The matching JSON payload is available
 through `Brief JSON`, so team members can review it without using the CLI while
 local automation can consume the same stored-roll-up contract.
 
@@ -515,10 +519,13 @@ text file for quick operator review. Those snapshots reflect saved defaults
 plus explicit environment overrides passed to the scheduled run. It also writes
 text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
-includes latest-run health/freshness, source-error counts, PDF access summary, stored summary,
-relevance/context signal, and matched interests for daily review. The JSON
-snapshot uses the same queue payload as `radar-queue --json`, including
-`latest_run` health, `access_summary`, `provenance_summary`, plus per-paper `signal_lines`. Stable
+includes latest-run health/freshness, source-error counts, pipeline phase
+status, source readiness, Unpaywall OA enrichment readiness, PDF access summary,
+stored summary, relevance/context signal, and matched interests for daily
+review. The JSON snapshot uses the same queue payload as `radar-queue --json`,
+including `latest_run` health, `pipeline_summary`, source readiness, OA
+enrichment readiness, `access_summary`, `provenance_summary`, plus per-paper
+`signal_lines`. Stable
 `literature-radar-settings-latest.json`, `literature-radar-settings-latest.txt`,
 and `literature-radar-queue-latest.*` files are refreshed when latest-copy
 output is enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue

@@ -188,13 +188,15 @@ source classes, source IDs, and records with source/PDF URLs. Completed run
 records also store the recommendation-level provenance summary, and
 `latest_run.provenance_summary` exposes it for daily health checks. Both
 text and JSON queue output include latest-run health/freshness, source-error
-counts, compact source readiness, and compact source coverage, so scheduled
-queue snapshots distinguish misconfiguration, an empty healthy queue, and a
-collector problem. The latest-run JSON also includes `source_policy` for the
-authoritative/trend-signal source mix and `health_action`, a compact
-machine-readable next step such as `review_queue`, `configure_blocked_sources`,
-or `inspect_source_errors`. Text queue output also shows the stored review
-reason when a watched or dismissed paper has one.
+counts, compact pipeline phase status, compact source readiness, Unpaywall OA
+enrichment readiness, and compact source coverage, so scheduled queue snapshots
+distinguish misconfiguration, an empty healthy queue, and a collector problem.
+The latest-run JSON also includes `source_policy` for the
+authoritative/trend-signal source mix, `pipeline_summary` for separated phase
+health, `oa_enrichment` for legal OA/PDF readiness, and `health_action`, a
+compact machine-readable next step such as `review_queue`, `configure_blocked_sources`, or
+`inspect_source_errors`. Text queue output also shows the stored review reason
+when a watched or dismissed paper has one.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
 When marking a paper as `watch`, add `--reason` for lightweight intent capture.
@@ -219,13 +221,14 @@ candidate counts, appends source coverage to reports and briefs, and appends
 source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
-lines, attention summaries, context, recent review activity, source policy, venue coverage, and PDF
+lines, attention summaries, context, recent review activity, source policy,
+OA enrichment readiness, venue coverage, and PDF
 policy for the top stored recommendations. `brief --json` returns the same Markdown plus latest-run
 health/freshness, review counts, active queue preview with PDF access summary,
 source provenance summary, recent activity, structured `context_summary`,
-`source_policy`, aggregate `provenance_summary`, and
-`source_coverage` for every run in the brief window, and paths to the local run
-index and paper-history files, so local
+`source_policy`, `source_readiness`, `pipeline_summary`, `oa_enrichment`, aggregate
+`provenance_summary`, and `source_coverage` for every run in the brief window,
+and paths to the local run index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring, the Personal history/watch context
 pool used for linking, and a phase trace for collection, PDF policy,

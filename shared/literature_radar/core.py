@@ -1864,6 +1864,22 @@ def append_radar_source_readiness_to_report(
     return "\n".join(lines)
 
 
+def append_radar_oa_enrichment_to_report(
+    report: str,
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> str:
+    summary = radar_oa_enrichment_summary(sources, collection_config)
+    lines = [report.rstrip(), "", "## OA Enrichment", "", f"- {format_radar_oa_enrichment(summary)}"]
+    recommended = summary.get("recommended_config") if isinstance(summary.get("recommended_config"), list) else []
+    for value in recommended[:8]:
+        if not isinstance(value, dict):
+            continue
+        lines.append(f"- Missing recommended: {value.get('label') or value.get('key')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def append_radar_source_stats_to_report(report: str, source_stats: list[dict[str, Any]]) -> str:
     if not source_stats:
         return report
@@ -3504,6 +3520,67 @@ def pipeline_phase(phase: str, status: str, **metrics: Any) -> dict[str, Any]:
     return record
 
 
+def radar_pipeline_trace_summary(trace: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None) -> dict[str, Any]:
+    records = [record for record in (trace or []) if isinstance(record, dict)]
+    phase_statuses: dict[str, str] = {}
+    status_counts: dict[str, int] = {}
+    for record in records:
+        phase = str(record.get("phase") or "").strip()
+        if not phase:
+            continue
+        status = str(record.get("status") or "unknown").strip() or "unknown"
+        phase_statuses[phase] = status
+        status_counts[status] = status_counts.get(status, 0) + 1
+    missing_phase_ids = [phase for phase in RADAR_PIPELINE_PHASES if phase not in phase_statuses]
+    non_success_phases = [
+        {"phase": phase, "status": status}
+        for phase, status in phase_statuses.items()
+        if status != "succeeded"
+    ]
+    problem_phases = [
+        entry
+        for entry in non_success_phases
+        if entry["status"] in {"blocked", "failed", "partial"}
+    ]
+    return {
+        "phase_count": len(phase_statuses),
+        "required_phase_count": len(RADAR_PIPELINE_PHASES),
+        "complete": not missing_phase_ids,
+        "status_counts": status_counts,
+        "phase_statuses": phase_statuses,
+        "missing_phase_ids": missing_phase_ids,
+        "non_success_phases": non_success_phases,
+        "problem_phases": problem_phases,
+    }
+
+
+def format_radar_pipeline_summary(summary: dict[str, Any]) -> str:
+    if not summary:
+        return "Pipeline: not recorded"
+    status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
+    status_text = ", ".join(
+        f"{status}={count}"
+        for status, count in sorted(status_counts.items())
+    ) or "none"
+    phase_count = int(summary.get("phase_count") or 0)
+    required_phase_count = int(summary.get("required_phase_count") or 0)
+    parts = [f"Pipeline: phases={phase_count}/{required_phase_count}", f"statuses={status_text}"]
+    problem_phases = summary.get("problem_phases") if isinstance(summary.get("problem_phases"), list) else []
+    if problem_phases:
+        parts.append(
+            "issues="
+            + ", ".join(
+                f"{entry.get('phase')}:{entry.get('status')}"
+                for entry in problem_phases
+                if isinstance(entry, dict) and entry.get("phase")
+            )
+        )
+    missing_phase_ids = summary.get("missing_phase_ids") if isinstance(summary.get("missing_phase_ids"), list) else []
+    if missing_phase_ids:
+        parts.append("missing=" + ", ".join(str(phase) for phase in missing_phase_ids))
+    return "; ".join(parts)
+
+
 def pipeline_paper_key(paper: dict[str, Any]) -> str:
     return str(paper.get("dedupe_key") or dedupe_key(paper) or "").strip()
 
@@ -3623,12 +3700,18 @@ def build_radar_history_brief(
     pipeline_lines = radar_brief_pipeline_trace_lines([bundle["run"] for bundle in bundles])
     if pipeline_lines:
         lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
+    oa_enrichment_lines = radar_brief_oa_enrichment_lines([bundle["run"] for bundle in bundles])
+    if oa_enrichment_lines:
+        lines.extend(["## OA Enrichment", "", *oa_enrichment_lines, ""])
     context_lines = radar_brief_context_summary_lines([bundle["run"] for bundle in bundles])
     if context_lines:
         lines.extend(["## Context Linking", "", *context_lines, ""])
     source_policy_lines = radar_brief_source_policy_lines([bundle["run"] for bundle in bundles])
     if source_policy_lines:
         lines.extend(["## Source Policy", "", *source_policy_lines, ""])
+    source_readiness_lines = radar_brief_source_readiness_lines([bundle["run"] for bundle in bundles])
+    if source_readiness_lines:
+        lines.extend(["## Source Readiness", "", *source_readiness_lines, ""])
     source_provenance_lines = radar_brief_source_provenance_lines(bundles)
     if source_provenance_lines:
         lines.extend(["## Source Provenance", "", *source_provenance_lines, ""])
@@ -3895,6 +3978,183 @@ def radar_history_source_provenance_summary(
     }
 
 
+def radar_history_pipeline_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    status_counts: dict[str, int] = {}
+    phase_status_counts: dict[str, dict[str, int]] = {}
+    run_summaries = []
+    complete_count = 0
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        trace = run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
+        summary = radar_pipeline_trace_summary(trace)
+        if not summary.get("phase_count"):
+            continue
+        if summary.get("complete"):
+            complete_count += 1
+        for status, count in (summary.get("status_counts") or {}).items():
+            status_counts[str(status)] = int(status_counts.get(str(status)) or 0) + int(count or 0)
+        phase_statuses = summary.get("phase_statuses") if isinstance(summary.get("phase_statuses"), dict) else {}
+        for phase, status in phase_statuses.items():
+            selected_phase = str(phase)
+            selected_status = str(status)
+            counts = phase_status_counts.setdefault(selected_phase, {})
+            counts[selected_status] = int(counts.get(selected_status) or 0) + 1
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "phase_count": int(summary.get("phase_count") or 0),
+                "required_phase_count": int(summary.get("required_phase_count") or 0),
+                "complete": bool(summary.get("complete")),
+                "status_counts": dict(summary.get("status_counts") or {}),
+                "missing_phase_ids": list(summary.get("missing_phase_ids") or []),
+                "problem_phases": list(summary.get("problem_phases") or []),
+            }
+        )
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        "run_count": len(run_summaries),
+        "complete_run_count": complete_count,
+        "incomplete_run_count": len(run_summaries) - complete_count,
+        "status_counts": dict(sorted(status_counts.items())),
+        "phase_status_counts": {
+            phase: dict(sorted(counts.items()))
+            for phase, counts in sorted(phase_status_counts.items())
+        },
+        "runs": run_summaries,
+    }
+
+
+def radar_history_oa_enrichment_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    status_counts: dict[str, int] = {}
+    relevant_source_ids: set[str] = set()
+    configured_count = 0
+    run_summaries = []
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+        summary = radar_oa_enrichment_summary(sources, collection_config)
+        status = str(summary.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+        if summary.get("configured"):
+            configured_count += 1
+        relevant = [str(source_id) for source_id in summary.get("relevant_source_ids") or []]
+        relevant_source_ids.update(relevant)
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "status": status,
+                "configured": bool(summary.get("configured")),
+                "relevant_source_ids": relevant,
+            }
+        )
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        "run_count": len(run_summaries),
+        "status_counts": dict(sorted(status_counts.items())),
+        "configured_count": configured_count,
+        "missing_recommended_count": int(status_counts.get("missing_recommended") or 0),
+        "relevant_source_ids": sorted(relevant_source_ids),
+        "runs": run_summaries,
+    }
+
+
+def radar_history_source_readiness_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    status_counts: dict[str, int] = {}
+    blocked_source_ids: set[str] = set()
+    warning_source_ids: set[str] = set()
+    missing_required: list[dict[str, Any]] = []
+    missing_recommended: list[dict[str, Any]] = []
+    run_summaries = []
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+        summary = radar_source_readiness_summary(sources, collection_config)
+        if summary.get("status") == "no_sources":
+            continue
+        status = str(summary.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+        blocked_source_ids.update(str(source_id) for source_id in summary.get("blocked_source_ids") or [])
+        warning_source_ids.update(str(source_id) for source_id in summary.get("warning_source_ids") or [])
+        for value in summary.get("missing_required") or []:
+            if isinstance(value, dict):
+                missing_required.append({"run_id": run.get("id") or "", **value})
+        for value in summary.get("missing_recommended") or []:
+            if isinstance(value, dict):
+                missing_recommended.append({"run_id": run.get("id") or "", **value})
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "status": status,
+                "source_count": int(summary.get("source_count") or 0),
+                "ready_count": int(summary.get("ready_count") or 0),
+                "warning_count": int(summary.get("warning_count") or 0),
+                "blocked_count": int(summary.get("blocked_count") or 0),
+                "blocked_source_ids": list(summary.get("blocked_source_ids") or []),
+                "warning_source_ids": list(summary.get("warning_source_ids") or []),
+            }
+        )
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        "run_count": len(run_summaries),
+        "status_counts": dict(sorted(status_counts.items())),
+        "blocked_source_ids": sorted(blocked_source_ids),
+        "warning_source_ids": sorted(warning_source_ids),
+        "missing_required": missing_required,
+        "missing_recommended": missing_recommended,
+        "runs": run_summaries,
+    }
+
+
 def empty_radar_source_provenance_summary() -> dict[str, Any]:
     return {
         "total": 0,
@@ -4014,6 +4274,60 @@ def radar_brief_pipeline_trace_lines(runs: list[dict[str, Any]]) -> list[str]:
     for phase, counts in sorted(status_by_phase.items()):
         if phase not in RADAR_PIPELINE_PHASES:
             lines.append(f"- `{phase}`: {format_status_counts(counts)}")
+    return lines
+
+
+def radar_brief_oa_enrichment_lines(runs: list[dict[str, Any]]) -> list[str]:
+    status_counts: dict[str, int] = {}
+    configured_count = 0
+    relevant_source_ids: set[str] = set()
+    for run in runs:
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+        summary = radar_oa_enrichment_summary(sources, collection_config)
+        status = str(summary.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if summary.get("configured"):
+            configured_count += 1
+        for source_id in summary.get("relevant_source_ids") or []:
+            relevant_source_ids.add(str(source_id))
+    if not status_counts:
+        return []
+    parts = [
+        f"runs={sum(status_counts.values())}",
+        f"statuses={format_status_counts(status_counts)}",
+        f"configured={configured_count}",
+    ]
+    if relevant_source_ids:
+        parts.append(f"sources={', '.join(sorted(relevant_source_ids))}")
+    return ["- OA enrichment: " + "; ".join(parts)]
+
+
+def radar_brief_source_readiness_lines(runs: list[dict[str, Any]]) -> list[str]:
+    summary = radar_history_source_readiness_summary(runs, days=None)
+    if int(summary.get("run_count") or 0) <= 0:
+        return []
+    parts = [
+        f"runs={int(summary.get('run_count') or 0)}",
+        f"statuses={format_status_counts(summary.get('status_counts') or {})}",
+    ]
+    blocked = summary.get("blocked_source_ids") if isinstance(summary.get("blocked_source_ids"), list) else []
+    warnings = summary.get("warning_source_ids") if isinstance(summary.get("warning_source_ids"), list) else []
+    if blocked:
+        parts.append(f"blocked={', '.join(str(source_id) for source_id in blocked)}")
+    if warnings:
+        parts.append(f"warnings={', '.join(str(source_id) for source_id in warnings)}")
+    lines = ["- Source readiness: " + "; ".join(parts)]
+    for value in (summary.get("missing_required") or [])[:8]:
+        if isinstance(value, dict):
+            lines.append(
+                f"- Missing required: `{value.get('source_id')}` needs {value.get('label') or value.get('key')}"
+            )
+    for value in (summary.get("missing_recommended") or [])[:8]:
+        if isinstance(value, dict):
+            lines.append(
+                f"- Missing recommended: `{value.get('source_id')}` uses {value.get('label') or value.get('key')}"
+            )
     return lines
 
 

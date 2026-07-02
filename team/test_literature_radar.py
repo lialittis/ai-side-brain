@@ -1023,22 +1023,34 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 identifiers={"openalex_id": "W1234567890", "doi": "10.1145/example"},
                 links={"landing": "https://openalex.org/W1234567890"},
             )
-            with mock.patch("team.literature_radar.collect_openalex_works", return_value=[paper]) as openalex:
+            with (
+                mock.patch("team.literature_radar.collect_openalex_works", return_value=[paper]) as openalex,
+                mock.patch("team.literature_radar.enrich_radar_papers_with_unpaywall", return_value=[paper]) as unpaywall,
+            ):
                 result = run_team_literature_radar(
                     database,
                     sources=["openalex"],
                     query_terms=["memory safety"],
                     max_results=2,
                     openalex_mailto="radar@example.com",
+                    unpaywall_email="radar@example.com",
                 )
 
             self.assertEqual(result["sources"], ["openalex"])
             self.assertEqual(result["collected_count"], 1)
             self.assertEqual(result["recommendation_count"], 1)
+            self.assertIn("## OA Enrichment", result["report"])
+            self.assertIn("OA enrichment: provider=Unpaywall status=ready configured=yes", result["report"])
             openalex.assert_called_once()
             self.assertEqual(openalex.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(openalex.call_args.kwargs["max_results"], 2)
             self.assertEqual(openalex.call_args.kwargs["mailto"], "radar@example.com")
+            unpaywall.assert_called_once()
+            self.assertEqual(unpaywall.call_args.kwargs["email"], "radar@example.com")
+            queue = build_team_literature_radar_queue_payload(database)
+            self.assertEqual(queue["latest_run"]["oa_enrichment"]["status"], "ready")
+            self.assertTrue(queue["latest_run"]["oa_enrichment"]["configured"])
+            self.assertEqual(queue["latest_run"]["oa_enrichment"]["relevant_source_ids"], ["openalex"])
 
     def test_run_team_literature_radar_collects_openalex_author_works(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1468,7 +1480,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["source_policy"]["authoritative_count"], 1)
             self.assertEqual(queue_result["latest_run"]["source_policy"]["trend_signal_count"], 0)
             self.assertEqual(queue_result["latest_run"]["provenance_summary"]["authoritative"], 1)
+            self.assertEqual(queue_result["latest_run"]["pipeline_summary"]["phase_count"], 10)
+            self.assertEqual(queue_result["latest_run"]["pipeline_summary"]["status_counts"]["succeeded"], 9)
+            self.assertEqual(queue_result["latest_run"]["pipeline_summary"]["status_counts"]["skipped"], 1)
             self.assertEqual(queue_result["latest_run"]["source_readiness"]["status"], "ready")
+            self.assertEqual(queue_result["latest_run"]["oa_enrichment"]["status"], "not_applicable")
+            self.assertEqual(queue_result["latest_run"]["oa_enrichment"]["relevant_source_ids"], [])
             self.assertEqual(queue_result["latest_run"]["health_action"]["action"], "run_literature_radar")
             self.assertEqual(queue_result["latest_run"]["health_action"]["severity"], "warning")
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
@@ -1505,9 +1522,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Source coverage:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("context_items=0", queue_text)
+            self.assertIn("Pipeline: phases=10/10", queue_text)
+            self.assertIn("statuses=skipped=1, succeeded=9", queue_text)
             self.assertIn("Source readiness:", queue_text)
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("status=ready", queue_text)
+            self.assertIn("OA enrichment: provider=Unpaywall status=not_applicable configured=no sources=none", queue_text)
             self.assertIn("PDF access:", queue_text)
             self.assertIn("downloadable=1", queue_text)
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
@@ -1635,6 +1655,14 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["source_coverage"]["status_counts"], {"succeeded": 1})
             self.assertEqual(brief["source_coverage"]["sources"][0]["source_id"], "arxiv")
             self.assertEqual(brief["source_coverage"]["sources"][0]["collected_count"], 1)
+            self.assertEqual(brief["source_readiness"]["run_count"], 1)
+            self.assertEqual(brief["source_readiness"]["status_counts"], {"ready": 1})
+            self.assertEqual(brief["source_readiness"]["blocked_source_ids"], [])
+            self.assertEqual(brief["pipeline_summary"]["run_count"], 1)
+            self.assertEqual(brief["pipeline_summary"]["complete_run_count"], 1)
+            self.assertEqual(brief["pipeline_summary"]["phase_status_counts"]["metadata_collection"], {"succeeded": 1})
+            self.assertEqual(brief["oa_enrichment"]["status_counts"], {"not_applicable": 1})
+            self.assertEqual(brief["oa_enrichment"]["relevant_source_ids"], [])
             self.assertEqual(brief["source_policy"]["run_count"], 1)
             self.assertEqual(brief["source_policy"]["authoritative_count"], 1)
             self.assertEqual(brief["source_policy"]["trend_signal_count"], 0)

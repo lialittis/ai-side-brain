@@ -17,6 +17,7 @@ from shared.literature_radar import (
     append_radar_source_coverage_to_report,
     append_radar_source_policy_to_report,
     append_radar_source_readiness_to_report,
+    append_radar_oa_enrichment_to_report,
     append_radar_source_stats_to_report,
     append_radar_context_summary_to_report,
     append_radar_venue_coverage_to_report,
@@ -49,16 +50,21 @@ from shared.literature_radar import (
     enrich_radar_papers_with_unpaywall,
     radar_history_source_coverage_summary,
     radar_history_context_summary,
+    radar_history_oa_enrichment_summary,
+    radar_history_pipeline_summary,
+    radar_history_source_readiness_summary,
     radar_history_source_policy_summary,
     radar_history_source_provenance_summary,
     radar_context_summary,
     radar_pdf_access_summary,
+    radar_pipeline_trace_summary,
     radar_source_provenance_summary,
     radar_latest_signal_lines,
     paper_source_provenance,
     paper_release_date,
     radar_run_freshness,
     radar_run_health_action,
+    radar_oa_enrichment_summary,
     radar_run_status_from_source_health,
     radar_source_coverage_summary,
     radar_source_blocked_readiness,
@@ -364,6 +370,7 @@ def run_team_literature_radar(
         report = append_radar_context_summary_to_report(report, context_summary)
         report = append_radar_source_policy_to_report(report, selected_sources)
         report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
+        report = append_radar_oa_enrichment_to_report(report, selected_sources, collection_config)
         report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
         report = append_radar_source_stats_to_report(report, source_stats)
         report = append_radar_source_errors_to_report(report, source_errors)
@@ -538,6 +545,21 @@ def build_team_literature_radar_brief_payload(
         "run_count": len(run_bundles),
         "review_counts": review_counts,
         "source_coverage": radar_history_source_coverage_summary(
+            runs,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "source_readiness": radar_history_source_readiness_summary(
+            runs,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "pipeline_summary": radar_history_pipeline_summary(
+            runs,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "oa_enrichment": radar_history_oa_enrichment_summary(
             runs,
             generated_at=selected_now,
             days=selected_days,
@@ -718,6 +740,7 @@ def team_literature_radar_run_summary(
     provenance_summary = run.get("provenance_summary") if isinstance(run.get("provenance_summary"), dict) else {}
     context_summary = run.get("context_summary") if isinstance(run.get("context_summary"), dict) else {}
     collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+    pipeline_trace = run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
     summary = {
         "id": run.get("id") or "",
         "status": run.get("status") or "unknown",
@@ -732,7 +755,9 @@ def team_literature_radar_run_summary(
         "source_policy": source_policy or radar_source_policy_summary(sources),
         "provenance_summary": provenance_summary,
         "context_summary": context_summary,
+        "pipeline_summary": radar_pipeline_trace_summary(pipeline_trace),
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
+        "oa_enrichment": radar_oa_enrichment_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
             source_errors,

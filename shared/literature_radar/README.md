@@ -39,6 +39,11 @@ until their collectors are implemented.
 The same preflight payload also reports `oa_enrichment` for Unpaywall so
 Personal and Team operators can see whether legal open-access PDF/license
 resolution is ready for DOI-capable source selections before a run starts.
+Product adapters also expose the same summary on latest-run queue payloads, so
+scheduled daily snapshots show whether the last run had legal OA/PDF enrichment
+configured.
+Those latest-run queue payloads also include `pipeline_summary`, a compact view
+of the explicit Radar phases and their statuses for daily health checks.
 Adapters can attach scoring-profile and venue-profile summaries so operators
 can verify relevance and top-conference coverage before scheduled API calls.
 
@@ -111,9 +116,9 @@ The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
 it carries stored review state such as `watch` or `dismissed`, normalized
 release dates, the scoring profile snapshot, non-secret collection settings,
-and phase trace used for the run. It also carries source policy and venue
-coverage for DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking
-is review-aware: `watch` papers are surfaced before unreviewed papers, while
+source readiness, phase trace used for the run, and OA enrichment readiness for
+legal PDF/license checks. It also carries source policy and venue coverage for
+DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers are surfaced before unreviewed papers, while
 `dismissed` papers fall behind active candidates.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
@@ -220,6 +225,9 @@ Current implemented collectors:
 - `enrich_radar_papers_with_unpaywall(...)` is the shared Personal/Team wrapper
   that applies Unpaywall enrichment across collected candidates and records
   run-level source stats/errors when OA checks fail or are skipped.
+- `append_radar_oa_enrichment_to_report(...)` adds an `OA Enrichment` section
+  to generated Markdown reports so legal OA/PDF readiness is visible alongside
+  source readiness and coverage.
 - `collect_radar_source(...)` and the source-health report appenders keep
   collector failure accounting and Markdown report sections consistent across
   Personal and Team adapters.

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from shared.literature_radar import (
     format_radar_context_summary,
     format_radar_oa_enrichment,
+    format_radar_pipeline_summary,
     format_radar_run_health_action,
     format_radar_source_provenance_summary,
     format_radar_source_policy,
@@ -580,6 +581,13 @@ def print_radar_queue(result: dict[str, Any]) -> None:
         )
         if context_summary:
             print(f"Context: {format_radar_context_summary(context_summary)}")
+        pipeline_summary = (
+            latest_run.get("pipeline_summary")
+            if isinstance(latest_run.get("pipeline_summary"), dict)
+            else {}
+        )
+        if pipeline_summary:
+            print(format_radar_pipeline_summary(pipeline_summary))
         source_readiness = (
             latest_run.get("source_readiness")
             if isinstance(latest_run.get("source_readiness"), dict)
@@ -587,6 +595,13 @@ def print_radar_queue(result: dict[str, Any]) -> None:
         )
         if source_readiness:
             print(format_radar_source_readiness(source_readiness))
+        oa_enrichment = (
+            latest_run.get("oa_enrichment")
+            if isinstance(latest_run.get("oa_enrichment"), dict)
+            else {}
+        )
+        if oa_enrichment:
+            print(format_radar_oa_enrichment(oa_enrichment))
     access_summary = result.get("access_summary") if isinstance(result.get("access_summary"), dict) else {}
     if access_summary:
         print(format_radar_queue_access_summary(access_summary))

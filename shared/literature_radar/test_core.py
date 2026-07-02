@@ -13,6 +13,7 @@ from shared.literature_radar import (
     add_recommendation_attention_summaries,
     add_recommendation_context,
     add_recommendation_novelty,
+    append_radar_oa_enrichment_to_report,
     append_radar_source_policy_to_report,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
@@ -37,6 +38,7 @@ from shared.literature_radar import (
     enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
     format_radar_oa_enrichment,
+    format_radar_pipeline_summary,
     format_radar_source_provenance_summary,
     format_radar_source_coverage,
     format_radar_source_stats,
@@ -57,6 +59,10 @@ from shared.literature_radar import (
     radar_source_skip_stat,
     radar_history_source_coverage_summary,
     radar_pdf_access_summary,
+    radar_pipeline_trace_summary,
+    radar_history_oa_enrichment_summary,
+    radar_history_pipeline_summary,
+    radar_history_source_readiness_summary,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_review_counts,
@@ -306,6 +312,17 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("status=blocked", report)
         self.assertIn("Semantic Scholar seed paper ID", report)
 
+    def test_appends_oa_enrichment_to_report(self) -> None:
+        report = append_radar_oa_enrichment_to_report(
+            "# Radar",
+            ["openalex"],
+            {"unpaywall_email_configured": False},
+        )
+
+        self.assertIn("## OA Enrichment", report)
+        self.assertIn("OA enrichment: provider=Unpaywall status=missing_recommended", report)
+        self.assertIn("Missing recommended: Unpaywall email/contact", report)
+
     def test_blocked_source_skip_stat_keeps_missing_config_actionable(self) -> None:
         readiness = radar_source_blocked_readiness("semantic_scholar_recommendations", {})
 
@@ -444,6 +461,74 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(by_phase["attention_summary"]["metrics"]["attention_summary_count"], 1)
         self.assertEqual(by_phase["long_term_storage"]["metrics"]["storage_target"], "test_index")
         self.assertEqual(by_phase["recommendation_report"]["status"], "succeeded")
+        summary = radar_pipeline_trace_summary(trace)
+        self.assertEqual(summary["phase_count"], len(RADAR_PIPELINE_PHASES))
+        self.assertTrue(summary["complete"])
+        self.assertEqual(summary["status_counts"]["partial"], 1)
+        self.assertEqual(summary["problem_phases"], [{"phase": "metadata_collection", "status": "partial"}])
+        self.assertEqual(summary["missing_phase_ids"], [])
+        self.assertIn("Pipeline: phases=10/10", format_radar_pipeline_summary(summary))
+        self.assertIn("issues=metadata_collection:partial", format_radar_pipeline_summary(summary))
+
+    def test_summarizes_history_pipeline_and_oa_enrichment(self) -> None:
+        run_records = [
+            {
+                "id": "run_recent",
+                "started_at": "2026-07-01T09:00:00+00:00",
+                "sources": ["openalex", "semantic_scholar_recommendations"],
+                "collection_config": {"unpaywall_email_configured": True},
+                "pipeline_trace": [
+                    pipeline_phase
+                    for pipeline_phase in build_radar_pipeline_trace(
+                        status="succeeded",
+                        collected_papers=[
+                            create_radar_paper(
+                                source_id="openalex",
+                                source_paper_id="W1",
+                                title="OpenAlex Pipeline Summary",
+                            )
+                        ],
+                        recommendations=[],
+                        report_written=True,
+                    )
+                ],
+            },
+            {
+                "id": "run_old",
+                "started_at": "2026-06-01T09:00:00+00:00",
+                "sources": ["openalex"],
+                "collection_config": {"unpaywall_email_configured": False},
+                "pipeline_trace": [],
+            },
+        ]
+
+        pipeline = radar_history_pipeline_summary(
+            run_records,
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+        )
+        oa = radar_history_oa_enrichment_summary(
+            run_records,
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+        )
+        readiness = radar_history_source_readiness_summary(
+            run_records,
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+        )
+
+        self.assertEqual(pipeline["run_count"], 1)
+        self.assertEqual(pipeline["complete_run_count"], 1)
+        self.assertEqual(pipeline["phase_status_counts"]["metadata_collection"], {"succeeded": 1})
+        self.assertEqual(oa["run_count"], 1)
+        self.assertEqual(oa["status_counts"], {"ready": 1})
+        self.assertEqual(oa["configured_count"], 1)
+        self.assertEqual(oa["relevant_source_ids"], ["openalex", "semantic_scholar_recommendations"])
+        self.assertEqual(readiness["run_count"], 1)
+        self.assertEqual(readiness["status_counts"], {"blocked": 1})
+        self.assertEqual(readiness["blocked_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(readiness["missing_required"][0]["key"], "seed_paper_ids")
 
     def test_summarizes_context_pool_and_linked_recommendations(self) -> None:
         paper = create_radar_paper(
@@ -1797,6 +1882,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`metadata_collection`: partial=1", brief)
         self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
+        self.assertIn("OA Enrichment", brief)
+        self.assertIn("statuses=missing_recommended=1", brief)
+        self.assertIn("sources=dblp", brief)
+        self.assertIn("Source Readiness", brief)
+        self.assertIn("statuses=blocked=1", brief)
+        self.assertIn("blocked=openreview", brief)
         self.assertIn("Context Linking", brief)
         self.assertIn("context_items=3; sources=team-library=2, team-radar-watch=1", brief)
         self.assertIn("comment_context=1", brief)

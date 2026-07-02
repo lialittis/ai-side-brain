@@ -32,7 +32,9 @@ from shared.literature_radar import (
     openreview_venue_profile_selection_summary,
     paper_release_date,
     radar_dblp_venue_profile_selection_summary,
+    radar_oa_enrichment_summary,
     radar_pdf_access_summary,
+    radar_pipeline_trace_summary,
     radar_latest_signal_lines,
     radar_run_freshness,
     radar_run_health_action,
@@ -1001,6 +1003,9 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     ]
     if settings.get("conference_year"):
         chips.append(render_radar_metric_chip("conference year", settings["conference_year"]))
+    oa_enrichment = radar_settings_oa_enrichment_label(settings)
+    if oa_enrichment:
+        chips.append(render_radar_metric_chip("OA enrichment", oa_enrichment))
     venue_coverage = radar_settings_top_venue_coverage_label(settings)
     if venue_coverage:
         chips.append(render_radar_metric_chip("top venues", venue_coverage))
@@ -1142,6 +1147,21 @@ def radar_settings_top_venue_coverage_label(settings: dict[str, Any]) -> str:
     missing = int(coverage.get("missing_count") or 0)
     suffix = "complete" if missing == 0 else f"{missing} missing"
     return f"{covered}/{required} {suffix}"
+
+
+def radar_settings_oa_enrichment_label(settings: dict[str, Any]) -> str:
+    summary = radar_oa_enrichment_summary(
+        list(settings.get("sources") or []),
+        radar_settings_collection_config(settings),
+    )
+    status = str(summary.get("status") or "").replace("_", " ").strip()
+    if not status:
+        return ""
+    contact = "contact yes" if summary.get("configured") else "contact no"
+    relevant_sources = summary.get("relevant_source_ids") if isinstance(summary.get("relevant_source_ids"), list) else []
+    if not relevant_sources:
+        return status
+    return f"{status}, {contact}"
 
 
 def render_radar_readiness_missing(readiness: dict[str, Any]) -> str:
@@ -1321,6 +1341,9 @@ def render_radar_brief_form(*, days: int, limit: int) -> str:
 def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     source_coverage = payload.get("source_coverage") if isinstance(payload.get("source_coverage"), dict) else {}
+    source_readiness = payload.get("source_readiness") if isinstance(payload.get("source_readiness"), dict) else {}
+    pipeline_summary = payload.get("pipeline_summary") if isinstance(payload.get("pipeline_summary"), dict) else {}
+    oa_enrichment = payload.get("oa_enrichment") if isinstance(payload.get("oa_enrichment"), dict) else {}
     source_policy = payload.get("source_policy") if isinstance(payload.get("source_policy"), dict) else {}
     provenance_summary = payload.get("provenance_summary") if isinstance(payload.get("provenance_summary"), dict) else {}
     context_summary = payload.get("context_summary") if isinstance(payload.get("context_summary"), dict) else {}
@@ -1338,6 +1361,21 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         if problem_sources
         else ""
     )
+    pipeline_problems = int(pipeline_summary.get("incomplete_run_count") or 0)
+    pipeline_css = "warn" if pipeline_problems else "good" if int(pipeline_summary.get("run_count") or 0) else ""
+    oa_status_counts = oa_enrichment.get("status_counts") if isinstance(oa_enrichment.get("status_counts"), dict) else {}
+    oa_status_text = ", ".join(f"{status}: {count}" for status, count in sorted(oa_status_counts.items())) or "none"
+    oa_missing = int(oa_enrichment.get("missing_recommended_count") or 0)
+    oa_css = "warn" if oa_missing else "good" if int(oa_enrichment.get("run_count") or 0) else ""
+    readiness_status_counts = (
+        source_readiness.get("status_counts") if isinstance(source_readiness.get("status_counts"), dict) else {}
+    )
+    readiness_blocked = len(
+        source_readiness.get("blocked_source_ids")
+        if isinstance(source_readiness.get("blocked_source_ids"), list)
+        else []
+    )
+    readiness_css = "warn" if readiness_blocked else "good" if int(source_readiness.get("run_count") or 0) else ""
     freshness_chip = (
         f'<span class="pill">freshness: {html_escape(str(freshness.get("status") or "unknown"))}</span>'
         if freshness
@@ -1358,6 +1396,24 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">runs: {int(source_coverage.get("run_count") or 0)}</span>
         <span class="tag">sources: {int(source_coverage.get("source_count") or 0)}</span>
         {problem_chip}
+      </div>
+      <div class="tags">
+        <span class="muted">Pipeline:</span>
+        <span class="tag {pipeline_css}">complete runs: {int(pipeline_summary.get("complete_run_count") or 0)}</span>
+        <span class="tag">incomplete runs: {pipeline_problems}</span>
+        <span class="tag">statuses: {html_escape(format_status_counts_for_web(pipeline_summary.get("status_counts")))}</span>
+      </div>
+      <div class="tags">
+        <span class="muted">Source readiness:</span>
+        <span class="tag {readiness_css}">statuses: {html_escape(format_status_counts_for_web(readiness_status_counts))}</span>
+        <span class="tag">blocked sources: {readiness_blocked}</span>
+        <span class="tag">warnings: {len(source_readiness.get("warning_source_ids") if isinstance(source_readiness.get("warning_source_ids"), list) else [])}</span>
+      </div>
+      <div class="tags">
+        <span class="muted">OA enrichment:</span>
+        <span class="tag {oa_css}">statuses: {html_escape(oa_status_text)}</span>
+        <span class="tag">configured: {int(oa_enrichment.get("configured_count") or 0)}</span>
+        <span class="tag">missing recommended: {oa_missing}</span>
       </div>
       <div class="tags">
         <span class="muted">Source policy:</span>
@@ -1412,6 +1468,15 @@ def radar_brief_source_coverage_status(source_coverage: dict[str, Any]) -> str:
     if int(status_counts.get("succeeded") or 0) == run_count:
         return "succeeded"
     return "mixed"
+
+
+def format_status_counts_for_web(counts: Any) -> str:
+    if not isinstance(counts, dict) or not counts:
+        return "none"
+    return ", ".join(
+        f"{status}: {int(count or 0)}"
+        for status, count in sorted(counts.items())
+    )
 
 
 def radar_brief_problem_sources(source_coverage: dict[str, Any]) -> list[str]:
@@ -2676,6 +2741,10 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         run.get("sources") if isinstance(run.get("sources"), list) else [],
         run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {},
     )
+    oa_enrichment = radar_oa_enrichment_summary(
+        run.get("sources") if isinstance(run.get("sources"), list) else [],
+        run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {},
+    )
     source_policy = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
     if not source_policy:
         source_policy = radar_source_policy_summary(
@@ -2701,6 +2770,20 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         if provenance_summary
         else ""
     )
+    pipeline_summary = radar_pipeline_trace_summary(
+        run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
+    )
+    pipeline_phase_count = int(pipeline_summary.get("phase_count") or 0)
+    pipeline_required_count = int(pipeline_summary.get("required_phase_count") or 0)
+    pipeline_problem_count = len(
+        pipeline_summary.get("problem_phases") if isinstance(pipeline_summary.get("problem_phases"), list) else []
+    )
+    pipeline_css = "warn" if pipeline_problem_count or pipeline_summary.get("missing_phase_ids") else "good"
+    pipeline_label = (
+        f'<span class="pill {pipeline_css}">Pipeline: {pipeline_phase_count}/{pipeline_required_count}</span>'
+        if pipeline_phase_count or pipeline_required_count
+        else ""
+    )
     readiness_status = str(source_readiness.get("status") or "unknown")
     readiness_css = "warn" if readiness_status == "blocked" else "good" if readiness_status == "ready" else ""
     readiness_label = (
@@ -2708,6 +2791,9 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         if readiness_status != "no_sources"
         else ""
     )
+    oa_status = str(oa_enrichment.get("status") or "unknown").replace("_", " ")
+    oa_css = "good" if oa_enrichment.get("status") == "ready" else ""
+    oa_label = f'<span class="pill {oa_css}">OA: {html_escape(oa_status)}</span>' if oa_status else ""
     freshness = radar_run_freshness(run)
     freshness_css = "warn" if freshness.get("status") == "stale" else "good" if freshness.get("status") == "fresh" else ""
     freshness_label = f'<span class="pill {freshness_css}">Freshness: {html_escape(freshness.get("status") or "unknown")}</span>'
@@ -2744,8 +2830,10 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
       {source_policy_label}
       {provenance_label}
       {context_label}
+      {pipeline_label}
       {coverage_label}
       {readiness_label}
+      {oa_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
       <span class="pill">Recommended: {int(run.get("recommendation_count") or 0)}</span>
       {source_error_label}

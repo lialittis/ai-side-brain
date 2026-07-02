@@ -143,8 +143,9 @@ contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
 settings are configured.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI and prints latest-run
-health before the priority papers. Scheduled collection writes matching text and
-JSON queue snapshots under `team/logs/` by default. Scheduled scripts also
+health, pipeline phase status, source readiness, and Unpaywall OA enrichment
+readiness before the priority papers. Scheduled collection writes matching text and JSON queue
+snapshots under `team/logs/` by default. Scheduled scripts also
 refresh stable `literature-radar-latest.*`,
 `literature-radar-queue-latest.*`, and `literature-radar-brief-latest.*` files
 unless `RADAR_WRITE_LATEST=0`.
@@ -163,9 +164,10 @@ the latest run's `source_policy` plus `health_action` for local dashboards or
 self-hosted notification scripts.
 `python team/research_cli.py radar-brief --json` and
 `/radar/brief.json?days=7&limit=20` expose the same stored Markdown brief with
-latest-run health, structured source policy and source coverage for the brief
-window, review counts, an active queue preview, and links back to the Radar
-review pages.
+latest-run health, structured source policy, `source_readiness`,
+`pipeline_summary`, `oa_enrichment`, and source coverage for the brief window,
+review counts, an active queue preview, and links back to the Radar review
+pages.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 
