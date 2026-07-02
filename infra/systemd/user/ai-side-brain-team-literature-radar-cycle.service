@@ -1,0 +1,9 @@
+[Unit]
+Description=AI Side-Brain Team Literature Radar Daily Cycle
+Documentation=file:%h/workspace/ai-side-brain/team/docs/LITERATURE_RADAR.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/ai-side-brain
+Environment=RADAR_USE_SAVED_DEFAULTS=1
+ExecStart=%h/workspace/ai-side-brain/team/scripts/run_literature_radar_cycle.sh

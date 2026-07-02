@@ -1112,6 +1112,7 @@ def build_literature_radar_settings_payload(
             "html": "/radar",
             "queue_html": "/radar/queue?limit=20",
             "queue_json": "/radar/queue.json?limit=20",
+            "status_json": "/radar/status.json?limit=20",
             "activity_json": "/radar/activity.json?days=7&limit=50",
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
@@ -1125,6 +1126,64 @@ def build_literature_radar_settings_payload(
         if isinstance(option, dict)
     ]
     return payload
+
+
+def default_radar_form_settings() -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "source_preset": "custom",
+        "sources": list(DEFAULT_RADAR_SOURCES),
+        "max_results": 20,
+        "limit": 10,
+        "summarize": True,
+        "summary_provider": "local",
+        "cache_pdfs": False,
+        "pdf_cache_dir": RADAR_DEFAULT_PDF_CACHE_DIR,
+        "pdf_cache_max_bytes": RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
+        "source_contact_email": "",
+        "conference_year": "",
+        "usenix_security_cycles": [],
+        "include_openreview_unaccepted": False,
+    }
+    for key in RADAR_LIST_SETTING_KEYS:
+        settings[key] = []
+    return settings
+
+
+def build_literature_radar_status_payload(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 20,
+    now: Any | None = None,
+    freshness_max_age_hours: int = 36,
+    use_saved_defaults: bool = True,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit))
+    settings_payload = build_literature_radar_settings_payload(
+        database,
+        settings=None if use_saved_defaults else default_radar_form_settings(),
+    )
+    queue_payload = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        now=now,
+        freshness_max_age_hours=freshness_max_age_hours,
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_status",
+        "settings": settings_payload,
+        "queue": queue_payload,
+        "latest_run": queue_payload.get("latest_run") if isinstance(queue_payload, dict) else None,
+        "review_counts": queue_payload.get("review_counts") if isinstance(queue_payload, dict) else {},
+        "links": {
+            "html": "/radar",
+            "settings_json": "/radar/settings.json",
+            "queue_html": f"/radar/queue?limit={selected_limit}",
+            "queue_json": f"/radar/queue.json?limit={selected_limit}",
+            "status_json": f"/radar/status.json?limit={selected_limit}",
+            "brief_json": "/radar/brief.json?days=7&limit=20",
+        },
+    }
 
 
 def radar_settings_venue_profile_summary(settings: dict[str, Any]) -> dict[str, Any]:
@@ -1793,23 +1852,7 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
     saved_settings = database.get_team_setting(RADAR_SETTINGS_KEY, {}) or {}
     if not isinstance(saved_settings, dict):
         saved_settings = {}
-    settings: dict[str, Any] = {
-        "source_preset": "custom",
-        "sources": list(DEFAULT_RADAR_SOURCES),
-        "max_results": 20,
-        "limit": 10,
-        "summarize": True,
-        "summary_provider": "local",
-        "cache_pdfs": False,
-        "pdf_cache_dir": RADAR_DEFAULT_PDF_CACHE_DIR,
-        "pdf_cache_max_bytes": RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
-        "source_contact_email": "",
-        "conference_year": "",
-        "usenix_security_cycles": [],
-        "include_openreview_unaccepted": False,
-    }
-    for key in RADAR_LIST_SETTING_KEYS:
-        settings[key] = []
+    settings = default_radar_form_settings()
     settings.update(normalize_radar_settings(saved_settings))
     settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
     if not settings["sources"]:
@@ -4016,6 +4059,18 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 )
             elif parsed.path == "/radar/settings.json":
                 self.respond_json(build_literature_radar_settings_payload(self.database))
+            elif parsed.path == "/radar/status.json":
+                self.respond_json(
+                    build_literature_radar_status_payload(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        freshness_max_age_hours=clean_positive_int(
+                            query.get("freshness_max_age_hours", [""])[0],
+                            default=36,
+                            maximum=24 * 30,
+                        ),
+                    )
+                )
             elif parsed.path == "/radar/brief":
                 self.respond_html(
                     render_literature_radar_brief_page(

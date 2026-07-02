@@ -52,6 +52,7 @@ http://127.0.0.1:8790/radar/papers
 http://127.0.0.1:8790/radar/queue.json
 http://127.0.0.1:8790/radar/activity.json
 http://127.0.0.1:8790/radar/settings.json
+http://127.0.0.1:8790/radar/status.json
 ```
 
 The page is review-first:
@@ -234,6 +235,9 @@ policy, expanded venue profile summary, and pre-run readiness without starting
 collectors, downloading PDFs, or calling AI. Use it before enabling a
 cron/systemd job or after changing `/radar` defaults, Team Interest weights, or
 venue selectors.
+`radar-status` is also read-only. It combines the saved-defaults settings
+preflight with the latest stored queue health in one payload for server checks,
+dashboards, and status scripts without collecting sources.
 
 Useful options:
 
@@ -364,6 +368,7 @@ Stored runs can be inspected later:
 
 ```bash
 python team/research_cli.py radar-history
+python team/research_cli.py radar-status --json
 python team/research_cli.py radar-queue                # active review queue by score
 python team/research_cli.py radar-queue --freshness-max-age-hours 24
 python team/research_cli.py radar-papers               # deduplicated paper history
@@ -449,6 +454,11 @@ latest-run health/source stats, structured `source_policy` and `source_coverage`
 for every run in the brief window, review counts, active queue preview, the
 Markdown brief, recent team Radar activity, and links back to the HTML brief,
 Radar page, JSON endpoint, and queue JSON.
+`/radar/status.json?limit=20` and
+`python team/research_cli.py radar-status --json` combine
+`/radar/settings.json`-style preflight data with `/radar/queue.json`-style
+latest-run health and queue data. They do not collect sources, download PDFs, or
+call AI.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
@@ -554,6 +564,17 @@ PDF response, or temporarily unavailable, the run records the reason instead of
 downloading or redistributing it.
 The same cache option can be saved from `/radar`; scheduled Team runs use those
 saved defaults when `RADAR_USE_SAVED_DEFAULTS=1`.
+To check the saved configuration and latest-run queue health without collecting
+paper sources, use:
+
+```bash
+team/scripts/check_literature_radar_status.sh
+```
+
+The status script runs only `radar-settings` and `radar-queue`, writes
+timestamped plus `latest` status/settings/queue snapshots under `team/logs/`.
+It also writes combined `literature-radar-status-*.json` snapshots from
+`radar-status`. It does not download PDFs or call AI.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
@@ -581,6 +602,15 @@ It reads `.env` first and supports these optional variables:
   `run_literature_radar.sh` and `build_literature_radar_brief.sh`.
 - `RADAR_WRITE_LATEST=0`: skip refreshing stable `*-latest.*` copies while
   keeping timestamped report, queue, and brief history.
+- `RADAR_STATUS_OUTPUT_DIR`: output directory for
+  `check_literature_radar_status.sh`; defaults to `RADAR_OUTPUT_DIR` or
+  `team/logs`.
+- `RADAR_STATUS_QUEUE_LIMIT`: active queue size for status snapshots; defaults
+  to `RADAR_QUEUE_LIMIT` or `20`.
+- `RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS`: freshness threshold for status queue
+  health; defaults to `RADAR_FRESHNESS_MAX_AGE_HOURS` or `36`.
+- `RADAR_STATUS_USE_SAVED_DEFAULTS=0`: make the status settings preflight ignore
+  saved `/radar` defaults.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
 - `RADAR_ACTIVITY_DAYS`: activity history window; default `7`.
@@ -627,11 +657,21 @@ Example cron entry for 07:30 daily:
 ```
 
 User-level systemd timer templates are also available under
-`infra/systemd/user/`; see `infra/systemd/README.md`. The Team timer runs
-`team/scripts/run_literature_radar.sh` with `RADAR_USE_SAVED_DEFAULTS=1`, so it
-can reuse the source/author/seed defaults saved from the `/radar` page.
-The Team brief timer runs `team/scripts/build_literature_radar_brief.sh` weekly
-and reads stored runs only.
+`infra/systemd/user/`; see `infra/systemd/README.md`. The recommended Team
+daily timer is `ai-side-brain-team-literature-radar-cycle.timer`. It runs
+`team/scripts/run_literature_radar_cycle.sh` with `RADAR_USE_SAVED_DEFAULTS=1`,
+so it can reuse the source/author/seed defaults saved from the `/radar` page,
+refresh queue snapshots, and build the stored brief in one scheduled job. Do
+not enable it together with `ai-side-brain-team-literature-radar.timer`, because
+both run Team collection. Use the separate Team collection and Team brief timers
+only when those phases need independent schedules. Install the recommended Team
+timer with:
+
+```bash
+infra/systemd/install_user_timers.sh --team-cycle
+```
+
+Use `--dry-run` first to preview the exact copy and `systemctl --user` commands.
 
 ## Next Collector Work
 

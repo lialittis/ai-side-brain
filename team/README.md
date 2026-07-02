@@ -91,6 +91,7 @@ python team/research_cli.py radar-run --source semantic_scholar_references --see
 python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
 python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-dir team/data/literature-radar-pdfs
+python team/research_cli.py radar-status --json
 python team/research_cli.py radar-history
 python team/research_cli.py radar-queue
 python team/research_cli.py radar-papers
@@ -112,10 +113,21 @@ Web UI surfaces:
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
 For daily radar usage, run `team/scripts/run_literature_radar_cycle.sh` from
-cron, or open `/radar` and use `Run Radar` for an ad hoc check. The cycle script
-runs collection, queue snapshot generation, and the stored brief in one command;
-use `team/scripts/run_literature_radar.sh` or
+cron, enable the user-level systemd
+`ai-side-brain-team-literature-radar-cycle.timer`, or open `/radar` and use
+`Run Radar` for an ad hoc check. The cycle script runs collection, queue
+snapshot generation, and the stored brief in one command; use
+`team/scripts/run_literature_radar.sh` or
 `team/scripts/build_literature_radar_brief.sh` when you need only one phase.
+Install the recommended user timer with
+`infra/systemd/install_user_timers.sh --team-cycle`; run it with `--dry-run`
+first to preview the copy and `systemctl --user` commands.
+Do not enable the Team cycle timer and the separate Team collection timer at
+the same time, because both collect sources.
+Use `team/scripts/check_literature_radar_status.sh` to check saved settings and
+latest-run queue health without collecting sources, downloading PDFs, or calling
+AI. The same combined status payload is available from
+`python team/research_cli.py radar-status --json` and `/radar/status.json`.
 Use `/radar/brief` for a weekly or daily roll-up over stored runs without
 collecting again. `/radar/brief.json?days=7&limit=20` exposes the same stored
 brief for local dashboards or notification scripts. Use `/radar/papers` to

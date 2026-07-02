@@ -1007,6 +1007,57 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertIn("missing required for semantic_scholar_recommendations", text)
         self.assertIn("missing required for openreview", text)
 
+    def test_personal_literature_radar_cli_status_combines_settings_and_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[]):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    now=datetime(2026, 7, 1, 7, 30, tzinfo=timezone.utc),
+                )
+
+            json_stdout = io.StringIO()
+            with contextlib.redirect_stdout(json_stdout):
+                json_code = personal_literature_radar.main(
+                    [
+                        "status",
+                        "--root-path",
+                        str(root),
+                        "--source",
+                        "arxiv",
+                        "--queue-limit",
+                        "9",
+                        "--freshness-max-age-hours",
+                        "24",
+                        "--json",
+                    ]
+                )
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = personal_literature_radar.main(
+                    ["status", "--root-path", str(root), "--source", "arxiv", "--queue-limit", "9"]
+                )
+
+        self.assertEqual(json_code, 0)
+        payload = json.loads(json_stdout.getvalue())
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kind"], "personal_literature_radar_status")
+        self.assertEqual(payload["settings"]["settings"]["sources"], ["arxiv"])
+        self.assertEqual(payload["queue"]["kind"], "personal_literature_radar_queue")
+        self.assertEqual(payload["queue"]["limit"], 9)
+        self.assertEqual(payload["latest_run"]["id"], result["run_id"])
+        self.assertEqual(payload["latest_run"]["freshness"]["max_age_hours"], 24)
+        self.assertNotIn("run_id", payload)
+        self.assertEqual(text_code, 0)
+        text = text_stdout.getvalue()
+        self.assertIn("Personal Literature Radar Status", text)
+        self.assertIn("Personal Literature Radar Settings", text)
+        self.assertIn("Personal Literature Radar Queue", text)
+
     def test_personal_literature_radar_queue_reports_partial_empty_latest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

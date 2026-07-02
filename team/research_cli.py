@@ -42,7 +42,7 @@ from team.literature_radar import (
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
-from team.research_web import build_literature_radar_settings_payload
+from team.research_web import build_literature_radar_settings_payload, build_literature_radar_status_payload
 
 
 DEMO_METADATA = {
@@ -224,6 +224,20 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue.add_argument("--limit", type=int, default=3)
     radar_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_status = subparsers.add_parser(
+        "radar-status",
+        help="show saved Literature Radar settings and latest queue health without collecting",
+    )
+    add_db_args(radar_status)
+    radar_status.add_argument("--limit", type=int, default=20)
+    radar_status.add_argument("--freshness-max-age-hours", type=int, default=36)
+    radar_status.add_argument(
+        "--ignore-saved-defaults",
+        action="store_true",
+        help="use built-in Radar defaults instead of defaults saved by the web UI",
+    )
+    radar_status.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_settings = subparsers.add_parser(
         "radar-settings",
@@ -705,6 +719,20 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print(f"Brief JSON: {links.get('brief_json') or '/radar/brief.json?days=7&limit=20'}")
 
 
+def print_radar_status(result: dict[str, Any]) -> None:
+    print("Team Literature Radar Status")
+    settings = result.get("settings") if isinstance(result.get("settings"), dict) else {}
+    queue = result.get("queue") if isinstance(result.get("queue"), dict) else {}
+    if settings:
+        print_radar_settings(settings)
+    if queue:
+        print("")
+        print_radar_queue(queue)
+    links = result.get("links") if isinstance(result.get("links"), dict) else {}
+    if links:
+        print(f"Status JSON: {links.get('status_json') or '/radar/status.json?limit=20'}")
+
+
 def format_radar_settings_venue_profiles(summary: dict[str, Any]) -> str:
     parts = []
     for key, label in (("dblp_openalex", "DBLP/OpenAlex"), ("openreview", "OpenReview")):
@@ -1068,6 +1096,19 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_radar_queue(result)
+        return 0
+
+    if args.command == "radar-status":
+        result = build_literature_radar_status_payload(
+            database,
+            limit=args.limit,
+            freshness_max_age_hours=args.freshness_max_age_hours,
+            use_saved_defaults=not args.ignore_saved_defaults,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_status(result)
         return 0
 
     if args.command == "radar-settings":

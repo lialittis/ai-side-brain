@@ -55,6 +55,7 @@ python scripts/personal_literature_radar.py settings
 python scripts/personal_literature_radar.py settings --json
 python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py queue
+python scripts/personal_literature_radar.py status --json
 python scripts/personal_literature_radar.py activity --days 7
 python scripts/personal_literature_radar.py activity --days 7 --json
 python scripts/personal_literature_radar.py papers
@@ -82,11 +83,28 @@ scripts/build_personal_literature_radar_brief.sh
 ```
 
 User-level systemd timer templates live under `infra/systemd/user/`; see
-`infra/systemd/README.md`.
+`infra/systemd/README.md`. The recommended daily Personal timer is
+`ai-side-brain-personal-literature-radar-cycle.timer`; install it with:
+
+```bash
+infra/systemd/install_user_timers.sh --personal
+```
 
 The cycle script is the simplest daily command: it runs collection, writes queue
 snapshots, then builds the stored brief. Set `PERSONAL_RADAR_CYCLE_RUN_COLLECTION=0`
 or `PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
+To check Personal Radar readiness and latest-run queue health without collecting
+paper sources, run:
+
+```bash
+scripts/check_personal_literature_radar_status.sh
+```
+
+The status script runs only `settings` and `queue`, writes timestamped plus
+`latest` status/settings/queue snapshots under `memory/06_Logs/`, and does not
+download PDFs or call AI. It also writes combined
+`personal-literature-radar-status-*.json` snapshots from
+`python scripts/personal_literature_radar.py status --json`.
 The run script writes a JSON run result into `memory/06_Logs/`; the Radar adapter
 also writes its Markdown report there unless `PERSONAL_RADAR_NO_REPORT=1` is
 set. Before collection, it writes a read-only
@@ -132,7 +150,10 @@ many active queue papers the run script writes, and
 `PERSONAL_RADAR_ACTIVITY_DAYS` / `PERSONAL_RADAR_ACTIVITY_LIMIT` to change the
 activity snapshot window and size. Use
 `PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
-threshold for queue and brief snapshots. Use `PERSONAL_RADAR_WRITE_SETTINGS=0`
+threshold for queue and brief snapshots. The status script also supports
+`PERSONAL_RADAR_STATUS_OUTPUT_DIR`, `PERSONAL_RADAR_STATUS_QUEUE_LIMIT`, and
+`PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status-only snapshots. Use
+`PERSONAL_RADAR_WRITE_SETTINGS=0`
 to skip preflight snapshots, and `PERSONAL_RADAR_WRITE_ACTIVITY=0` to skip
 activity snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
 to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked

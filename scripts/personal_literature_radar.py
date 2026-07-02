@@ -131,6 +131,40 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     queue.add_argument("--json", action="store_true")
 
+    status = subparsers.add_parser("status", help="show personal radar settings and latest queue health")
+    status.add_argument("--root-path", type=Path, default=ROOT)
+    status.add_argument("--queue-limit", type=int, default=20)
+    status.add_argument("--freshness-max-age-hours", type=int, default=36)
+    status.add_argument("--source-preset", choices=[preset["id"] for preset in radar_source_presets()])
+    status.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    status.add_argument("--max-results", type=int, default=25)
+    status.add_argument("--limit", type=int, default=10)
+    status.add_argument("--summarize", action="store_true")
+    status.add_argument("--summary-provider", choices=["local", "openrouter"], default="local")
+    status.add_argument("--summary-limit", type=int)
+    status.add_argument("--semantic-scholar-api-key")
+    status.add_argument("--dblp-author-pid", action="append", default=[])
+    status.add_argument("--semantic-scholar-author-id", action="append", default=[])
+    status.add_argument("--seed-paper-id", action="append", default=[])
+    status.add_argument("--negative-seed-paper-id", action="append", default=[])
+    status.add_argument("--source-contact-email")
+    status.add_argument("--openalex-mailto")
+    status.add_argument("--openalex-author-id", action="append", default=[])
+    status.add_argument("--openreview-invitation", action="append", default=[])
+    status.add_argument("--openreview-venue-profile", action="append", default=[])
+    status.add_argument("--include-openreview-unaccepted", action="store_true")
+    status.add_argument("--crossref-mailto")
+    status.add_argument("--unpaywall-email")
+    status.add_argument("--cache-pdfs", action="store_true")
+    status.add_argument("--pdf-cache-dir", type=Path)
+    status.add_argument("--pdf-cache-max-bytes", type=int, default=50 * 1024 * 1024)
+    status.add_argument("--conference-year", type=int)
+    status.add_argument("--venue-profile", action="append", default=[])
+    status.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    status.add_argument("--topic-profile", type=Path)
+    status.add_argument("--no-report", action="store_true")
+    status.add_argument("--json", action="store_true")
+
     activity = subparsers.add_parser("activity", help="show recent personal radar review activity")
     activity.add_argument("--root-path", type=Path, default=ROOT)
     activity.add_argument("--days", type=int, default=7, help="review activity window in days")
@@ -289,6 +323,28 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
     )
 
 
+def build_personal_literature_radar_status_payload(args: argparse.Namespace) -> dict[str, Any]:
+    queue_limit = max(1, int(args.queue_limit))
+    settings_payload = build_personal_literature_radar_settings_payload(args)
+    queue_payload = build_personal_literature_radar_queue_payload(
+        args.root_path,
+        limit=queue_limit,
+        freshness_max_age_hours=args.freshness_max_age_hours,
+    )
+    return {
+        "success": True,
+        "kind": "personal_literature_radar_status",
+        "settings": settings_payload,
+        "queue": queue_payload,
+        "latest_run": queue_payload.get("latest_run") if isinstance(queue_payload, dict) else None,
+        "review_counts": queue_payload.get("review_counts") if isinstance(queue_payload, dict) else {},
+        "paths": {
+            "root": str(args.root_path),
+            "topic_profile": str(args.topic_profile) if args.topic_profile else "indexes/literature-radar-topic-profile.json",
+        },
+    }
+
+
 def personal_radar_settings_venue_profile_summary(
     dblp_venue_profiles: list[str] | None,
     openreview_venue_profiles: list[str] | None,
@@ -337,6 +393,24 @@ def print_settings(result: dict[str, Any]) -> None:
                 f"! recommended for {entry.get('source_id')}: "
                 f"{entry.get('label') or entry.get('key')}"
             )
+
+
+def print_status(result: dict[str, Any]) -> None:
+    print("Personal Literature Radar Status")
+    settings = result.get("settings") if isinstance(result.get("settings"), dict) else {}
+    queue = result.get("queue") if isinstance(result.get("queue"), dict) else {}
+    if settings:
+        print_settings(settings)
+    if queue:
+        print("")
+        print_personal_queue(
+            queue.get("papers") or [],
+            review_counts=queue.get("review_counts") or {},
+            review=str(queue.get("review") or ""),
+            latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
+            access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
+            provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
+        )
 
 
 def format_settings_venue_profiles(summary: dict[str, Any]) -> str:
@@ -739,6 +813,14 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_settings(result)
+        return 0
+
+    if args.command == "status":
+        result = build_personal_literature_radar_status_payload(args)
+        if args.json:
+            print_json(result)
+        else:
+            print_status(result)
         return 0
 
     if args.command == "review":

@@ -36,12 +36,122 @@ if command in {"queue", "radar-queue"} and "--json" not in args:
     print(f"{command} text queue")
 elif command in {"settings", "radar-settings"} and "--json" not in args:
     print(f"{command} text settings")
+elif command in {"status", "radar-status"} and "--json" not in args:
+    print(f"{command} text status")
 else:
     print(json.dumps({"args": args, "command": command, "script": args[0] if args else ""}, sort_keys=True))
 """
 
 
 class LiteratureRadarScriptTest(unittest.TestCase):
+    def test_team_status_script_writes_non_collecting_status_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(workspace, ["team/scripts/check_literature_radar_status.sh"])
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "team-status"
+
+            run_script(
+                workspace / "team/scripts/check_literature_radar_status.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "RADAR_STATUS_OUTPUT_DIR": str(output_dir),
+                    "RADAR_STATUS_QUEUE_LIMIT": "17",
+                    "RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "48",
+                    "RADAR_USE_SAVED_DEFAULTS": "1",
+                    "RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_settings = read_json(output_dir / "literature-radar-status-settings-latest.json")
+            latest_queue = read_json(output_dir / "literature-radar-status-queue-latest.json")
+            latest_status_json = read_json(output_dir / "literature-radar-status-latest.json")
+            latest_status = (output_dir / "literature-radar-status-latest.txt").read_text(encoding="utf-8")
+
+            self.assertEqual(latest_settings["command"], "radar-settings")
+            self.assertIn("--use-saved-defaults", latest_settings["args"])
+            self.assertEqual(latest_queue["command"], "radar-queue")
+            self.assertIn("--limit", latest_queue["args"])
+            self.assertIn("17", latest_queue["args"])
+            self.assertIn("--freshness-max-age-hours", latest_queue["args"])
+            self.assertIn("48", latest_queue["args"])
+            self.assertEqual(latest_status_json["command"], "radar-status")
+            self.assertIn("--limit", latest_status_json["args"])
+            self.assertIn("17", latest_status_json["args"])
+            self.assertIn("radar-status text status", latest_status)
+            self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-", ".txt"))
+            self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-", ".json"))
+            self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-queue-", ".json"))
+
+    def test_team_status_script_can_ignore_saved_defaults_for_combined_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(workspace, ["team/scripts/check_literature_radar_status.sh"])
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "team-status"
+
+            run_script(
+                workspace / "team/scripts/check_literature_radar_status.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "RADAR_STATUS_OUTPUT_DIR": str(output_dir),
+                    "RADAR_STATUS_USE_SAVED_DEFAULTS": "0",
+                    "RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_settings = read_json(output_dir / "literature-radar-status-settings-latest.json")
+            latest_status_json = read_json(output_dir / "literature-radar-status-latest.json")
+
+            self.assertEqual(latest_settings["command"], "radar-settings")
+            self.assertNotIn("--use-saved-defaults", latest_settings["args"])
+            self.assertEqual(latest_status_json["command"], "radar-status")
+            self.assertIn("--ignore-saved-defaults", latest_status_json["args"])
+
+    def test_personal_status_script_writes_non_collecting_status_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(workspace, ["scripts/check_personal_literature_radar_status.sh"])
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "personal-status"
+
+            run_script(
+                workspace / "scripts/check_personal_literature_radar_status.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "PERSONAL_RADAR_ROOT": str(workspace),
+                    "PERSONAL_RADAR_STATUS_OUTPUT_DIR": str(output_dir),
+                    "PERSONAL_RADAR_STATUS_QUEUE_LIMIT": "11",
+                    "PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "72",
+                    "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
+                    "PERSONAL_RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_settings = read_json(output_dir / "personal-literature-radar-status-settings-latest.json")
+            latest_queue = read_json(output_dir / "personal-literature-radar-status-queue-latest.json")
+            latest_status_json = read_json(output_dir / "personal-literature-radar-status-latest.json")
+            latest_status = (output_dir / "personal-literature-radar-status-latest.txt").read_text(encoding="utf-8")
+
+            self.assertEqual(latest_settings["command"], "settings")
+            self.assertIn("--source-preset", latest_settings["args"])
+            self.assertIn("security_memory_agentic_daily", latest_settings["args"])
+            self.assertEqual(latest_queue["command"], "queue")
+            self.assertIn("--limit", latest_queue["args"])
+            self.assertIn("11", latest_queue["args"])
+            self.assertIn("--freshness-max-age-hours", latest_queue["args"])
+            self.assertIn("72", latest_queue["args"])
+            self.assertEqual(latest_status_json["command"], "status")
+            self.assertIn("--queue-limit", latest_status_json["args"])
+            self.assertIn("11", latest_status_json["args"])
+            self.assertIn("status text status", latest_status)
+            self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".txt"))
+            self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".json"))
+            self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-queue-", ".json"))
+
     def test_team_scripts_refresh_latest_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspace"

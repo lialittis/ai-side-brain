@@ -17,6 +17,7 @@ from shared.literature_radar import (
 )
 from team import research_cli
 from team.literature_radar import (
+    DEFAULT_RADAR_SOURCES,
     apply_team_radar_source_preset,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
@@ -2071,6 +2072,84 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
         )
         self.assertNotIn("secret-key", json.dumps(preset_payload))
+
+    def test_cli_radar_status_combines_settings_and_queue_without_running_collectors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            database.set_team_setting(
+                "literature_radar_defaults",
+                {
+                    "sources": ["arxiv", "openalex"],
+                    "source_contact_email": "radar@example.org",
+                    "max_results": 7,
+                    "limit": 3,
+                },
+            )
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            run = database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                report="empty",
+                status="succeeded",
+                now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
+            )
+
+            json_stdout = io.StringIO()
+            with contextlib.redirect_stdout(json_stdout):
+                json_code = research_cli.main(
+                    [
+                        "radar-status",
+                        "--db-path",
+                        str(db_path),
+                        "--limit",
+                        "9",
+                        "--freshness-max-age-hours",
+                        "24",
+                        "--json",
+                    ]
+                )
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = research_cli.main(["radar-status", "--db-path", str(db_path), "--limit", "9"])
+
+            ignore_stdout = io.StringIO()
+            with contextlib.redirect_stdout(ignore_stdout):
+                ignore_code = research_cli.main(
+                    [
+                        "radar-status",
+                        "--db-path",
+                        str(db_path),
+                        "--ignore-saved-defaults",
+                        "--json",
+                    ]
+                )
+
+        self.assertEqual(json_code, 0)
+        payload = json.loads(json_stdout.getvalue())
+        self.assertEqual(payload["kind"], "team_literature_radar_status")
+        self.assertEqual(payload["settings"]["settings"]["sources"], ["arxiv", "openalex"])
+        self.assertEqual(payload["queue"]["kind"], "team_literature_radar_queue")
+        self.assertEqual(payload["queue"]["limit"], 9)
+        self.assertEqual(payload["latest_run"]["id"], run["id"])
+        self.assertEqual(payload["latest_run"]["freshness"]["max_age_hours"], 24)
+        self.assertNotIn("run_id", payload)
+        self.assertEqual(text_code, 0)
+        text = text_stdout.getvalue()
+        self.assertIn("Team Literature Radar Status", text)
+        self.assertIn("Team Literature Radar Settings", text)
+        self.assertIn("Team Literature Radar Queue", text)
+        self.assertIn("Status JSON: /radar/status.json?limit=9", text)
+        self.assertEqual(ignore_code, 0)
+        ignore_payload = json.loads(ignore_stdout.getvalue())
+        self.assertEqual(ignore_payload["settings"]["settings"]["sources"], list(DEFAULT_RADAR_SOURCES))
+        self.assertNotEqual(ignore_payload["settings"]["settings"]["sources"], ["arxiv", "openalex"])
 
     def test_cli_radar_run_explicit_args_override_saved_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

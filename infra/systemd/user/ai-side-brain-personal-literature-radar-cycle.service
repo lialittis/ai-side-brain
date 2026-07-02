@@ -1,0 +1,8 @@
+[Unit]
+Description=AI Side-Brain Personal Literature Radar Daily Cycle
+Documentation=file:%h/workspace/ai-side-brain/personal/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/ai-side-brain
+ExecStart=%h/workspace/ai-side-brain/scripts/run_personal_literature_radar_cycle.sh

@@ -21,6 +21,7 @@ from team.research_web import (
     add_paper_tag,
     add_team_interest,
     build_literature_radar_settings_payload,
+    build_literature_radar_status_payload,
     canonical_pdf_url,
     render_interests_page,
     render_latest_papers_page,
@@ -253,6 +254,13 @@ class TeamResearchWebTest(unittest.TestCase):
                     settings_payload = json.loads(response.read().decode("utf-8"))
                     settings_content_type = response.headers.get("Content-Type")
                     settings_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/status.json?limit=1&freshness_max_age_hours=12",
+                    timeout=5,
+                ) as response:
+                    status_payload = json.loads(response.read().decode("utf-8"))
+                    status_content_type = response.headers.get("Content-Type")
+                    status_status = response.status
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -327,6 +335,15 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(settings_payload["links"]["html"], "/radar")
             self.assertEqual(settings_payload["links"]["activity_json"], "/radar/activity.json?days=7&limit=50")
             self.assertEqual(settings_payload["supported_source_ids"], radar_supported_source_ids())
+            self.assertEqual(status_status, 200)
+            self.assertEqual(status_content_type, "application/json")
+            self.assertTrue(status_payload["success"])
+            self.assertEqual(status_payload["kind"], "team_literature_radar_status")
+            self.assertEqual(status_payload["settings"]["kind"], "team_literature_radar_settings")
+            self.assertEqual(status_payload["queue"]["kind"], "team_literature_radar_queue")
+            self.assertEqual(status_payload["queue"]["limit"], 1)
+            self.assertEqual(status_payload["latest_run"]["id"], run["id"])
+            self.assertEqual(status_payload["links"]["status_json"], "/radar/status.json?limit=1")
             self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
             self.assertEqual(settings_payload["trend_signal_options"][0]["collector_status"], "not_implemented")
             self.assertEqual(settings_payload["source_readiness"]["status"], "ready_with_warnings")
@@ -845,6 +862,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["links"]["html"], "/radar")
         self.assertEqual(payload["links"]["queue_html"], "/radar/queue?limit=20")
         self.assertEqual(payload["links"]["queue_json"], "/radar/queue.json?limit=20")
+        self.assertEqual(payload["links"]["status_json"], "/radar/status.json?limit=20")
         self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openalex"])
         self.assertEqual(payload["collection_config"]["seed_paper_ids"], ["seed-1"])
         self.assertTrue(payload["collection_config"]["openalex_mailto_configured"])
@@ -878,6 +896,50 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
         self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
         self.assertNotIn("secret-s2-key", json.dumps(payload))
+
+    def test_literature_radar_status_payload_combines_settings_and_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.set_team_setting(
+                RADAR_SETTINGS_KEY,
+                {
+                    "sources": ["arxiv", "openalex"],
+                    "source_contact_email": "radar@example.org",
+                    "max_results": 5,
+                    "limit": 3,
+                },
+            )
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            run = database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                report="empty",
+                status="succeeded",
+                now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
+            )
+
+            payload = build_literature_radar_status_payload(
+                database,
+                limit=7,
+                now=datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc),
+                freshness_max_age_hours=24,
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["kind"], "team_literature_radar_status")
+        self.assertEqual(payload["settings"]["kind"], "team_literature_radar_settings")
+        self.assertEqual(payload["settings"]["settings"]["sources"], ["arxiv", "openalex"])
+        self.assertEqual(payload["queue"]["kind"], "team_literature_radar_queue")
+        self.assertEqual(payload["queue"]["limit"], 7)
+        self.assertEqual(payload["latest_run"]["id"], run["id"])
+        self.assertEqual(payload["latest_run"]["freshness"]["max_age_hours"], 24)
+        self.assertEqual(payload["links"]["status_json"], "/radar/status.json?limit=7")
+        self.assertNotIn("radar@example.org", json.dumps(payload["settings"]["collection_config"]))
 
     def test_literature_radar_web_run_can_save_source_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
