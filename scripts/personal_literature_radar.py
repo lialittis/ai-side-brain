@@ -32,6 +32,7 @@ from shared.literature_radar import (
     build_radar_preflight_payload,
     format_radar_context_summary,
     format_radar_run_health_action,
+    format_radar_source_provenance_summary,
     format_radar_source_policy,
     format_radar_source_coverage,
     format_radar_source_readiness,
@@ -44,6 +45,7 @@ from shared.literature_radar import (
     radar_source_preset,
     radar_source_presets,
     radar_supported_source_ids,
+    source_provenance_report_text,
 )
 
 
@@ -413,6 +415,10 @@ def print_paper_history(
             f"review={record.get('review_status') or 'unreviewed'} | "
             f"latest={record.get('latest_seen_at')}{latest_signal} | action={action} | {record.get('title')}"
         )
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+        if provenance:
+            print(f"  Source provenance: {source_provenance_report_text(provenance)}")
         review_reason = str(record.get("review_reason") or "").strip()
         if not review_reason and isinstance(record.get("review"), dict):
             review_reason = str(record["review"].get("reason") or "").strip()
@@ -429,6 +435,7 @@ def print_personal_queue(
     review: str,
     latest_run: dict[str, Any] | None = None,
     access_summary: dict[str, Any] | None = None,
+    provenance_summary: dict[str, Any] | None = None,
 ) -> None:
     print("Personal Literature Radar Queue")
     print(
@@ -477,6 +484,8 @@ def print_personal_queue(
             print(format_radar_source_readiness(source_readiness))
     if access_summary:
         print(format_personal_queue_access_summary(access_summary))
+    if provenance_summary:
+        print(format_radar_source_provenance_summary(provenance_summary))
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
@@ -671,6 +680,7 @@ def main(argv: list[str] | None = None) -> int:
                 review=str(queue.get("review") or ""),
                 latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
                 access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
+                provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
             )
         return 0
 

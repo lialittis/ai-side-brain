@@ -32,6 +32,13 @@ This means radar-discovered papers can reuse the current Team UI:
 - optional local or OpenRouter summaries based on available metadata and scoring
   context.
 
+Radar provenance includes the normalized source class, authoritative-metadata
+flag, source URL, landing/DOI/arXiv/publisher/PDF links, OA status, license,
+and collection timestamp from the shared core. PDF-access records also copy the
+source ID/class and provenance timestamp used for the legal download decision.
+Radar run cards, paper history, the daily queue, and imported Latest Papers
+cards expose that provenance as compact source pills with detailed tooltips.
+
 ## Web Review Workflow
 
 The web UI exposes stored radar runs at:
@@ -124,14 +131,17 @@ The same active queue is available as local JSON at `/radar/queue.json?limit=20`
 for self-hosted scripts, dashboards, or future notifications. That endpoint only
 reads stored Radar state; it does not collect sources, download PDFs, or call AI.
 The payload includes `review_counts`, active-queue `access_summary`,
+`provenance_summary`,
 `latest_run` health, freshness, and source stats, the active paper records,
 persisted signal lines, and links back to the HTML review surfaces.
+Completed runs also store a recommendation-level `provenance_summary`, exposed
+again under `latest_run.provenance_summary` for dashboards and health checks.
 Stored daily or weekly briefs are also available as local JSON at
 `/radar/brief.json?days=7&limit=20`. That endpoint reads the same stored runs as
 the HTML brief and CLI `radar-brief --json`; it does not collect sources,
 download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
 health and freshness, limits, run count, review counts, the active queue preview
-with PDF access summary, recent team Radar activity from the audit log, and
+with PDF access summary, aggregate `provenance_summary`, recent team Radar activity from the audit log, and
 links back to the Team Radar pages. The Markdown brief also includes a Team
 Activity section when watch, dismiss, clear, or import decisions occurred inside
 the requested window.
@@ -443,10 +453,10 @@ venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
 were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
 Brief`. The browser brief shows a compact health summary before the Markdown:
-latest-run freshness, source coverage, review queue counts, and PDF access for
-the active queue. The matching JSON payload is available through `Brief JSON`,
-so team members can review it without using the CLI while local automation can
-consume the same stored-roll-up contract.
+latest-run freshness, source coverage, review queue counts, source provenance,
+and PDF access for the active queue. The matching JSON payload is available
+through `Brief JSON`, so team members can review it without using the CLI while
+local automation can consume the same stored-roll-up contract.
 
 ## Scheduling
 
@@ -478,7 +488,7 @@ for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
 includes latest-run health/freshness, source-error counts, PDF access summary, stored summary,
 relevance/context signal, and matched interests for daily review. The JSON
 snapshot uses the same queue payload as `radar-queue --json`, including
-`latest_run` health, `access_summary`, plus per-paper `signal_lines`. Stable
+`latest_run` health, `access_summary`, `provenance_summary`, plus per-paper `signal_lines`. Stable
 `literature-radar-settings-latest.json` and `literature-radar-queue-latest.*`
 files are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT`
 to change how many active queue papers are included.

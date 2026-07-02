@@ -32,16 +32,21 @@ from shared.literature_radar import (
     create_radar_paper,
     default_radar_topic_profile,
     dblp_venue_profiles,
+    enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
+    format_radar_source_provenance_summary,
     format_radar_source_coverage,
     format_radar_source_stats,
     merge_duplicate_papers,
     mvp_source_ids,
+    paper_source_provenance,
     pdf_access_report_text,
     radar_dblp_venue_profile_selection_summary,
     radar_context_summary,
     radar_source_policy_summary,
+    radar_source_provenance_summary,
+    radar_history_source_provenance_summary,
     radar_source_blocked_readiness,
     radar_source_preset,
     radar_source_presets,
@@ -663,6 +668,42 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             },
         )
 
+    def test_summarizes_source_provenance_for_queue_records(self) -> None:
+        arxiv_paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00055",
+            title="Provenance Summary arXiv",
+            identifiers={"arxiv_id": "2601.00055"},
+            links={
+                "arxiv": "https://arxiv.org/abs/2601.00055",
+                "pdf": "https://arxiv.org/pdf/2601.00055.pdf",
+            },
+        )
+        trend_record = {
+            "paper": {
+                "source_provenance": {
+                    "source_id": "hugging_face_papers",
+                    "source_class": "trend_signal",
+                    "authoritative_metadata": False,
+                    "source_url": "https://huggingface.co/papers/example",
+                }
+            }
+        }
+
+        summary = radar_source_provenance_summary([{"paper": arxiv_paper}, trend_record, {"title": "missing"}])
+
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["authoritative"], 1)
+        self.assertEqual(summary["secondary"], 1)
+        self.assertEqual(summary["with_source_url"], 2)
+        self.assertEqual(summary["with_pdf_url"], 1)
+        self.assertEqual(summary["source_ids"], {"arxiv": 1, "hugging_face_papers": 1})
+        self.assertEqual(summary["source_classes"], {"primary_metadata": 1, "trend_signal": 1})
+        formatted = format_radar_source_provenance_summary(summary)
+        self.assertIn("Source provenance:", formatted)
+        self.assertIn("authoritative=1", formatted)
+        self.assertIn("classes=primary_metadata=1, trend_signal=1", formatted)
+
     def test_reports_radar_run_freshness(self) -> None:
         now = datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc)
 
@@ -778,6 +819,36 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(merged[0]["links"]["landing"], "https://doi.org/10.1145/example")
         self.assertEqual(merged[0]["links"]["pdf"], "https://example.org/open.pdf")
 
+    def test_records_normalized_source_provenance_for_collected_papers(self) -> None:
+        paper = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/provenance",
+            title="Provenance Paper",
+            identifiers={"doi": "10.1145/provenance"},
+            links={
+                "landing": "https://publisher.example/provenance",
+                "doi": "https://doi.org/10.1145/provenance",
+                "pdf": "https://publisher.example/provenance.pdf",
+                "license": "cc-by",
+                "oa_status": "gold",
+            },
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            source_record={"source_id": "crossref", "source_paper_id": "10.1145/provenance"},
+        )
+
+        provenance = paper_source_provenance(paper)
+
+        self.assertEqual(provenance["source_id"], "crossref")
+        self.assertEqual(provenance["source_class"], "primary_metadata")
+        self.assertTrue(provenance["authoritative_metadata"])
+        self.assertEqual(provenance["source_url"], "https://publisher.example/provenance")
+        self.assertEqual(provenance["doi_url"], "https://doi.org/10.1145/provenance")
+        self.assertEqual(provenance["pdf_url"], "https://publisher.example/provenance.pdf")
+        self.assertEqual(provenance["license"], "cc-by")
+        self.assertEqual(provenance["oa_status"], "gold")
+        self.assertEqual(provenance["collected_at"], "2026-07-01T12:00:00+00:00")
+        self.assertEqual(paper["source_provenance"], provenance)
+
     def test_deduplicates_title_only_venue_record_with_identifier_metadata(self) -> None:
         venue_record = create_radar_paper(
             source_id="dblp_venues",
@@ -814,6 +885,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [record["source_id"] for record in merged[0]["source_records"]],
             ["dblp_venues", "crossref"],
         )
+        self.assertEqual(len(merged[0]["source_provenance_records"]), 2)
+        self.assertEqual(
+            [record["source_id"] for record in merged[0]["source_provenance_records"]],
+            ["dblp_venues", "crossref"],
+        )
+        self.assertEqual(merged[0]["source_provenance"]["source_id"], "dblp_venues")
 
     def test_title_alias_dedupe_does_not_merge_conflicting_strong_identifiers(self) -> None:
         first = create_radar_paper(
@@ -901,6 +978,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(arxiv_decision["local_pdf_path"], "")
         self.assertFalse(arxiv_decision["downloaded"])
         self.assertEqual(arxiv_decision["download_reason"], "download_not_requested")
+        self.assertEqual(arxiv_decision["source_id"], "arxiv")
+        self.assertEqual(arxiv_decision["source_class"], "primary_metadata")
+        self.assertTrue(arxiv_decision["authoritative_metadata"])
+        self.assertEqual(arxiv_decision["provenance_collected_at"], arxiv_paper["discovered_at"])
         decision = assess_pdf_access(publisher_paper)
         self.assertFalse(decision["can_download"])
         self.assertEqual(decision["access_kind"], "restricted_pdf")
@@ -994,6 +1075,42 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(source_stats[0]["attempted_count"], 2)
         self.assertEqual(source_stats[0]["failed_count"], 1)
         self.assertEqual(source_stats[0]["skipped_no_doi_count"], 1)
+
+    def test_unpaywall_enrichment_refreshes_source_provenance_with_oa_pdf(self) -> None:
+        paper = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/stale-publisher-pdf",
+            title="Stale Publisher PDF",
+            identifiers={"doi": "10.1145/stale-publisher-pdf"},
+            links={
+                "landing": "https://publisher.example/stale",
+                "pdf": "https://publisher.example/stale.pdf",
+            },
+        )
+
+        def fetcher(_url: str) -> bytes:
+            return b"""{
+              "doi": "10.1145/stale-publisher-pdf",
+              "is_oa": true,
+              "oa_status": "green",
+              "best_oa_location": {
+                "url": "https://repository.example/stale",
+                "url_for_pdf": "https://repository.example/stale.pdf",
+                "license": "cc-by"
+              }
+            }"""
+
+        enriched = enrich_paper_with_unpaywall(
+            paper,
+            email="radar@example.org",
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(enriched["source_provenance"]["pdf_url"], "https://repository.example/stale.pdf")
+        self.assertEqual(enriched["source_provenance"]["oa_pdf_url"], "https://repository.example/stale.pdf")
+        self.assertEqual(enriched["source_provenance"]["license"], "cc-by")
+        self.assertEqual(enriched["source_provenance"]["oa_status"], "green")
 
     def test_radar_source_error_records_timestamp(self) -> None:
         error = radar_source_error(
@@ -1633,6 +1750,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("trend_signals=1", brief)
         self.assertIn("Trend signals are secondary context", brief)
         self.assertIn("`hugging_face_papers`", brief)
+        self.assertIn("Source Provenance", brief)
+        self.assertIn("Source provenance: | total=2 | authoritative=2", brief)
+        self.assertIn("sources=arxiv=2", brief)
         self.assertIn("Source Coverage", brief)
         self.assertIn("status=partial; sources=2/4", brief)
         self.assertIn("failed=dblp", brief)
@@ -1653,7 +1773,25 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Why: Strong weekly match for memory safety.", brief)
         self.assertIn("Matched: memory safety", brief)
         self.assertIn("PDF policy: download allowed", brief)
+        self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", brief)
         self.assertNotIn("run_old", brief)
+
+        provenance_summary = radar_history_source_provenance_summary(
+            [
+                {
+                    "run": {
+                        "id": "run_recent",
+                        "started_at": "2026-07-01T09:00:00+00:00",
+                    },
+                    "recommendations": [recommendation, watch_recommendation],
+                }
+            ],
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+        )
+        self.assertEqual(provenance_summary["run_count"], 1)
+        self.assertEqual(provenance_summary["authoritative"], 2)
+        self.assertEqual(provenance_summary["source_ids"], {"arxiv": 2})
 
 
 if __name__ == "__main__":

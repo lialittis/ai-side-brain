@@ -171,7 +171,11 @@ papers from the priority list. The text queue includes the PDF access summary
 and stored signal lines for why each paper is relevant, how it relates to
 existing context, and which interests matched; the JSON queue includes the same
 lines under `signal_lines`. The JSON queue also includes `access_summary`, which counts downloadable,
-cached, metadata/link-only, and access-kind buckets for the active queue. Both
+cached, metadata/link-only, and access-kind buckets for the active queue, plus
+`provenance_summary`, which counts authoritative/secondary source provenance,
+source classes, source IDs, and records with source/PDF URLs. Completed run
+records also store the recommendation-level provenance summary, and
+`latest_run.provenance_summary` exposes it for daily health checks. Both
 text and JSON queue output include latest-run health/freshness, source-error
 counts, compact source readiness, and compact source coverage, so scheduled
 queue snapshots distinguish misconfiguration, an empty healthy queue, and a
@@ -194,6 +198,10 @@ whether the file was cached, skipped, or not legally downloadable. Access
 kind distinguishes arXiv/open repository PDFs, arXiv-only links, confirmed OA PDFs, restricted
 publisher PDFs, DOI-only links, publisher-only links, local PDFs, and
 metadata-only records.
+Each collected paper also carries shared `source_provenance` with source class,
+authoritative-metadata status, source URL, landing/DOI/arXiv/publisher/PDF
+links, OA status, license, and collection timestamp. PDF-access records copy the
+source ID/class and provenance timestamp used for the legal download decision.
 If one source fails during a multi-source run, Personal Radar records the run as
 `partial`, keeps recommendations from successful sources, records per-source
 candidate counts, appends source coverage to reports and briefs, and appends
@@ -203,7 +211,8 @@ collecting again; it includes relevance, novelty, review state, stored signal
 lines, attention summaries, context, recent review activity, source policy, venue coverage, and PDF
 policy for the top stored recommendations. `brief --json` returns the same Markdown plus latest-run
 health/freshness, review counts, active queue preview with PDF access summary,
-recent activity, structured `context_summary`, `source_policy`, and
+source provenance summary, recent activity, structured `context_summary`,
+`source_policy`, aggregate `provenance_summary`, and
 `source_coverage` for every run in the brief window, and paths to the local run
 index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also

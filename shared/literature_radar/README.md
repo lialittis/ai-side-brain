@@ -65,6 +65,20 @@ also supports seed-paper recommendation expansion through the official
 Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
 DOI-bearing papers without downloading files. Product adapters own scheduling,
 credentials, storage, and UI.
+Every collected paper carries normalized `source_provenance` with source class,
+authoritative-metadata status, source URL, landing/DOI/arXiv/publisher/PDF
+links, OA status, license, and collection timestamp. When deduplication merges
+records from multiple providers, `source_provenance_records` preserves each
+provider's provenance while the merged paper keeps a compact primary
+`source_provenance` for UI/report consumers.
+The shared queue/brief helpers also build `provenance_summary` so Personal and
+Team dashboards can audit whether active recommendations came from
+authoritative API/accepted-page sources or secondary signals.
+Completed Personal and Team run records store the same summary for all ranked
+recommendations, so later weekly briefs and latest-run health views remain
+auditable even after the active queue changes. Stored history briefs include a
+`Source Provenance` section that aggregates this evidence across the brief
+window before listing individual recommendation provenance.
 Venue-profile collectors annotate paper source records with conference profile,
 group, and year metadata. The shared core turns that into venue coverage
 summaries so Personal and Team runs can show which top-conference profiles
@@ -217,7 +231,10 @@ unauthorized sources must not be downloaded or redistributed.
 collection. Its record includes `source_url`, `access_date`, `license`,
 `oa_status`, `pdf_url`, `local_pdf_path`, `downloaded`, `can_download`,
 `access_kind`, the legal-access reason, and `download_reason` explaining whether
-the file was cached, skipped, or not legally downloadable.
+the file was cached, skipped, or not legally downloadable. The decision also
+copies source provenance identifiers such as `source_id`, `source_class`,
+`authoritative_metadata`, and `provenance_collected_at`, so later Personal or
+Team storage can audit which source path supported the copyright decision.
 `access_kind` distinguishes local PDFs, arXiv/open repository PDFs, arXiv-only
 links, confirmed open-access PDFs, restricted publisher PDFs, DOI-only links,
 publisher-only links, and metadata-only records.

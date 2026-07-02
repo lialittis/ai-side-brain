@@ -17,12 +17,14 @@ if str(ROOT) not in sys.path:
 from shared.literature_radar import (
     format_radar_context_summary,
     format_radar_run_health_action,
+    format_radar_source_provenance_summary,
     format_radar_source_policy,
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
     radar_latest_signal_lines,
     radar_supported_source_ids,
+    source_provenance_report_text,
 )
 from shared.research import topic_profile_by_id
 from team.literature_radar import (
@@ -522,6 +524,10 @@ def print_radar_papers(
             f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
             f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+        if provenance:
+            print(f"  Source provenance: {source_provenance_report_text(provenance)}")
         review_reason = str(record.get("review_reason") or "").strip()
         if not review_reason and isinstance(record.get("review"), dict):
             review_reason = str(record["review"].get("reason") or "").strip()
@@ -581,6 +587,9 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     access_summary = result.get("access_summary") if isinstance(result.get("access_summary"), dict) else {}
     if access_summary:
         print(format_radar_queue_access_summary(access_summary))
+    provenance_summary = result.get("provenance_summary") if isinstance(result.get("provenance_summary"), dict) else {}
+    if provenance_summary:
+        print(format_radar_source_provenance_summary(provenance_summary))
     review = str(result.get("review") or "")
     if not review:
         print("No active unreviewed or watched Radar papers.")

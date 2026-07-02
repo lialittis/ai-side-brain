@@ -28,6 +28,7 @@ from shared.literature_radar import (
     build_radar_preflight_payload,
     build_radar_review_queue,
     format_radar_context_summary,
+    format_radar_source_provenance_summary,
     openreview_venue_profile_selection_summary,
     radar_dblp_venue_profile_selection_summary,
     radar_pdf_access_summary,
@@ -1272,6 +1273,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     source_coverage = payload.get("source_coverage") if isinstance(payload.get("source_coverage"), dict) else {}
     source_policy = payload.get("source_policy") if isinstance(payload.get("source_policy"), dict) else {}
+    provenance_summary = payload.get("provenance_summary") if isinstance(payload.get("provenance_summary"), dict) else {}
     context_summary = payload.get("context_summary") if isinstance(payload.get("context_summary"), dict) else {}
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
@@ -1313,6 +1315,14 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">authoritative: {int(source_policy.get("authoritative_count") or 0)}</span>
         <span class="tag">trend: {int(source_policy.get("trend_signal_count") or 0)}</span>
         <span class="tag">unknown: {int(source_policy.get("unknown_count") or 0)}</span>
+      </div>
+      <div class="tags" title="{html_escape(format_radar_source_provenance_summary(provenance_summary))}">
+        <span class="muted">Source provenance:</span>
+        <span class="tag">runs: {int(provenance_summary.get("run_count") or 0)}</span>
+        <span class="tag">authoritative: {int(provenance_summary.get("authoritative") or 0)}</span>
+        <span class="tag">secondary: {int(provenance_summary.get("secondary") or 0)}</span>
+        <span class="tag">source URLs: {int(provenance_summary.get("with_source_url") or 0)}</span>
+        <span class="tag">PDF URLs: {int(provenance_summary.get("with_pdf_url") or 0)}</span>
       </div>
       <div class="tags" title="{html_escape(format_radar_context_summary(context_summary))}">
         <span class="muted">Context:</span>
@@ -1559,7 +1569,10 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
         </div>
         {render_radar_review_reason(review)}
         {render_radar_paper_latest_signal(record.get("latest_recommendation"))}
-        <div class="radar-links">{links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review, review_filter=review_filter)}</div>
+        <div class="radar-links">
+          {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
+          {links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review, review_filter=review_filter)}
+        </div>
       </div>
     </article>
     """
@@ -2195,6 +2208,7 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
           {render_pdf_access_pill(pdf_access)}
           <span class="pill">Action: {html_escape(action)}</span>
           {render_radar_source_pills(paper)}
+          {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
           {render_radar_links(paper)}
           {render_radar_import_control(record, imported_item_id)}
           {render_radar_review_controls(record.get("dedupe_key") or "", run_id=record.get("run_id") or "", review=review)}
@@ -2362,10 +2376,36 @@ def render_pdf_access_pill(pdf_access: dict[str, Any]) -> str:
             f"license: {pdf_access.get('license') or 'unknown'}",
             f"local: {pdf_access.get('local_pdf_path') or 'none'}",
             f"accessed: {pdf_access.get('access_date') or 'unknown'}",
+            f"source class: {pdf_access.get('source_class') or 'unknown'}",
+            f"provenance: {pdf_access.get('provenance_collected_at') or 'unknown'}",
         ]
         if part
     )
     return f'<span class="pill {css}" title="{html_escape(details)}">PDF: {html_escape(reason)}</span>'
+
+
+def render_radar_source_provenance_pill(provenance: dict[str, Any]) -> str:
+    if not provenance:
+        return ""
+    source_id = str(provenance.get("source_id") or "unknown")
+    source_class = str(provenance.get("source_class") or "unknown").replace("_", " ")
+    authoritative = "authoritative" if provenance.get("authoritative_metadata") else "secondary"
+    details = " | ".join(
+        part
+        for part in [
+            f"source: {provenance.get('source_name') or source_id}",
+            f"class: {source_class}",
+            f"metadata: {authoritative}",
+            f"url: {provenance.get('source_url') or 'unknown'}",
+            f"pdf: {provenance.get('pdf_url') or 'none'}",
+            f"oa: {provenance.get('oa_status') or 'unknown'}",
+            f"license: {provenance.get('license') or 'unknown'}",
+            f"collected: {provenance.get('collected_at') or 'unknown'}",
+        ]
+        if part
+    )
+    css = "good" if provenance.get("authoritative_metadata") else ""
+    return f'<span class="pill {css}" title="{html_escape(details)}">Source: {html_escape(source_id)} · {html_escape(source_class)}</span>'
 
 
 def render_radar_source_pills(paper: dict[str, Any]) -> str:
@@ -2593,6 +2633,14 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         if context_summary
         else ""
     )
+    provenance_summary = run.get("provenance_summary") if isinstance(run.get("provenance_summary"), dict) else {}
+    provenance_label = (
+        f'<span class="pill" title="{html_escape(format_radar_source_provenance_summary(provenance_summary))}">'
+        f'Provenance: {int(provenance_summary.get("authoritative") or 0)} authoritative'
+        f' / {int(provenance_summary.get("secondary") or 0)} secondary</span>'
+        if provenance_summary
+        else ""
+    )
     readiness_status = str(source_readiness.get("status") or "unknown")
     readiness_css = "warn" if readiness_status == "blocked" else "good" if readiness_status == "ready" else ""
     readiness_label = (
@@ -2634,6 +2682,7 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
       {health_label}
       {freshness_label}
       {source_policy_label}
+      {provenance_label}
       {context_label}
       {coverage_label}
       {readiness_label}
@@ -2744,6 +2793,7 @@ def render_latest_radar_queue_item(
         <span class="pill">Score: {score}</span>
         <span class="pill">Action: {html_escape(action)}</span>
         {pdf_access_html}
+        {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
         {source_tags}
       </div>
       {render_radar_review_reason(review)}
@@ -2788,6 +2838,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
         relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
         importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
         pdf_access_html = render_item_pdf_access_pill(item)
+        provenance_html = render_item_radar_source_provenance_pill(item)
         row_class = "paper removed" if removed else "paper"
         paper_actions = render_removed_controls(paper) if removed else render_active_actions(paper)
         rows.append(
@@ -2809,6 +2860,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {importance_html}
                   {relevance_html}
                   {pdf_access_html}
+                  {provenance_html}
                   {link_html}
                 </div>
                 <div class="paper-actions">
@@ -2895,6 +2947,12 @@ def render_item_pdf_access_pill(item: dict[str, Any]) -> str:
     if not pdf_access:
         return ""
     return render_pdf_access_pill(pdf_access)
+
+
+def render_item_radar_source_provenance_pill(item: dict[str, Any]) -> str:
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    provenance = radar_metadata.get("source_provenance") if isinstance(radar_metadata.get("source_provenance"), dict) else {}
+    return render_radar_source_provenance_pill(provenance)
 
 
 def render_plain_tags(tags: list[str]) -> str:

@@ -994,6 +994,7 @@ def create_radar_paper(
     selected_discovered_at = iso_timestamp(discovered_at or datetime.now(timezone.utc))
     clean_identifiers = normalize_identifiers(identifiers or {})
     clean_links = {key: str(value).strip() for key, value in (links or {}).items() if str(value).strip()}
+    selected_source_record = source_record or {"source_id": source_id, "source_paper_id": source_paper_id}
     paper = {
         "id": stable_id(
             "radar",
@@ -1012,12 +1013,97 @@ def create_radar_paper(
         "venue": normalize_spaces(venue or ""),
         "identifiers": clean_identifiers,
         "links": clean_links,
-        "source_records": [source_record or {"source_id": source_id, "source_paper_id": source_paper_id}],
+        "source_records": [selected_source_record],
+        "source_provenance": build_paper_source_provenance(
+            source_id=source_id,
+            source_paper_id=source_paper_id,
+            links=clean_links,
+            identifiers=clean_identifiers,
+            source_record=selected_source_record,
+            collected_at=selected_discovered_at,
+        ),
         "discovered_at": selected_discovered_at,
         "updated_at": selected_discovered_at,
     }
     paper["dedupe_key"] = dedupe_key(paper)
     return paper
+
+
+def build_paper_source_provenance(
+    *,
+    source_id: str,
+    source_paper_id: str,
+    links: dict[str, Any] | None = None,
+    identifiers: dict[str, Any] | None = None,
+    source_record: dict[str, Any] | None = None,
+    collected_at: str = "",
+    license_text: str = "",
+    oa_status: str = "",
+    local_pdf_path: str = "",
+) -> dict[str, Any]:
+    clean_links = {str(key): str(value).strip() for key, value in (links or {}).items() if str(value).strip()}
+    clean_identifiers = normalize_identifiers(identifiers or {})
+    selected_source_record = source_record if isinstance(source_record, dict) else {}
+    policy = radar_source_policy_record(source_id)
+    pdf_url = first_nonempty_link(clean_links, ("oa_pdf", "arxiv_pdf", "pdf"))
+    source_url = first_nonempty_link(clean_links, ("source_page", "landing", "doi", "arxiv", "publisher", "oa_landing"))
+    if not source_url:
+        source_url = normalize_spaces(str(selected_source_record.get("source_page") or ""))
+    if not source_url:
+        source_url = pdf_url
+    return {
+        "source_id": clean_radar_source_id(source_id),
+        "source_name": str(policy.get("name") or ""),
+        "source_class": str(policy.get("source_class") or "unknown"),
+        "authoritative_metadata": bool(policy.get("authoritative_metadata")),
+        "source_paper_id": normalize_spaces(source_paper_id),
+        "source_url": source_url,
+        "landing_url": clean_links.get("landing", ""),
+        "doi_url": clean_links.get("doi") or (f"https://doi.org/{clean_identifiers['doi']}" if clean_identifiers.get("doi") else ""),
+        "arxiv_url": clean_links.get("arxiv", ""),
+        "publisher_url": clean_links.get("publisher", ""),
+        "pdf_url": pdf_url,
+        "oa_pdf_url": clean_links.get("oa_pdf", ""),
+        "source_page_url": clean_links.get("source_page") or normalize_spaces(str(selected_source_record.get("source_page") or "")),
+        "license": normalize_spaces(license_text or clean_links.get("license") or ""),
+        "oa_status": normalize_spaces(oa_status or clean_links.get("oa_status") or ""),
+        "local_pdf_path": normalize_spaces(local_pdf_path),
+        "collected_at": normalize_spaces(collected_at),
+    }
+
+
+def first_nonempty_link(links: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = normalize_spaces(str(links.get(key) or ""))
+        if value:
+            return value
+    return ""
+
+
+def paper_source_provenance(paper: dict[str, Any]) -> dict[str, Any]:
+    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
+    identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
+    source_records = paper.get("source_records") if isinstance(paper.get("source_records"), list) else []
+    source_record = next((record for record in source_records if isinstance(record, dict)), {})
+    provenance = build_paper_source_provenance(
+        source_id=str(paper.get("source_id") or source_record.get("source_id") or ""),
+        source_paper_id=str(paper.get("source_paper_id") or source_record.get("source_paper_id") or ""),
+        links=links,
+        identifiers=identifiers,
+        source_record=source_record,
+        collected_at=str(paper.get("discovered_at") or source_record.get("collected_at") or ""),
+        license_text=str(paper.get("license") or ""),
+        oa_status=str(paper.get("oa_status") or ""),
+        local_pdf_path=str(paper.get("local_pdf_path") or ""),
+    )
+    existing = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+    merged = dict(provenance)
+    for key, value in existing.items():
+        if value not in ("", None, []) and not merged.get(key):
+            merged[key] = value
+    if not merged.get("local_pdf_path") and paper.get("local_pdf_path"):
+        merged["local_pdf_path"] = normalize_spaces(str(paper.get("local_pdf_path") or ""))
+    return merged
 
 
 def normalize_identifiers(identifiers: dict[str, Any]) -> dict[str, str]:
@@ -1061,6 +1147,10 @@ def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
         if key not in merged:
             merged[key] = dict(paper)
             merged[key]["source_records"] = list(paper.get("source_records") or [])
+            merged[key]["source_provenance"] = paper_source_provenance(merged[key])
+            merged[key]["source_provenance_records"] = unique_source_provenance_records(
+                [paper_source_provenance(paper)]
+            )
             merged[key]["dedupe_key"] = dedupe_key(merged[key])
             for alias in aliases:
                 alias_to_key[alias] = key
@@ -1076,11 +1166,40 @@ def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
         target["identifiers"] = {**(paper.get("identifiers") or {}), **(target.get("identifiers") or {})}
         target["links"] = {**(paper.get("links") or {}), **(target.get("links") or {})}
         target["source_records"].extend(paper.get("source_records") or [])
+        target["source_provenance_records"] = unique_source_provenance_records(
+            [
+                *(target.get("source_provenance_records") or []),
+                paper_source_provenance(paper),
+            ]
+        )
+        target["source_provenance"] = paper_source_provenance(target)
         target["updated_at"] = max(str(target.get("updated_at") or ""), str(paper.get("updated_at") or ""))
         target["dedupe_key"] = dedupe_key(target)
         for alias in [*before_aliases, *aliases, *paper_dedupe_aliases(target)]:
             alias_to_key[alias] = key
     return list(merged.values())
+
+
+def unique_source_provenance_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        selected = {key: value for key, value in record.items() if value not in ("", None, [])}
+        if not selected:
+            continue
+        key = (
+            str(selected.get("source_id") or ""),
+            str(selected.get("source_paper_id") or ""),
+            str(selected.get("source_url") or ""),
+            str(selected.get("pdf_url") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(selected)
+    return unique
 
 
 def merge_duplicate_paper_key(
@@ -1141,10 +1260,18 @@ def paper_title_year_alias(paper: dict[str, Any]) -> str:
 def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     links = paper.get("links") or {}
     identifiers = paper.get("identifiers") or {}
-    license_text = normalize_spaces(str(paper.get("license") or links.get("license") or ""))
-    oa_status = normalize_spaces(str(paper.get("oa_status") or links.get("oa_status") or ""))
-    pdf_url = links.get("pdf") or links.get("oa_pdf") or links.get("arxiv_pdf") or ""
-    source_url = links.get("landing") or links.get("doi") or links.get("arxiv") or links.get("publisher") or pdf_url
+    provenance = paper_source_provenance(paper)
+    license_text = normalize_spaces(str(paper.get("license") or links.get("license") or provenance.get("license") or ""))
+    oa_status = normalize_spaces(str(paper.get("oa_status") or links.get("oa_status") or provenance.get("oa_status") or ""))
+    pdf_url = links.get("pdf") or links.get("oa_pdf") or links.get("arxiv_pdf") or provenance.get("pdf_url") or ""
+    source_url = (
+        links.get("landing")
+        or links.get("doi")
+        or links.get("arxiv")
+        or links.get("publisher")
+        or provenance.get("source_url")
+        or pdf_url
+    )
     local_pdf_path = normalize_spaces(str(paper.get("local_pdf_path") or ""))
 
     if local_pdf_path:
@@ -1158,6 +1285,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
             downloaded=True,
+            provenance=provenance,
             now=now,
         )
     if identifiers.get("arxiv_id") or "arxiv.org/pdf/" in pdf_url:
@@ -1170,6 +1298,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
+            provenance=provenance,
             now=now,
         )
     if pdf_url and (
@@ -1185,6 +1314,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
+            provenance=provenance,
             now=now,
         )
     if pdf_url:
@@ -1197,6 +1327,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
             license_text=license_text,
             oa_status=oa_status,
             local_pdf_path=local_pdf_path,
+            provenance=provenance,
             now=now,
         )
     return pdf_access_decision(
@@ -1208,6 +1339,7 @@ def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> 
         license_text=license_text,
         oa_status=oa_status,
         local_pdf_path=local_pdf_path,
+        provenance=provenance,
         now=now,
     )
 
@@ -1224,6 +1356,7 @@ def pdf_access_decision(
     local_pdf_path: str = "",
     downloaded: bool = False,
     download_reason: str = "",
+    provenance: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_download_reason = download_reason or default_download_reason(
@@ -1231,7 +1364,8 @@ def pdf_access_decision(
         downloaded=downloaded,
         access_kind=access_kind,
     )
-    return {
+    selected_provenance = provenance if isinstance(provenance, dict) else {}
+    decision = {
         "can_download": can_download,
         "access_kind": access_kind,
         "reason": reason,
@@ -1244,6 +1378,16 @@ def pdf_access_decision(
         "download_reason": selected_download_reason,
         "access_date": iso_timestamp(now or datetime.now(timezone.utc)),
     }
+    if selected_provenance:
+        decision.update(
+            {
+                "source_id": selected_provenance.get("source_id") or "",
+                "source_class": selected_provenance.get("source_class") or "unknown",
+                "authoritative_metadata": bool(selected_provenance.get("authoritative_metadata")),
+                "provenance_collected_at": selected_provenance.get("collected_at") or "",
+            }
+        )
+    return decision
 
 
 def default_download_reason(*, can_download: bool, downloaded: bool, access_kind: str) -> str:
@@ -2005,6 +2149,7 @@ def unpaywall_failed_paper_record(
             "collected_at": iso_timestamp(now or datetime.now(timezone.utc)),
         },
     ]
+    updated["source_provenance"] = paper_source_provenance(updated)
     return updated
 
 
@@ -3175,6 +3320,9 @@ def build_radar_history_brief(
     source_policy_lines = radar_brief_source_policy_lines([bundle["run"] for bundle in bundles])
     if source_policy_lines:
         lines.extend(["## Source Policy", "", *source_policy_lines, ""])
+    source_provenance_lines = radar_brief_source_provenance_lines(bundles)
+    if source_provenance_lines:
+        lines.extend(["## Source Provenance", "", *source_provenance_lines, ""])
     source_coverage_lines = radar_brief_source_coverage_lines([bundle["run"] for bundle in bundles])
     if source_coverage_lines:
         lines.extend(["## Source Coverage", "", *source_coverage_lines, ""])
@@ -3220,6 +3368,7 @@ def build_radar_history_brief(
                 *signal_lines,
                 *context_line,
                 f"- PDF policy: {pdf_access_report_text(radar_brief_recommendation_pdf_access(recommendation))}",
+                f"- Source provenance: {source_provenance_report_text(radar_brief_recommendation_source_provenance(recommendation))}",
                 f"- Link: {radar_brief_recommendation_link(recommendation)}",
                 "",
             ]
@@ -3384,6 +3533,88 @@ def radar_history_source_policy_summary(
         "run_count": len(run_summaries),
         "runs": run_summaries,
     }
+
+
+def radar_history_source_provenance_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    aggregate = empty_radar_source_provenance_summary()
+    run_summaries = []
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        stored_summary = run.get("provenance_summary") if isinstance(run.get("provenance_summary"), dict) else {}
+        summary = stored_summary or radar_source_provenance_summary(bundle["recommendations"])
+        if int(summary.get("total") or 0) == 0:
+            continue
+        merge_radar_source_provenance_summary(aggregate, summary)
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "total": int(summary.get("total") or 0),
+                "authoritative": int(summary.get("authoritative") or 0),
+                "secondary": int(summary.get("secondary") or 0),
+                "with_source_url": int(summary.get("with_source_url") or 0),
+                "with_pdf_url": int(summary.get("with_pdf_url") or 0),
+                "with_oa_status": int(summary.get("with_oa_status") or 0),
+                "with_license": int(summary.get("with_license") or 0),
+                "source_ids": dict(summary.get("source_ids") or {}),
+                "source_classes": dict(summary.get("source_classes") or {}),
+            }
+        )
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    aggregate["source_ids"] = dict(sorted(aggregate["source_ids"].items()))
+    aggregate["source_classes"] = dict(sorted(aggregate["source_classes"].items()))
+    return {
+        **aggregate,
+        "run_count": len(run_summaries),
+        "runs": run_summaries,
+    }
+
+
+def empty_radar_source_provenance_summary() -> dict[str, Any]:
+    return {
+        "total": 0,
+        "authoritative": 0,
+        "secondary": 0,
+        "with_source_url": 0,
+        "with_pdf_url": 0,
+        "with_oa_status": 0,
+        "with_license": 0,
+        "source_ids": {},
+        "source_classes": {},
+    }
+
+
+def merge_radar_source_provenance_summary(target: dict[str, Any], summary: dict[str, Any]) -> None:
+    for key in (
+        "total",
+        "authoritative",
+        "secondary",
+        "with_source_url",
+        "with_pdf_url",
+        "with_oa_status",
+        "with_license",
+    ):
+        target[key] = int(target.get(key) or 0) + int(summary.get(key) or 0)
+    for key in ("source_ids", "source_classes"):
+        target_counts = target.setdefault(key, {})
+        for value, count in (summary.get(key) or {}).items():
+            selected_value = str(value or "unknown").strip() or "unknown"
+            target_counts[selected_value] = int(target_counts.get(selected_value) or 0) + int(count or 0)
 
 
 def parse_radar_brief_timestamp(value: str) -> datetime | None:
@@ -3693,6 +3924,13 @@ def radar_brief_source_policy_lines(runs: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def radar_brief_source_provenance_lines(bundles: list[dict[str, Any]]) -> list[str]:
+    summary = radar_history_source_provenance_summary(bundles, days=None)
+    if int(summary.get("total") or 0) == 0:
+        return []
+    return [f"- {format_radar_source_provenance_summary(summary)}; runs={int(summary.get('run_count') or 0)}"]
+
+
 def radar_brief_source_stat_lines(runs: list[dict[str, Any]]) -> list[str]:
     totals: dict[str, dict[str, int]] = {}
     for run in runs:
@@ -3941,6 +4179,86 @@ def radar_pdf_access_summary(records: list[dict[str, Any]] | dict[str, dict[str,
     return summary
 
 
+def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    summary: dict[str, Any] = {
+        "total": 0,
+        "authoritative": 0,
+        "secondary": 0,
+        "with_source_url": 0,
+        "with_pdf_url": 0,
+        "with_oa_status": 0,
+        "with_license": 0,
+        "source_ids": {},
+        "source_classes": {},
+    }
+    for record in values:
+        provenance = radar_history_source_provenance(record)
+        if not provenance:
+            continue
+        summary["total"] += 1
+        if provenance.get("authoritative_metadata"):
+            summary["authoritative"] += 1
+        else:
+            summary["secondary"] += 1
+        source_id = str(provenance.get("source_id") or "unknown").strip() or "unknown"
+        source_class = str(provenance.get("source_class") or "unknown").strip() or "unknown"
+        summary["source_ids"][source_id] = int(summary["source_ids"].get(source_id, 0)) + 1
+        summary["source_classes"][source_class] = int(summary["source_classes"].get(source_class, 0)) + 1
+        if provenance.get("source_url"):
+            summary["with_source_url"] += 1
+        if provenance.get("pdf_url"):
+            summary["with_pdf_url"] += 1
+        if provenance.get("oa_status"):
+            summary["with_oa_status"] += 1
+        if provenance.get("license"):
+            summary["with_license"] += 1
+    summary["source_ids"] = dict(sorted(summary["source_ids"].items()))
+    summary["source_classes"] = dict(sorted(summary["source_classes"].items()))
+    return summary
+
+
+def radar_history_source_provenance(record: dict[str, Any]) -> dict[str, Any]:
+    provenance = record.get("source_provenance") if isinstance(record.get("source_provenance"), dict) else {}
+    if provenance:
+        return provenance
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+    if provenance:
+        return provenance
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    latest_paper = latest.get("paper") if isinstance(latest.get("paper"), dict) else {}
+    return latest_paper.get("source_provenance") if isinstance(latest_paper.get("source_provenance"), dict) else {}
+
+
+def format_radar_source_provenance_summary(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    class_text = ", ".join(
+        f"{source_class}={int(count)}"
+        for source_class, count in sorted((summary.get("source_classes") or {}).items())
+        if int(count or 0) > 0
+    )
+    source_text = ", ".join(
+        f"{source_id}={int(count)}"
+        for source_id, count in sorted((summary.get("source_ids") or {}).items())
+        if int(count or 0) > 0
+    )
+    parts = [
+        "Source provenance:",
+        f"total={int(summary.get('total') or 0)}",
+        f"authoritative={int(summary.get('authoritative') or 0)}",
+        f"secondary={int(summary.get('secondary') or 0)}",
+        f"with_source_url={int(summary.get('with_source_url') or 0)}",
+        f"with_pdf_url={int(summary.get('with_pdf_url') or 0)}",
+    ]
+    if class_text:
+        parts.append(f"classes={class_text}")
+    if source_text:
+        parts.append(f"sources={source_text}")
+    return " | ".join(parts)
+
+
 def radar_history_pdf_access(record: dict[str, Any]) -> dict[str, Any]:
     candidates = [
         record.get("pdf_access"),
@@ -4094,6 +4412,19 @@ def radar_brief_recommendation_pdf_access(recommendation: dict[str, Any]) -> dic
     return recommendation.get("pdf_access") if isinstance(recommendation.get("pdf_access"), dict) else {}
 
 
+def radar_brief_recommendation_source_provenance(recommendation: dict[str, Any]) -> dict[str, Any]:
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+    nested_provenance = (
+        nested_paper.get("source_provenance")
+        if isinstance(nested_paper.get("source_provenance"), dict)
+        else {}
+    )
+    return provenance or nested_provenance
+
+
 def radar_brief_recommendation_link(recommendation: dict[str, Any]) -> str:
     nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
     paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
@@ -4189,6 +4520,28 @@ def pdf_access_report_text(pdf_access: dict[str, Any]) -> str:
         parts.append(f"local_pdf={pdf_access.get('local_pdf_path')}")
     if pdf_access.get("source_url"):
         parts.append(f"source={pdf_access.get('source_url')}")
+    return "; ".join(parts)
+
+
+def source_provenance_report_text(provenance: dict[str, Any]) -> str:
+    if not provenance:
+        return "not recorded"
+    metadata = "authoritative" if provenance.get("authoritative_metadata") else "secondary"
+    parts = [
+        f"source={provenance.get('source_id') or 'unknown'}",
+        f"class={provenance.get('source_class') or 'unknown'}",
+        f"metadata={metadata}",
+    ]
+    if provenance.get("source_url"):
+        parts.append(f"url={provenance.get('source_url')}")
+    if provenance.get("pdf_url"):
+        parts.append(f"pdf={provenance.get('pdf_url')}")
+    if provenance.get("oa_status"):
+        parts.append(f"oa={provenance.get('oa_status')}")
+    if provenance.get("license"):
+        parts.append(f"license={provenance.get('license')}")
+    if provenance.get("collected_at"):
+        parts.append(f"collected={provenance.get('collected_at')}")
     return "; ".join(parts)
 
 

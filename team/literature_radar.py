@@ -50,9 +50,12 @@ from shared.literature_radar import (
     radar_history_source_coverage_summary,
     radar_history_context_summary,
     radar_history_source_policy_summary,
+    radar_history_source_provenance_summary,
     radar_context_summary,
     radar_pdf_access_summary,
+    radar_source_provenance_summary,
     radar_latest_signal_lines,
+    paper_source_provenance,
     radar_run_freshness,
     radar_run_health_action,
     radar_run_status_from_source_health,
@@ -463,6 +466,7 @@ def build_team_literature_radar_queue_payload(
         "review": queue.get("review") or "",
         "review_counts": queue.get("review_counts") or counts,
         "access_summary": radar_pdf_access_summary(queue_papers),
+        "provenance_summary": radar_source_provenance_summary(queue_papers),
         "limit": selected_limit,
         "latest_run": team_literature_radar_run_summary(
             latest_run,
@@ -540,6 +544,11 @@ def build_team_literature_radar_brief_payload(
             generated_at=selected_now,
             days=selected_days,
         ),
+        "provenance_summary": radar_history_source_provenance_summary(
+            run_bundles,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
         "context_summary": radar_history_context_summary(
             runs,
             generated_at=selected_now,
@@ -548,6 +557,7 @@ def build_team_literature_radar_brief_payload(
         "queue": {
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
+            "provenance_summary": radar_source_provenance_summary(queue_papers),
             "papers": queue_papers,
         },
         "activity": activity,
@@ -674,6 +684,7 @@ def team_literature_radar_run_summary(
     venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
     sources = run.get("sources") if isinstance(run.get("sources"), list) else []
     source_policy = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
+    provenance_summary = run.get("provenance_summary") if isinstance(run.get("provenance_summary"), dict) else {}
     context_summary = run.get("context_summary") if isinstance(run.get("context_summary"), dict) else {}
     collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
     summary = {
@@ -688,6 +699,7 @@ def team_literature_radar_run_summary(
         "source_errors": source_errors,
         "source_stats": source_stats,
         "source_policy": source_policy or radar_source_policy_summary(sources),
+        "provenance_summary": provenance_summary,
         "context_summary": context_summary,
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
@@ -1502,12 +1514,15 @@ def build_radar_import_metadata(
     selected_recommendation = recommendation or {}
     scoring = selected_recommendation.get("scoring") or {}
     pdf_access = selected_recommendation.get("pdf_access") or assess_pdf_access(paper, now=now)
+    provenance = paper_source_provenance(paper)
     return {
         "radar_id": paper.get("id"),
         "source_id": paper.get("source_id"),
         "source_paper_id": paper.get("source_paper_id"),
         "dedupe_key": paper.get("dedupe_key"),
         "source_records": paper.get("source_records") or [],
+        "source_provenance": provenance,
+        "source_provenance_records": paper.get("source_provenance_records") or [provenance],
         "links": paper.get("links") or {},
         "discovered_at": paper.get("discovered_at"),
         "pdf_access": pdf_access,

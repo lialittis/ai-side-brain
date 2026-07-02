@@ -16,7 +16,7 @@ from urllib.parse import quote, quote_plus, urlencode, urljoin
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_selector, normalize_spaces
+from .core import create_radar_paper, expand_dblp_venue_profiles, normalize_selector, normalize_spaces, paper_source_provenance
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
@@ -2238,6 +2238,7 @@ def apply_unpaywall_enrichment(paper: dict[str, Any], enrichment: dict[str, Any]
     updated["links"] = links
     updated["source_records"] = [*(updated.get("source_records") or []), enrichment["source_record"]]
     updated["updated_at"] = enrichment["source_record"]["collected_at"]
+    updated["source_provenance"] = paper_source_provenance(updated)
     return updated
 
 
