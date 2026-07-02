@@ -44,14 +44,15 @@ from shared.literature_radar import (
     radar_source_option_metadata,
     radar_source_options,
     radar_source_readiness_summary,
+    radar_topic_keyword_profile,
     radar_triage_action_options,
     radar_triage_summary,
     parse_official_accepted_page_specs,
 )
-from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
+    TEAM_RADAR_TOPIC_PROFILE,
     apply_team_radar_source_preset,
     build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
@@ -436,7 +437,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .interest-card {{
       display: grid;
-      grid-template-rows: 40px 150px auto auto;
+      grid-template-rows: 40px 150px auto auto auto;
       justify-items: center;
       gap: 8px;
       min-width: 128px;
@@ -461,6 +462,13 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       text-align: center;
       font-size: 12px;
       font-weight: 700;
+    }}
+    .interest-profile {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 4px;
+      min-height: 24px;
     }}
     .interest-actions {{ display: flex; gap: 6px; }}
     .interest-add {{
@@ -692,6 +700,8 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .pill.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
     .pill.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
+    .tag.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
+    .tag.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
     .inline-form {{ display: inline-flex; gap: 6px; align-items: center; }}
     .mini-input {{
@@ -1170,6 +1180,7 @@ def build_literature_radar_settings_payload(
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
     )
+    payload["interest_keyword_profiles"] = team_interest_keyword_profiles(database)
     payload["source_options"] = [
         {
             **option,
@@ -1181,9 +1192,28 @@ def build_literature_radar_settings_payload(
     return payload
 
 
-def default_radar_form_settings() -> dict[str, Any]:
+def team_interest_keyword_profiles(database: TeamResearchDatabase) -> list[dict[str, Any]]:
+    profiles = []
+    for interest in database.list_team_interest_keywords():
+        keyword = str(interest.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        profile = radar_topic_keyword_profile(keyword)
+        profiles.append(
+            {
+                "keyword": keyword,
+                "weight": int(interest.get("weight") or 0),
+                "topic_ids": list(profile.get("topic_ids") or []),
+                "positive_keywords": list(profile.get("positive_keywords") or []),
+                "negative_keywords": list(profile.get("negative_keywords") or []),
+            }
+        )
+    return profiles
+
+
+def default_radar_form_settings(*, source_preset: str = "team_security_daily") -> dict[str, Any]:
     settings: dict[str, Any] = {
-        "source_preset": "custom",
+        "source_preset": clean_source_preset_id(source_preset),
         "sources": list(DEFAULT_RADAR_SOURCES),
         "max_results": 20,
         "limit": 10,
@@ -1215,7 +1245,7 @@ def build_literature_radar_status_payload(
     selected_triage_action = clean_triage_action(triage_action)
     settings_payload = build_literature_radar_settings_payload(
         database,
-        settings=None if use_saved_defaults else default_radar_form_settings(),
+        settings=None if use_saved_defaults else default_radar_form_settings(source_preset="custom"),
     )
     queue_payload = build_team_literature_radar_queue_payload(
         database,
@@ -2050,7 +2080,10 @@ def radar_form_settings(database: TeamResearchDatabase) -> dict[str, Any]:
     if not isinstance(saved_settings, dict):
         saved_settings = {}
     settings = default_radar_form_settings()
-    settings.update(normalize_radar_settings(saved_settings))
+    normalized_saved = normalize_radar_settings(saved_settings)
+    if "sources" in normalized_saved and "source_preset" not in normalized_saved:
+        normalized_saved["source_preset"] = "custom"
+    settings.update(normalized_saved)
     settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
     if not settings["sources"]:
         settings["sources"] = list(DEFAULT_RADAR_SOURCES)
@@ -3820,8 +3853,10 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
 
 def render_interest_card(interest: dict[str, Any]) -> str:
     weight = int(interest.get("weight") or 0)
-    keyword = html_escape(interest.get("keyword") or "")
+    keyword_text = str(interest.get("keyword") or "")
+    keyword = html_escape(keyword_text)
     interest_id = html_escape(interest.get("id") or "")
+    profile_html = render_interest_keyword_profile(keyword_text)
     return f"""
     <form class="interest-card" method="post" action="/interests/save">
       <input type="hidden" name="interest_id" value="{interest_id}">
@@ -3838,12 +3873,32 @@ def render_interest_card(interest: dict[str, Any]) -> str:
         onchange="this.form.submit()"
       >
       <input class="interest-keyword-input" name="keyword" value="{keyword}" aria-label="Interest keyword">
+      {profile_html}
       <div class="interest-actions">
         <button class="mini-button" type="submit">Save</button>
         <button class="mini-button danger" type="submit" formaction="/interests/remove">Remove</button>
       </div>
     </form>
     """
+
+
+def render_interest_keyword_profile(keyword: str) -> str:
+    profile = radar_topic_keyword_profile(keyword)
+    if not profile.get("topic_ids"):
+        return '<div class="interest-profile"></div>'
+    normalized_keyword = normalize_inline_text(keyword).lower()
+    positive = [
+        str(term)
+        for term in profile.get("positive_keywords") or []
+        if normalize_inline_text(term).lower() != normalized_keyword
+    ][:4]
+    negative = [str(term) for term in profile.get("negative_keywords") or []][:2]
+    chips = []
+    for term in positive:
+        chips.append(f'<span class="tag" title="Matched by {html_escape(keyword)}">{html_escape(term)}</span>')
+    for term in negative:
+        chips.append(f'<span class="tag warn" title="Dampens {html_escape(keyword)}">{html_escape(term)}</span>')
+    return f'<div class="interest-profile">{"".join(chips)}</div>'
 
 
 def render_interest_add_form() -> str:
@@ -3871,8 +3926,7 @@ def submit_research_item(
 ) -> str:
     source_type = fields.get("source_type") or "url"
     abstract = (fields.get("abstract") or fields.get("brief") or "").strip()
-    topic_id = fields.get("topic") or "dynamic-radiative-cooling"
-    topic_profile = topic_profile_by_id(topic_id)
+    topic_profile = TEAM_RADAR_TOPIC_PROFILE
     project_id = fields.get("project") or DEFAULT_PROJECT
     submitted_by = fields.get("submitted_by") or "team-member"
     tags = parse_tags(fields.get("tags", ""))

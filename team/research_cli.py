@@ -760,6 +760,14 @@ def print_radar_settings(result: dict[str, Any]) -> None:
     )
     if scoring_profile_summary:
         print(f"Scoring: {scoring_profile_summary.get('description') or scoring_profile_summary.get('name')}")
+    interest_profiles = (
+        result.get("interest_keyword_profiles") if isinstance(result.get("interest_keyword_profiles"), list) else []
+    )
+    if interest_profiles:
+        print("Interest profiles:")
+        for profile in interest_profiles[:8]:
+            if isinstance(profile, dict):
+                print(f"- {format_radar_interest_profile(profile)}")
     venue_profile_summary = (
         result.get("venue_profile_summary") if isinstance(result.get("venue_profile_summary"), dict) else {}
     )
@@ -789,6 +797,23 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print(f"Web: {links.get('html') or '/radar'}")
         print(f"Queue JSON: {links.get('queue_json') or '/radar/queue.json?limit=20'}")
         print(f"Brief JSON: {links.get('brief_json') or '/radar/brief.json?days=7&limit=20'}")
+
+
+def format_radar_interest_profile(profile: dict[str, Any]) -> str:
+    keyword = str(profile.get("keyword") or "interest")
+    weight = int(profile.get("weight") or 0)
+    positives = [
+        str(term)
+        for term in profile.get("positive_keywords") or []
+        if str(term).strip().lower() != keyword.strip().lower()
+    ][:4]
+    negatives = [str(term) for term in profile.get("negative_keywords") or []][:2]
+    parts = [f"{keyword}={weight}"]
+    if positives:
+        parts.append(f"matches {', '.join(positives)}")
+    if negatives:
+        parts.append(f"dampens {', '.join(negatives)}")
+    return "; ".join(parts)
 
 
 def print_radar_status(result: dict[str, Any]) -> None:

@@ -388,7 +388,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             history = read_personal_radar_paper_history(root)
             self.assertCountEqual(
                 history[watched["dedupe_key"]]["latest_recommendation"]["matched_positive_keywords"],
-                ["LLM security", "memory safety"],
+                ["agentic security", "LLM security", "memory safety"],
             )
             mark_personal_radar_paper_review(
                 root,

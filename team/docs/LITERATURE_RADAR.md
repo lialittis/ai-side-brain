@@ -130,6 +130,23 @@ same Team Interest keywords as the CLI, keeps review-first import behavior, and
 can optionally enable local or OpenRouter summaries. Recommendation ranking uses
 the current Team Interest weights from the `/interests` sliders, so changing
 those weights affects both new Radar runs and later imported library relevance.
+The sliders stay deliberately simple, but scoring expands the built-in team
+interests with curated aliases from the shared
+security/memory-safety/agentic-security profile. For example, `agentic security`
+also matches signals such as `LLM security`, `AI agent security`, `prompt
+injection`, and `code generation security`, while negative context such as
+generic AI applications or recommendation-system-only papers dampens the
+initial score. This catches more relevant papers before AI summarization spends
+tokens without adding more UI fields for team members. When such negative
+context is present, the same queue/report signal block shows a `Caution` line,
+so a reviewer can tell whether a candidate should be skimmed, dismissed, or
+kept on watch instead of guessing from the score alone.
+The `/interests` page shows compact chips for the shared terms each slider
+matches and the warning terms that dampen its score, so the team can tune
+weights without opening configuration files. The same expanded
+`interest_keyword_profiles` are included in `/radar/settings.json` and printed
+by `radar-settings`, so scheduled-run preflight logs show the actual vocabulary
+that will drive ranking.
 The Radar page also shows review queue counts for all stored Radar papers, so a
 team member can jump directly to unreviewed, watch, or dismissed candidates.
 Stored run details and generated Markdown reports use the same labelled signal
@@ -191,12 +208,13 @@ OpenReview invitation IDs, OpenReview venue profiles, Semantic Scholar author
 IDs, and DBLP venue profiles automatically enable their matching collectors for
 that run.
 
-The Source preset selector is the daily-use shortcut. `Broad Daily` is the
-previous broad metadata default. `Team Security Daily` is the recommended
-current team preset for system security, memory safety, and agentic security: it
+The Source preset selector is the daily-use shortcut. New browser sessions
+default to `Team Security Daily`, the recommended current team preset for
+system security, memory safety, and agentic security: it
 combines arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, DBLP security/PL
 venue profiles, OpenReview ICLR/NeurIPS/ICML venue profiles, USENIX Security,
-and NDSS. `Top Venue Sweep` is proceedings-focused across security, systems,
+and NDSS. `Broad Daily` remains available as a simpler metadata sweep, and
+`Top Venue Sweep` is proceedings-focused across security, systems,
 PL/memory-safety, software-engineering, and AI/ML venue profiles.
 
 The form can save source choices, limits, summary provider, conference year,

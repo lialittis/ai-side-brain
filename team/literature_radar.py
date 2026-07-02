@@ -1187,7 +1187,7 @@ def score_team_radar_paper(paper: dict[str, Any], interests: list[dict[str, Any]
         "label": label_for_score(score, bool(scored.get("text"))),
         "topic_scores": team_radar_topic_scores(matched_terms, interests),
         "matched_positive_keywords": matched_terms,
-        "matched_negative_keywords": [],
+        "matched_negative_keywords": list(scored.get("matched_negative_keywords") or []),
         "reasons": reasons,
         "source_trace": {
             "processor": TEAM_RADAR_SCORER_PROCESSOR,

@@ -628,6 +628,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
         },
         "ai_security": {
             "positive_keywords": [
+                "agentic security",
                 "AI security",
                 "LLM security",
                 "prompt injection",
@@ -639,6 +640,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
                 "data poisoning",
                 "backdoor attack",
                 "red teaming",
+                "agent security",
                 "AI agent security",
                 "code generation security",
                 "cyber reasoning",
@@ -667,6 +669,20 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
             "negative_keywords": ["generic AI ethics", "education AI only"],
         },
     },
+}
+RADAR_TOPIC_KEYWORD_ALIASES: dict[str, list[str]] = {
+    "system security": ["system_security"],
+    "systems security": ["system_security"],
+    "secure systems": ["system_security"],
+    "memory safety": ["memory_safety"],
+    "ai security": ["ai_security"],
+    "llm security": ["ai_security"],
+    "agentic security": ["ai_security"],
+    "agent security": ["ai_security"],
+    "ai agent security": ["ai_security"],
+    "ai safety": ["ai_safety"],
+    "agent safety": ["ai_safety"],
+    "alignment": ["ai_safety"],
 }
 
 LOCAL_RADAR_SUMMARY_PROCESSOR = "local-radar-summary-v0.1"
@@ -1117,6 +1133,48 @@ def default_radar_topic_profile() -> dict[str, Any]:
             for topic_id, topic in DEFAULT_RADAR_TOPIC_PROFILE["topics"].items()
         },
     }
+
+
+def radar_topic_keyword_profile(keyword: str, topic_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return curated positive/negative terms implied by a lightweight interest keyword."""
+    selected_profile = topic_profile or default_radar_topic_profile()
+    selected_keyword = normalize_spaces(str(keyword or "")).lower()
+    topic_ids = list(RADAR_TOPIC_KEYWORD_ALIASES.get(selected_keyword, []))
+    topics = selected_profile.get("topics") if isinstance(selected_profile.get("topics"), dict) else {}
+    if not topic_ids:
+        topic_ids = [
+            topic_id
+            for topic_id, topic in topics.items()
+            if isinstance(topic, dict)
+            and any(
+                normalize_spaces(str(term or "")).lower() == selected_keyword
+                for term in topic.get("positive_keywords", [])
+            )
+        ]
+    positive_terms: list[Any] = [keyword]
+    negative_terms: list[Any] = []
+    for topic_id in topic_ids:
+        topic = topics.get(topic_id) if isinstance(topics.get(topic_id), dict) else {}
+        positive_terms.extend(topic.get("positive_keywords") or [])
+        negative_terms.extend(topic.get("negative_keywords") or [])
+    return {
+        "keyword": selected_keyword,
+        "topic_ids": topic_ids,
+        "positive_keywords": unique_radar_topic_terms(positive_terms),
+        "negative_keywords": unique_radar_topic_terms(negative_terms),
+    }
+
+
+def unique_radar_topic_terms(values: list[Any]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        term = normalize_spaces(str(value or ""))
+        key = term.lower()
+        if term and key not in seen:
+            terms.append(term)
+            seen.add(key)
+    return terms
 
 
 def dblp_venue_profiles() -> list[dict[str, Any]]:
@@ -5466,6 +5524,13 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
     )
     if matched_terms:
         lines.append(f"Matched: {', '.join(matched_terms[:max(0, int(max_matched_terms))])}")
+    negative_terms = unique_normalized_terms(
+        latest.get("matched_negative_keywords")
+        or scoring.get("matched_negative_keywords")
+        or []
+    )
+    if negative_terms:
+        lines.append(f"Caution: matched negative context: {', '.join(negative_terms[:max(0, int(max_matched_terms))])}")
     return lines
 
 

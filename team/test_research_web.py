@@ -107,6 +107,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("system security", html)
             self.assertIn("memory safety", html)
             self.assertIn("agentic security", html)
+            self.assertIn("LLM security", html)
+            self.assertIn("prompt injection", html)
+            self.assertIn("generic AI application", html)
             self.assertIn('class="interest-range"', html)
             self.assertIn('action="/interests/add"', html)
 
@@ -565,7 +568,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("/radar/status.json?limit=20", html)
             self.assertIn("Status JSON", html)
             self.assertIn("Radar Profile", html)
-            self.assertIn("sources: arXiv, DBLP, Semantic Scholar +4 more", html)
+            self.assertIn("sources: arXiv, DBLP, Semantic Scholar +6 more", html)
             self.assertIn("max/source: 20", html)
             self.assertIn("last run: 2026-07-01 10:00", html)
             self.assertIn("collected: 1", html)
@@ -1064,6 +1067,11 @@ class TeamResearchWebTest(unittest.TestCase):
             {"keyword": "memory safety", "weight": 85},
             payload["scoring_profile_summary"]["top_interests"],
         )
+        memory_profile = next(
+            profile for profile in payload["interest_keyword_profiles"] if profile["keyword"] == "memory safety"
+        )
+        self.assertIn("use-after-free", memory_profile["positive_keywords"])
+        self.assertIn("human memory", memory_profile["negative_keywords"])
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["required_count"], 18)
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
@@ -1081,6 +1089,22 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
         self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
         self.assertNotIn("secret-s2-key", json.dumps(payload))
+
+    def test_literature_radar_web_defaults_to_team_security_daily_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+
+            payload = build_literature_radar_settings_payload(database)
+            html = render_literature_radar_page(database)
+
+        self.assertEqual(payload["settings"]["source_preset"], "team_security_daily")
+        self.assertEqual(payload["source_preset_label"], "Team Security Daily")
+        self.assertIn("dblp_venues", payload["settings"]["sources"])
+        self.assertIn("openreview_venues", payload["settings"]["sources"])
+        self.assertEqual(payload["settings"]["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(payload["settings"]["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+        self.assertIn('<option value="team_security_daily" selected>Team Security Daily</option>', html)
+        self.assertIn("preset: Team Security Daily", html)
 
     def test_literature_radar_status_payload_combines_settings_and_queue(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1750,6 +1774,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     "title": "Memory Safety for Agentic Security Systems",
                     "brief": "This work studies memory safety and system security for autonomous agents.",
                     "tags": "agentic-security",
+                    "topic": "dynamic-radiative-cooling",
                 },
                 analyze=False,
             )
@@ -1758,6 +1783,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(paper["item"]["id"], item_id)
             self.assertEqual(paper["screening"]["label"], "highly_relevant")
             self.assertEqual(paper["screening"]["score"], 100)
+            self.assertEqual(paper["screening"]["topic_profile_id"], "team-literature-radar")
             self.assertEqual(
                 paper["screening"]["matched_terms"],
                 ["memory safety", "system security", "agentic security"],

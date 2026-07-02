@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import re
 from typing import Any
 
+from shared.literature_radar import radar_topic_keyword_profile
 from shared.research import validate_relevance_screening
 from shared.research.core import iso_timestamp, stable_id
 
@@ -77,6 +78,7 @@ def build_team_interest_screening(
         "label": label_for_score(scored["score"], bool(scored["text"])),
         "reasons": scored["reasons"],
         "matched_terms": scored["matched_terms"],
+        "matched_negative_keywords": scored["matched_negative_keywords"],
         "suggested_contexts": ["team-interests"],
         "suggested_actions": suggested_actions_for_score(scored["score"]),
         "confidence": confidence_for_matches(scored["matched_terms"]),
@@ -100,35 +102,111 @@ def score_team_interests(
     total = 0.0
     matched_terms: list[str] = []
     match_details: list[str] = []
+    negative_matches: list[str] = []
     for interest in interests:
         keyword = normalize_interest_keyword(str(interest.get("keyword") or ""))
         weight = clean_interest_weight(interest.get("weight"))
         if not keyword or weight <= 0:
             continue
-        sources = []
-        multiplier = 0.0
-        if term_matches(title_text, keyword):
-            sources.append("title")
-            multiplier = max(multiplier, 1.15)
-        if term_matches(body_text, keyword):
-            sources.append("content")
-            multiplier = max(multiplier, 1.0)
-        if term_matches(tag_text, keyword):
-            sources.append("tags")
-            multiplier = max(multiplier, 1.25)
+        match = match_interest_profile(
+            keyword,
+            interest,
+            title_text=title_text,
+            body_text=body_text,
+            tag_text=tag_text,
+        )
+        sources = match["sources"]
+        multiplier = float(match["multiplier"])
         if not sources:
             continue
+        if match["negative_matches"]:
+            negative_matches.extend(match["negative_matches"])
         contribution = min(100.0, weight * multiplier)
         total += contribution
         matched_terms.append(keyword)
-        match_details.append(f"{keyword} matched {', '.join(sources)} with weight {weight}.")
+        alias_detail = ""
+        matched_aliases = [alias for alias in match["matched_aliases"] if alias != keyword]
+        if matched_aliases:
+            alias_detail = f" via {', '.join(matched_aliases[:3])}"
+        negative_detail = ""
+        if match["negative_matches"]:
+            negative_detail = f" Negative context lowered confidence: {', '.join(match['negative_matches'][:3])}."
+        match_details.append(
+            f"{keyword} matched {', '.join(sources)}{alias_detail} with weight {weight}.{negative_detail}"
+        )
     score = int(round(min(100.0, total)))
     return {
         "score": score,
         "matched_terms": matched_terms,
         "reasons": match_details or ["No configured team interest keywords matched."],
+        "matched_negative_keywords": sorted(set(negative_matches)),
         "text": bool(title_text.strip() or body_text.strip() or tag_text.strip()),
     }
+
+
+def match_interest_profile(
+    keyword: str,
+    interest: dict[str, Any],
+    *,
+    title_text: str,
+    body_text: str,
+    tag_text: str,
+) -> dict[str, Any]:
+    sources: list[str] = []
+    matched_aliases: list[str] = []
+    multiplier = 0.0
+    for alias in interest_positive_keywords(keyword, interest):
+        alias_sources = []
+        if term_matches(title_text, alias):
+            alias_sources.append("title")
+            multiplier = max(multiplier, 1.15)
+        if term_matches(body_text, alias):
+            alias_sources.append("content")
+            multiplier = max(multiplier, 1.0)
+        if term_matches(tag_text, alias):
+            alias_sources.append("tags")
+            multiplier = max(multiplier, 1.25)
+        if alias_sources:
+            matched_aliases.append(normalize_interest_keyword(alias))
+            for source in alias_sources:
+                if source not in sources:
+                    sources.append(source)
+    negative_matches = [
+        normalize_interest_keyword(alias)
+        for alias in interest_negative_keywords(keyword, interest)
+        if term_matches(title_text, alias) or term_matches(body_text, alias) or term_matches(tag_text, alias)
+    ]
+    if negative_matches:
+        multiplier *= 0.5
+    return {
+        "sources": sources,
+        "matched_aliases": matched_aliases,
+        "negative_matches": negative_matches,
+        "multiplier": multiplier,
+    }
+
+
+def interest_positive_keywords(keyword: str, interest: dict[str, Any]) -> list[str]:
+    configured = interest.get("positive_keywords") if isinstance(interest.get("positive_keywords"), list) else []
+    profile = radar_topic_keyword_profile(keyword)
+    return unique_normalized_terms([*profile.get("positive_keywords", []), *configured])
+
+
+def interest_negative_keywords(keyword: str, interest: dict[str, Any]) -> list[str]:
+    configured = interest.get("negative_keywords") if isinstance(interest.get("negative_keywords"), list) else []
+    profile = radar_topic_keyword_profile(keyword)
+    return unique_normalized_terms([*profile.get("negative_keywords", []), *configured])
+
+
+def unique_normalized_terms(values: list[Any]) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        term = normalize_interest_keyword(str(value or ""))
+        if term and term not in seen:
+            terms.append(term)
+            seen.add(term)
+    return terms
 
 
 def paper_text_parts(item: dict[str, Any], card: dict[str, Any] | None) -> list[str]:

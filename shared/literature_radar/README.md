@@ -136,6 +136,10 @@ DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking is review-aware
 Briefs include an overall triage plan plus per-paper triage hints from the same
 shared rules as queue records, so a brief can say whether the next action is
 import, review before import, compare, skim, follow up, or keep dismissed.
+Signal lines include positive matches and, when present, a `Caution` line for
+matched negative context. This lets Personal and Team review surfaces explain
+why a paper matched the topic profile but was downranked before spending AI
+tokens or importing it into long-term storage.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
@@ -160,6 +164,14 @@ interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.
 Personal Side-Brain can load an editable JSON topic profile from `indexes/`
 while still keeping accepted-paper writes manual.
+The shared default topic profile also exposes lightweight keyword expansion for
+product adapters that present simpler controls than the full profile. For
+example, Team Side-Brain keeps three slider labels, but `agentic security`
+expands through the shared `ai_security` topic to terms such as `LLM security`,
+`prompt injection`, and `AI agent security`, with negative context such as
+generic AI applications available for score dampening. This keeps the
+security/memory/AI interest vocabulary consistent between Personal and Team
+without forcing every UI to expose the whole profile.
 Both adapters can reuse lightweight review intent, such as watched-paper notes
 or reasons, as local context for later runs without making the shared core own
 product storage or review UI.

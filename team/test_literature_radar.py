@@ -23,6 +23,7 @@ from team.literature_radar import (
     build_team_literature_radar_queue_payload,
     import_radar_recommendation,
     run_team_literature_radar,
+    score_team_radar_paper,
     team_radar_context_items,
     team_radar_source_preset,
 )
@@ -66,6 +67,24 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
         self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
         self.assertEqual(settings["usenix_security_cycles"], [1])
+
+    def test_team_radar_scorer_preserves_curated_negative_keyword_matches(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00777",
+            title="LLM Security for Generic AI Application Workflows",
+            abstract="This paper is a recommendation system only case study.",
+        )
+
+        scoring = score_team_radar_paper(
+            paper,
+            [{"keyword": "agentic security", "weight": 80}],
+        )
+
+        self.assertEqual(scoring["matched_positive_keywords"], ["agentic security"])
+        self.assertIn("generic ai application", scoring["matched_negative_keywords"])
+        self.assertIn("recommendation system only", scoring["matched_negative_keywords"])
+        self.assertLess(scoring["score"], 70)
 
     def test_imports_radar_recommendation_into_team_library(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2193,6 +2212,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             {"keyword": "agentic security", "weight": 90},
             payload["scoring_profile_summary"]["top_interests"],
         )
+        agentic_profile = next(
+            profile for profile in payload["interest_keyword_profiles"] if profile["keyword"] == "agentic security"
+        )
+        self.assertIn("LLM security", agentic_profile["positive_keywords"])
+        self.assertIn("generic AI application", agentic_profile["negative_keywords"])
         self.assertNotIn("run_id", payload)
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
@@ -2200,6 +2224,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenReview Venues", text)
         self.assertIn("Scoring: Team Interests", text)
         self.assertIn("agentic security=90", text)
+        self.assertIn("Interest profiles:", text)
+        self.assertIn("agentic security=90; matches AI security, LLM security", text)
+        self.assertIn("dampens generic AI application", text)
         self.assertIn("Venue profiles:", text)
         self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +1 more (top venues 5/18)", text)
         self.assertIn("OpenReview: ICLR", text)

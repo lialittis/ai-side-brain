@@ -81,6 +81,7 @@ from shared.literature_radar import (
     radar_source_options,
     radar_supported_source_ids,
     radar_text_discussion_terms,
+    radar_topic_keyword_profile,
     radar_triage_action_options,
     radar_triage_summary,
     radar_trend_signal_options,
@@ -487,6 +488,19 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("ai_safety", profile["topics"])
         self.assertIn("memory safety", profile["topics"]["memory_safety"]["positive_keywords"])
         self.assertIn("agent safety", profile["topics"]["ai_safety"]["positive_keywords"])
+
+    def test_topic_keyword_profile_maps_lightweight_interests_to_curated_terms(self) -> None:
+        agentic = radar_topic_keyword_profile("agentic security")
+        memory = radar_topic_keyword_profile("memory safety")
+
+        self.assertEqual(agentic["topic_ids"], ["ai_security"])
+        self.assertIn("agentic security", agentic["positive_keywords"])
+        self.assertIn("LLM security", agentic["positive_keywords"])
+        self.assertIn("prompt injection", agentic["positive_keywords"])
+        self.assertIn("recommendation system only", agentic["negative_keywords"])
+        self.assertEqual(memory["topic_ids"], ["memory_safety"])
+        self.assertIn("use-after-free", memory["positive_keywords"])
+        self.assertIn("human memory", memory["negative_keywords"])
 
     def test_builds_pipeline_trace_for_separated_radar_phases(self) -> None:
         paper = create_radar_paper(
@@ -1699,7 +1713,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(summary["source_trace"]["processor"], LOCAL_RADAR_SUMMARY_PROCESSOR)
         self.assertIn("Signal: This paper studies memory safety", report)
         self.assertIn("Why: Connects to configured interests", report)
-        self.assertIn("Matched: cyber reasoning", report)
+        self.assertIn("Matched: agentic security, cyber reasoning", report)
 
     def test_recommendation_novelty_marks_new_and_seen_before(self) -> None:
         paper = create_radar_paper(
@@ -1834,6 +1848,26 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "Attention: Worth reading for memory-safety agent hardening. Connects to configured interests through: memory safety. Related to existing context: Agentic baseline. Now: new this run",
                 "Matched: memory safety, agentic security",
             ],
+        )
+
+        caution_lines = radar_latest_signal_lines(
+            {
+                "latest_recommendation": {
+                    "summary": {
+                        "short_summary": "LLM security result with weak fit.",
+                        "relationship_to_interests": "Matches agentic security but includes off-topic context.",
+                    },
+                    "scoring": {
+                        "matched_positive_keywords": ["agentic security"],
+                        "matched_negative_keywords": ["generic AI application", "recommendation system only"],
+                    },
+                }
+            }
+        )
+        self.assertIn("Matched: agentic security", caution_lines)
+        self.assertIn(
+            "Caution: matched negative context: generic AI application, recommendation system only",
+            caution_lines,
         )
 
         stored_lines = radar_latest_signal_lines(
