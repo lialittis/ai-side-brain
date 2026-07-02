@@ -161,8 +161,9 @@ reads stored Radar state; it does not collect sources, download PDFs, or call AI
 The payload includes `review_counts`, active-queue `access_summary`,
 `provenance_summary`, `triage_summary`,
 `latest_run` health, freshness, and source stats, the active paper records,
-persisted signal lines, `triage_hint` reviewer guidance, and links back to the
-HTML review surfaces.
+persisted signal lines, normalized identifiers, source link maps, best paper
+links, `triage_hint` reviewer guidance, and links back to the HTML review
+surfaces.
 Completed runs also store a recommendation-level `provenance_summary`, exposed
 again under `latest_run.provenance_summary` for dashboards and health checks.
 Stored daily or weekly briefs are also available as local JSON at
@@ -418,6 +419,9 @@ explanation without re-running summarization.
 This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
 imported, and show whether a candidate is new this run or has appeared before.
+Imported Radar papers keep their source link map on the Latest Relevant Papers
+card, so team members still get labeled arXiv, DOI, publisher, and PDF buttons
+after a candidate moves into the shared library.
 Use `radar-papers` to inspect the deduplicated paper history, including papers
 that were collected and stored before any import decision. `radar-papers --json`
 records and stored recommendation records expose normalized `release_date`
@@ -466,15 +470,18 @@ key, optional activity detail or review reason, and imported item ID.
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
 latest-run health/source stats, structured `source_policy` and `source_coverage`
 for every run in the brief window, review counts, active queue preview, the
-Markdown brief, structured `triage_plan` and bibliographic `top_recommendations`, recent team
-Radar activity, and links back to the HTML brief, Radar page, JSON endpoint, and queue JSON. The active queue preview includes
+Markdown brief, structured `triage_plan`, and source-stable
+`top_recommendations` with bibliographic fields, identifiers, and link maps,
+recent team Radar activity, and links back to the HTML brief, Radar page, JSON
+endpoint, and queue JSON. The active queue preview includes
 `triage_action_options`, so dashboards can show the same import, skim, compare,
 and follow-up lanes as the browser queue.
 `/radar/status.json?limit=20` and
 `python team/research_cli.py radar-status --json` combine
 `/radar/settings.json`-style preflight data with `/radar/queue.json`-style
-latest-run health and queue data. They do not collect sources, download PDFs, or
-call AI.
+latest-run health and queue data, including each queued paper's normalized
+identifiers, source link maps, and best paper link for dashboards. They do not
+collect sources, download PDFs, or call AI.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
@@ -513,7 +520,10 @@ The same stored-run brief is available from the Radar page through `Weekly
 Brief`. The browser brief shows a compact health summary before the Markdown:
 latest-run freshness, source coverage, source readiness, pipeline phase status,
 OA enrichment readiness, review queue counts, source provenance, and PDF access
-for the active queue. The matching JSON payload is available
+for the active queue. It also renders structured top recommendation cards with
+rank, score, review state, triage hint, release date, matched terms, PDF policy,
+and source links so weekly review does not require scanning raw Markdown first.
+The matching JSON payload is available
 through `Brief JSON`, so team members can review it without using the CLI while
 local automation can consume the same stored-roll-up contract.
 
@@ -551,12 +561,17 @@ stored summary, relevance/context signal, and matched interests for daily
 review. The JSON snapshot uses the same queue payload as `radar-queue --json`,
 including `latest_run` health, `pipeline_summary`, source readiness, OA
 enrichment readiness, `access_summary`, `provenance_summary`, plus per-paper
-`signal_lines`. Stable
+`signal_lines`. The run script also writes combined
+`literature-radar-status-*` text and JSON snapshots unless
+`RADAR_WRITE_STATUS=0`; these use the same payload as `radar-status` and combine
+saved/default settings readiness with latest queue health for dashboards.
+Stable
 `literature-radar-settings-latest.json`, `literature-radar-settings-latest.txt`,
-and `literature-radar-queue-latest.*` files are refreshed when latest-copy
-output is enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue
-papers are included, and `RADAR_QUEUE_TRIAGE_ACTION=import` to write only one
-triage bucket to scheduled queue snapshots.
+`literature-radar-queue-latest.*`, and `literature-radar-status-latest.*` files
+are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT` to
+change how many active queue papers are included, and
+`RADAR_QUEUE_TRIAGE_ACTION=import` to write only one triage bucket to scheduled
+queue and status snapshots.
 The run script and brief script also write text and JSON
 `literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
 snapshots use the same activity payload as `radar-activity --json` and show
@@ -617,8 +632,11 @@ It reads `.env` first and supports these optional variables:
   `run_literature_radar.sh`.
 - `RADAR_WRITE_ACTIVITY=0`: skip writing activity snapshots from
   `run_literature_radar.sh` and `build_literature_radar_brief.sh`.
+- `RADAR_WRITE_STATUS=0`: skip writing combined status snapshots from
+  `run_literature_radar.sh`; `check_literature_radar_status.sh` can still be
+  run separately.
 - `RADAR_WRITE_LATEST=0`: skip refreshing stable `*-latest.*` copies while
-  keeping timestamped report, queue, and brief history.
+  keeping timestamped report, queue, status, and brief history.
 - `RADAR_STATUS_OUTPUT_DIR`: output directory for
   `check_literature_radar_status.sh`; defaults to `RADAR_OUTPUT_DIR` or
   `team/logs`.

@@ -81,11 +81,15 @@ provider's provenance while the merged paper keeps a compact primary
 `source_provenance` for UI/report consumers.
 The shared queue/brief helpers also build `provenance_summary` so Personal and
 Team dashboards can audit whether active recommendations came from
-authoritative API/accepted-page sources or secondary signals.
+authoritative API/accepted-page sources or secondary signals. Queue records also
+project normalized identifiers, source link maps, and a best link so daily
+review clients can open DOI/arXiv/PDF/landing sources without parsing nested
+paper history.
 Brief helpers also expose a structured top-recommendation triage plan and
 recommendation records for JSON consumers, carrying run IDs, review state,
-flat bibliographic fields, triage hints, signal lines, PDF policy, source
-provenance, and links without parsing Markdown.
+flat bibliographic fields, normalized identifiers, source link maps, triage
+hints, signal lines, PDF policy, source provenance, and links without parsing
+Markdown.
 Completed Personal and Team run records store the same summary for all ranked
 recommendations, so later weekly briefs and latest-run health views remain
 auditable even after the active queue changes. Stored history briefs include a

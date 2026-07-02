@@ -1291,6 +1291,8 @@ def build_personal_radar_run_record(
                 "dedupe_key": (recommendation.get("paper") or {}).get("dedupe_key"),
                 "title": (recommendation.get("paper") or {}).get("title"),
                 "release_date": paper_release_date(recommendation.get("paper") or {}),
+                "identifiers": dict(((recommendation.get("paper") or {}).get("identifiers") or {})),
+                "links": dict(((recommendation.get("paper") or {}).get("links") or {})),
                 "score": (recommendation.get("scoring") or {}).get("score"),
                 "label": (recommendation.get("scoring") or {}).get("label"),
                 "novelty": recommendation.get("novelty"),

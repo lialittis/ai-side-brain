@@ -223,12 +223,23 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 "radar-queue text queue",
                 (output_dir / "literature-radar-queue-latest.txt").read_text(),
             )
+            latest_team_status = read_json(output_dir / "literature-radar-status-latest.json")
+            self.assertEqual(latest_team_status["command"], "radar-status")
+            self.assertIn("--triage-action", latest_team_status["args"])
+            self.assertIn("compare", latest_team_status["args"])
+            self.assertIn("--limit", latest_team_status["args"])
+            self.assertIn("20", latest_team_status["args"])
+            self.assertIn(
+                "radar-status text status",
+                (output_dir / "literature-radar-status-latest.txt").read_text(),
+            )
             self.assertEqual(
                 read_json(brief_dir / "literature-radar-brief-latest.json")["command"],
                 "radar-brief",
             )
             self.assertIn("radar-brief markdown", (brief_dir / "literature-radar-brief-latest.md").read_text())
             self.assertTrue(any_timestamped_file(output_dir, "literature-radar-", ".json"))
+            self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-", ".json"))
             self.assertTrue(any_timestamped_file(brief_dir, "literature-radar-brief-", ".json"))
 
     def test_personal_cycle_refreshes_latest_outputs(self) -> None:
@@ -281,6 +292,16 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 "queue text queue",
                 (output_dir / "personal-literature-radar-queue-latest.txt").read_text(),
             )
+            latest_personal_status = read_json(output_dir / "personal-literature-radar-status-latest.json")
+            self.assertEqual(latest_personal_status["command"], "status")
+            self.assertIn("--triage-action", latest_personal_status["args"])
+            self.assertIn("watch", latest_personal_status["args"])
+            self.assertIn("--queue-limit", latest_personal_status["args"])
+            self.assertIn("20", latest_personal_status["args"])
+            self.assertIn(
+                "status text status",
+                (output_dir / "personal-literature-radar-status-latest.txt").read_text(),
+            )
             self.assertEqual(
                 read_json(brief_dir / "personal-literature-radar-brief-latest.json")["command"],
                 "brief",
@@ -289,6 +310,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 "brief markdown",
                 (brief_dir / "personal-literature-radar-brief-latest.md").read_text(),
             )
+            self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".json"))
 
     def test_latest_copy_can_be_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

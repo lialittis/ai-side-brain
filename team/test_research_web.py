@@ -47,10 +47,23 @@ from team.research_web import (
     render_literature_radar_brief_page,
     render_literature_radar_queue_page,
     render_literature_radar_papers_page,
+    render_radar_links,
 )
 
 
 class TeamResearchWebTest(unittest.TestCase):
+    def test_radar_link_renderer_uses_enriched_queue_record_links(self) -> None:
+        html = render_radar_links(
+            {
+                "title": "Compact Radar Record",
+                "identifiers": {"arxiv_id": "2601.00999"},
+                "links": {"arxiv": "https://arxiv.org/abs/2601.00999"},
+            }
+        )
+
+        self.assertIn('href="https://arxiv.org/abs/2601.00999"', html)
+        self.assertIn(">arXiv</a>", html)
+
     def test_latest_and_submit_pages_have_simple_member_workflows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -298,6 +311,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(queue_payload["papers"][0]["release_date"], "2026-06-27")
+            self.assertEqual(queue_payload["papers"][0]["identifiers"]["arxiv_id"], "2601.00051")
+            self.assertEqual(queue_payload["papers"][0]["links"]["arxiv"], "https://arxiv.org/abs/2601.00051")
+            self.assertEqual(queue_payload["papers"][0]["link"], "https://arxiv.org/abs/2601.00051")
             self.assertEqual(queue_payload["papers"][0]["triage_hint"]["action"], "import_to_library")
             self.assertEqual(queue_payload["papers"][0]["triage_hint"]["label"], "Import")
             self.assertIn(
@@ -319,6 +335,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Triage lanes:", queue_html)
             self.assertIn(">Import 1</a>", queue_html)
             self.assertIn("Triage: Import", queue_html)
+            self.assertIn("https://arxiv.org/abs/2601.00051", queue_html)
             self.assertIn("legally downloadable PDF", queue_html)
             self.assertIn('href="/radar/queue.json?limit=1">Queue JSON</a>', queue_html)
             self.assertIn('class="nav-item active" href="/radar/queue?limit=20">Queue</a>', queue_html)
@@ -344,6 +361,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["queue"]["triage_action_options"][0]["count"], 1)
             self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(brief_payload["top_recommendations"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertEqual(brief_payload["top_recommendations"][0]["identifiers"]["arxiv_id"], "2601.00051")
+            self.assertEqual(
+                brief_payload["top_recommendations"][0]["links"]["arxiv"],
+                "https://arxiv.org/abs/2601.00051",
+            )
             self.assertEqual(brief_payload["top_recommendations"][0]["triage_hint"]["action"], "import_to_library")
             self.assertEqual(brief_payload["queue"]["papers"][0]["release_date"], "2026-06-27")
             self.assertEqual(brief_payload["activity"], [])
@@ -371,6 +393,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(status_payload["settings"]["kind"], "team_literature_radar_settings")
             self.assertEqual(status_payload["queue"]["kind"], "team_literature_radar_queue")
             self.assertEqual(status_payload["queue"]["limit"], 1)
+            self.assertEqual(status_payload["queue"]["papers"][0]["identifiers"]["arxiv_id"], "2601.00051")
+            self.assertEqual(
+                status_payload["queue"]["papers"][0]["links"]["arxiv"],
+                "https://arxiv.org/abs/2601.00051",
+            )
+            self.assertEqual(status_payload["queue"]["papers"][0]["link"], "https://arxiv.org/abs/2601.00051")
             self.assertEqual(status_payload["latest_run"]["id"], run["id"])
             self.assertEqual(status_payload["links"]["status_json"], "/radar/status.json?limit=1")
             self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
@@ -642,6 +670,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("PDF access:", brief_html)
             self.assertIn("Triage lanes:", brief_html)
             self.assertIn(">Import 1</a>", brief_html)
+            self.assertIn("Top Recommendations", brief_html)
+            self.assertIn("radar-brief-recommendations", brief_html)
+            self.assertIn("Triage: Import", brief_html)
+            self.assertIn(">arXiv</a>", brief_html)
             self.assertIn("Team Literature Radar Brief", brief_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", brief_html)
             self.assertIn("Source Errors", brief_html)
@@ -687,6 +719,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("In Library", imported_html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("<strong>Signal:</strong> A local summary for radar review.", latest_html)
+            self.assertIn(">arXiv</a>", latest_html)
+            self.assertIn("https://arxiv.org/abs/2601.00006", latest_html)
 
     def test_literature_radar_web_run_uses_team_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

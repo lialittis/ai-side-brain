@@ -917,6 +917,7 @@ def render_literature_radar_brief_page(
       {render_radar_brief_form(days=days, limit=limit)}
       <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
       {render_radar_brief_summary(payload)}
+      {render_radar_brief_top_recommendations(payload)}
       <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
     </section>
     """
@@ -1541,6 +1542,86 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     """
 
 
+def render_radar_brief_top_recommendations(payload: dict[str, Any]) -> str:
+    recommendations = (
+        payload.get("top_recommendations")
+        if isinstance(payload.get("top_recommendations"), list)
+        else []
+    )
+    if not recommendations:
+        return ""
+    items = "\n".join(
+        render_radar_brief_top_recommendation(recommendation)
+        for recommendation in recommendations[: int(payload.get("recommendation_limit") or 20)]
+        if isinstance(recommendation, dict)
+    )
+    if not items:
+        return ""
+    return f"""
+    <div class="radar-queue-preview radar-brief-recommendations">
+      <h3>Top Recommendations</h3>
+      {items}
+    </div>
+    """
+
+
+def render_radar_brief_top_recommendation(record: dict[str, Any]) -> str:
+    title = str(record.get("title") or "Untitled paper")
+    rank = int(record.get("rank") or 0)
+    score = int(float(record.get("score") or 0))
+    label = str(record.get("label") or "needs_review")
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+    triage_label = normalize_inline_text(triage.get("label") or triage.get("action") or "")
+    triage_severity = str(triage.get("severity") or "normal")
+    triage_css = "good" if triage_severity == "good" else "warn" if triage_severity in {"warning", "error"} else ""
+    triage_html = (
+        f'<span class="pill {triage_css}">Triage: {html_escape(triage_label)}</span>'
+        if triage_label
+        else ""
+    )
+    source_ids = record.get("source_ids") if isinstance(record.get("source_ids"), list) else []
+    source_tags = "".join(
+        f'<span class="tag">{html_escape(str(source_id))}</span>'
+        for source_id in source_ids[:4]
+    )
+    if len(source_ids) > 4:
+        source_tags += f'<span class="pill">+{len(source_ids) - 4} sources</span>'
+    matched_terms = record.get("matched_terms") if isinstance(record.get("matched_terms"), list) else []
+    matched_tags = "".join(
+        f'<span class="tag">{html_escape(str(term))}</span>'
+        for term in matched_terms[:5]
+    )
+    pdf_policy = str(record.get("pdf_policy") or "")
+    summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+    attention = record.get("attention_summary") if isinstance(record.get("attention_summary"), dict) else {}
+    summary_text = normalize_inline_text(
+        summary.get("short_summary")
+        or attention.get("why_attention")
+        or ""
+    )
+    summary_html = f'<p class="radar-reasons">{html_escape(summary_text)}</p>' if summary_text else ""
+    return f"""
+    <article class="radar-queue-item">
+      <div class="radar-queue-title">{rank}. {html_escape(title)}</div>
+      <div class="tags">
+        {relevance_pill(label)}
+        <span class="pill">Score: {score}</span>
+        {render_radar_review_pill(review)}
+        {render_radar_release_pill(record)}
+        {triage_html}
+        {source_tags}
+        {matched_tags}
+      </div>
+      {summary_html}
+      <div class="radar-links">
+        {render_radar_links(record)}
+        {f'<span class="pill">{html_escape(pdf_policy)}</span>' if pdf_policy else ''}
+      </div>
+    </article>
+    """
+
+
 def radar_brief_source_coverage_status(source_coverage: dict[str, Any]) -> str:
     if not source_coverage:
         return "unknown"
@@ -1750,7 +1831,7 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
         if imported_item_id
         else '<span class="pill">Not imported</span>'
     )
-    links = render_radar_links(paper)
+    links = render_radar_links(record)
     import_control = render_radar_paper_import_control(record, review_filter=review_filter)
     return f"""
     <article class="paper">
@@ -2396,7 +2477,7 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
           <span class="pill">Action: {html_escape(action)}</span>
           {render_radar_source_pills(paper)}
           {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
-          {render_radar_links(paper)}
+          {render_radar_links(record)}
           {render_radar_import_control(record, imported_item_id)}
           {render_radar_review_controls(record.get("dedupe_key") or "", run_id=record.get("run_id") or "", review=review)}
         </div>
@@ -2617,7 +2698,7 @@ def render_radar_source_pills(paper: dict[str, Any]) -> str:
     return "".join(f'<span class="tag">{html_escape(source_id)}</span>' for source_id in source_ids)
 
 
-def render_radar_links(paper: dict[str, Any]) -> str:
+def render_radar_links(record: dict[str, Any]) -> str:
     labels = {
         "landing": "Open",
         "arxiv": "arXiv",
@@ -2626,7 +2707,7 @@ def render_radar_links(paper: dict[str, Any]) -> str:
         "oa_pdf": "OA PDF",
         "arxiv_pdf": "arXiv PDF",
     }
-    links = paper.get("links") or {}
+    links = radar_record_link_map(record)
     rendered = []
     seen_urls = set()
     for key in ("landing", "arxiv", "doi", "pdf", "oa_pdf", "arxiv_pdf"):
@@ -2638,6 +2719,28 @@ def render_radar_links(paper: dict[str, Any]) -> str:
             f'<a class="button" href="{html_escape(url)}" target="_blank" rel="noreferrer">{html_escape(labels[key])}</a>'
         )
     return "".join(rendered)
+
+
+def radar_record_link_map(record: dict[str, Any]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    candidates = [record]
+    for key in ("paper", "recommendation", "latest_recommendation"):
+        candidate = record.get(key) if isinstance(record.get(key), dict) else {}
+        if candidate:
+            candidates.append(candidate)
+            paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else {}
+            if paper:
+                candidates.append(paper)
+    for candidate in candidates:
+        links = candidate.get("links") if isinstance(candidate.get("links"), dict) else {}
+        for key, value in links.items():
+            clean = str(value or "").strip()
+            if clean:
+                merged[str(key)] = clean
+    link = str(record.get("link") or "").strip()
+    if link and not any(url == link for url in merged.values()):
+        merged.setdefault("landing", link)
+    return merged
 
 
 def render_radar_import_control(record: dict[str, Any], imported_item_id: str | None) -> str:
@@ -3096,7 +3199,7 @@ def render_latest_radar_queue_item(
       {render_radar_attention_summary(latest)}
       {render_radar_signal_lines(latest, include_attention=not bool(latest.get("attention_summary")))}
       <div class="radar-links">
-        {render_radar_links(paper)}
+        {render_radar_links(record)}
         {render_radar_paper_import_control(record, review_filter=review_filter, return_to=return_to)}
         {review_controls}
       </div>
@@ -3153,6 +3256,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
         importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
         pdf_access_html = render_item_pdf_access_pill(item)
         provenance_html = render_item_radar_source_provenance_pill(item)
+        radar_links_html = render_item_radar_links(item)
         row_class = "paper removed" if removed else "paper"
         paper_actions = (
             render_removed_controls(paper)
@@ -3180,6 +3284,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {render_item_radar_lifecycle_pills(item, paper.get("radar_history"))}
                   {pdf_access_html}
                   {provenance_html}
+                  {radar_links_html}
                   {link_html}
                 </div>
                 <div class="paper-actions">
@@ -3275,6 +3380,13 @@ def render_item_radar_source_provenance_pill(item: dict[str, Any]) -> str:
     radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
     provenance = radar_metadata.get("source_provenance") if isinstance(radar_metadata.get("source_provenance"), dict) else {}
     return render_radar_source_provenance_pill(provenance)
+
+
+def render_item_radar_links(item: dict[str, Any]) -> str:
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    if not radar_metadata:
+        return ""
+    return render_radar_links({"links": radar_metadata.get("links") or {}, "link": item.get("url") or ""})
 
 
 def render_item_radar_lifecycle_pills(item: dict[str, Any], radar_history: dict[str, Any] | None = None) -> str:

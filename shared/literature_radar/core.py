@@ -4830,6 +4830,7 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
     context = radar_brief_recommendation_context(recommendation)
     scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    source_metadata = radar_record_source_metadata(recommendation)
     source_ids = unique_normalized_terms(
         [
             selected_paper.get("source_id") if isinstance(selected_paper, dict) else "",
@@ -4860,7 +4861,9 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
         "dedupe_key": selected_dedupe_key,
         "authors": list(selected_paper.get("authors") or []) if isinstance(selected_paper, dict) else [],
         "year": selected_paper.get("year") if isinstance(selected_paper, dict) else None,
-        "venue": selected_paper.get("venue") or "" if isinstance(selected_paper, dict) else "",
+        "venue": (selected_paper.get("venue") or "") if isinstance(selected_paper, dict) else "",
+        "identifiers": source_metadata["identifiers"],
+        "links": source_metadata["links"],
         "source_ids": source_ids,
         "tags": tags,
         "matched_terms": matched_terms,
@@ -5170,16 +5173,11 @@ def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, di
 
 
 def radar_history_source_provenance(record: dict[str, Any]) -> dict[str, Any]:
-    provenance = record.get("source_provenance") if isinstance(record.get("source_provenance"), dict) else {}
-    if provenance:
-        return provenance
-    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
-    provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
-    if provenance:
-        return provenance
-    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
-    latest_paper = latest.get("paper") if isinstance(latest.get("paper"), dict) else {}
-    return latest_paper.get("source_provenance") if isinstance(latest_paper.get("source_provenance"), dict) else {}
+    for candidate in radar_source_metadata_candidates(record):
+        provenance = candidate.get("source_provenance") if isinstance(candidate.get("source_provenance"), dict) else {}
+        if provenance:
+            return provenance
+    return {}
 
 
 def format_radar_source_provenance_summary(summary: dict[str, Any]) -> str:
@@ -5262,6 +5260,14 @@ def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, 
     enriched = dict(record)
     enriched["signal_lines"] = radar_latest_signal_lines(record)
     enriched["triage_hint"] = radar_review_triage_hint(record)
+    source_metadata = radar_record_source_metadata(record)
+    if source_metadata["identifiers"]:
+        enriched["identifiers"] = source_metadata["identifiers"]
+    if source_metadata["links"]:
+        enriched["links"] = source_metadata["links"]
+    best_link = radar_record_best_link(record)
+    if best_link:
+        enriched["link"] = best_link
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
     release_date = paper_release_date(paper)
     if release_date:
@@ -5271,6 +5277,66 @@ def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, 
     if attention:
         enriched["attention_summary"] = dict(attention)
     return enriched
+
+
+def radar_record_source_metadata(record: dict[str, Any]) -> dict[str, dict[str, str]]:
+    identifiers: dict[str, Any] = {}
+    links: dict[str, Any] = {}
+    for candidate in radar_source_metadata_candidates(record):
+        candidate_identifiers = candidate.get("identifiers") if isinstance(candidate.get("identifiers"), dict) else {}
+        candidate_links = candidate.get("links") if isinstance(candidate.get("links"), dict) else {}
+        identifiers.update(candidate_identifiers)
+        links.update(candidate_links)
+    return {
+        "identifiers": normalize_identifiers(identifiers),
+        "links": {str(key): str(value).strip() for key, value in links.items() if str(value).strip()},
+    }
+
+
+def radar_source_metadata_candidates(record: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    nested = record.get("recommendation") if isinstance(record.get("recommendation"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    for candidate in [nested, latest, record]:
+        if isinstance(candidate, dict) and candidate:
+            candidates.append(candidate)
+            paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else {}
+            if paper:
+                candidates.append(paper)
+    return candidates
+
+
+def radar_record_best_link(record: dict[str, Any]) -> str:
+    source_metadata = radar_record_source_metadata(record)
+    links = source_metadata["links"]
+    nested = record.get("recommendation") if isinstance(record.get("recommendation"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    provenance = radar_history_source_provenance(record)
+    pdf_access = radar_history_pdf_access(record)
+    for candidate in [
+        record.get("link"),
+        nested.get("link"),
+        latest.get("link"),
+        links.get("landing"),
+        links.get("arxiv"),
+        links.get("doi"),
+        links.get("publisher"),
+        links.get("pdf"),
+        links.get("oa_pdf"),
+        links.get("arxiv_pdf"),
+        provenance.get("source_url"),
+        provenance.get("landing_url"),
+        provenance.get("doi_url"),
+        provenance.get("publisher_url"),
+        provenance.get("pdf_url"),
+        pdf_access.get("source_url"),
+        pdf_access.get("pdf_url"),
+        pdf_access.get("local_path"),
+    ]:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def radar_review_triage_hint(record: dict[str, Any]) -> dict[str, Any]:
@@ -5474,38 +5540,12 @@ def radar_brief_recommendation_triage_hint(recommendation: dict[str, Any]) -> di
 
 
 def radar_brief_recommendation_link(recommendation: dict[str, Any]) -> str:
-    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
-    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
-    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
-    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
-    nested_links = nested_paper.get("links") if isinstance(nested_paper.get("links"), dict) else {}
-    provenance = radar_brief_recommendation_source_provenance(recommendation)
-    pdf_access = radar_brief_recommendation_pdf_access(recommendation)
-    for candidate in [
-        recommendation.get("link"),
-        links.get("landing"),
-        links.get("arxiv"),
-        links.get("doi"),
-        links.get("publisher"),
-        links.get("pdf"),
-        nested_links.get("landing"),
-        nested_links.get("arxiv"),
-        nested_links.get("doi"),
-        nested_links.get("publisher"),
-        nested_links.get("pdf"),
-        provenance.get("source_url"),
-        provenance.get("landing_url"),
-        provenance.get("doi_url"),
-        provenance.get("publisher_url"),
-        provenance.get("pdf_url"),
-        pdf_access.get("source_url"),
-        pdf_access.get("pdf_url"),
-        pdf_access.get("local_path"),
-    ]:
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return ""
+    return radar_record_best_link(
+        {
+            **recommendation,
+            "pdf_access": radar_brief_recommendation_pdf_access(recommendation),
+        }
+    )
 
 
 def novelty_report_text(novelty: dict[str, Any]) -> str:

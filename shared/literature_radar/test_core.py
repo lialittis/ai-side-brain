@@ -690,6 +690,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             {
                 "title": "Unreviewed High Score",
                 "paper": {"release_date": "2026-06-26"},
+                "identifiers": {"arxiv_id": "2601.00088"},
+                "links": {"arxiv": "https://arxiv.org/abs/2601.00088"},
                 "latest_seen_at": "2026-07-01T11:00:00+00:00",
                 "pdf_access": {"access_kind": "arxiv_pdf", "can_download": True},
                 "latest_recommendation": {
@@ -745,6 +747,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(queue["papers"][0]["triage_hint"]["action"], "import_to_library")
         self.assertEqual(queue["papers"][0]["triage_hint"]["label"], "Import")
         self.assertIn("legally downloadable PDF", queue["papers"][0]["triage_hint"]["reason"])
+        self.assertEqual(queue["papers"][0]["identifiers"]["arxiv_id"], "2601.00088")
+        self.assertEqual(queue["papers"][0]["links"]["arxiv"], "https://arxiv.org/abs/2601.00088")
+        self.assertEqual(queue["papers"][0]["link"], "https://arxiv.org/abs/2601.00088")
         self.assertEqual(
             radar_triage_summary(queue["papers"]),
             {
@@ -1992,6 +1997,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(structured[0]["authors"], ["Ada Lovelace", "Grace Hopper"])
         self.assertEqual(structured[0]["year"], 2026)
         self.assertEqual(structured[0]["venue"], "arXiv")
+        self.assertEqual(structured[0]["identifiers"]["arxiv_id"], "2601.00032")
+        self.assertEqual(structured[0]["links"]["arxiv"], "https://arxiv.org/abs/2601.00032")
         self.assertEqual(structured[0]["source_ids"], ["arxiv"])
         self.assertIn("agentic security", structured[0]["tags"])
         self.assertIn("memory safety", structured[0]["matched_terms"])
@@ -2050,6 +2057,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
         self.assertEqual(structured[0]["pdf_access"]["access_kind"], "arxiv_pdf")
         self.assertEqual(structured[0]["link"], "https://arxiv.org/abs/2601.00077")
+        self.assertEqual(structured[0]["identifiers"]["arxiv_id"], "2601.00077")
+        self.assertEqual(structured[0]["links"]["arxiv"], "https://arxiv.org/abs/2601.00077")
         self.assertIn("download allowed", structured[0]["pdf_policy"])
 
 

@@ -24,6 +24,8 @@ QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
 ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.txt"
 ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.json"
+STATUS_PATH="$OUTPUT_DIR/literature-radar-status-$STAMP.txt"
+STATUS_JSON_PATH="$OUTPUT_DIR/literature-radar-status-$STAMP.json"
 SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.json"
 SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.txt"
 LATEST_REPORT_PATH="$OUTPUT_DIR/literature-radar-latest.md"
@@ -32,6 +34,8 @@ LATEST_QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-latest.json"
 LATEST_ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-latest.txt"
 LATEST_ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-latest.json"
+LATEST_STATUS_PATH="$OUTPUT_DIR/literature-radar-status-latest.txt"
+LATEST_STATUS_JSON_PATH="$OUTPUT_DIR/literature-radar-status-latest.json"
 LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-latest.json"
 LATEST_SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-settings-latest.txt"
 mkdir -p "$OUTPUT_DIR"
@@ -259,6 +263,34 @@ if [[ "${RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
   fi
 fi
 
+if [[ "${RADAR_WRITE_STATUS:-1}" == "1" ]]; then
+  STATUS_ARGS=(
+    "team/research_cli.py"
+    "radar-status"
+    "--limit" "${RADAR_STATUS_QUEUE_LIMIT:-${RADAR_QUEUE_LIMIT:-20}}"
+    "--freshness-max-age-hours" "${RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS:-${RADAR_FRESHNESS_MAX_AGE_HOURS:-36}}"
+  )
+  STATUS_TEXT_ARGS=("${STATUS_ARGS[@]}")
+  if [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
+    STATUS_ARGS+=("--ignore-saved-defaults")
+    STATUS_TEXT_ARGS+=("--ignore-saved-defaults")
+  fi
+  if [[ -n "${RADAR_DB_PATH:-}" ]]; then
+    STATUS_ARGS+=("--db-path" "$RADAR_DB_PATH")
+    STATUS_TEXT_ARGS+=("--db-path" "$RADAR_DB_PATH")
+  fi
+  if [[ -n "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}" ]]; then
+    STATUS_ARGS+=("--triage-action" "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}")
+    STATUS_TEXT_ARGS+=("--triage-action" "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}")
+  fi
+  "$PYTHON_BIN" "${STATUS_ARGS[@]}" --json > "$STATUS_JSON_PATH"
+  "$PYTHON_BIN" "${STATUS_TEXT_ARGS[@]}" > "$STATUS_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$STATUS_JSON_PATH" "$LATEST_STATUS_JSON_PATH"
+    cp "$STATUS_PATH" "$LATEST_STATUS_PATH"
+  fi
+fi
+
 echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
 if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
@@ -287,5 +319,13 @@ if [[ "${RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
   if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
     echo "Literature Radar latest activity: $LATEST_ACTIVITY_PATH"
     echo "Literature Radar latest activity JSON: $LATEST_ACTIVITY_JSON_PATH"
+  fi
+fi
+if [[ "${RADAR_WRITE_STATUS:-1}" == "1" ]]; then
+  echo "Literature Radar status: $STATUS_PATH"
+  echo "Literature Radar status JSON: $STATUS_JSON_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    echo "Literature Radar latest status: $LATEST_STATUS_PATH"
+    echo "Literature Radar latest status JSON: $LATEST_STATUS_JSON_PATH"
   fi
 fi

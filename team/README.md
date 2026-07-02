@@ -116,7 +116,7 @@ For daily radar usage, run `team/scripts/run_literature_radar_cycle.sh` from
 cron, enable the user-level systemd
 `ai-side-brain-team-literature-radar-cycle.timer`, or open `/radar` and use
 `Run Radar` for an ad hoc check. The cycle script runs collection, queue
-snapshot generation, and the stored brief in one command; use
+snapshot generation, combined status snapshots, and the stored brief in one command; use
 `team/scripts/run_literature_radar.sh` or
 `team/scripts/build_literature_radar_brief.sh` when you need only one phase.
 Install the recommended user timer with

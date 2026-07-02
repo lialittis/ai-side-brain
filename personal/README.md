@@ -91,8 +91,9 @@ infra/systemd/install_user_timers.sh --personal
 ```
 
 The cycle script is the simplest daily command: it runs collection, writes queue
-snapshots, then builds the stored brief. Set `PERSONAL_RADAR_CYCLE_RUN_COLLECTION=0`
-or `PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
+and combined status snapshots, then builds the stored brief. Set
+`PERSONAL_RADAR_CYCLE_RUN_COLLECTION=0` or
+`PERSONAL_RADAR_CYCLE_BUILD_BRIEF=0` to run only one half of the cycle.
 To check Personal Radar readiness and latest-run queue health without collecting
 paper sources, run:
 
@@ -122,14 +123,18 @@ for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
 run script also writes text and JSON `personal-literature-radar-activity-*`
 snapshots unless `PERSONAL_RADAR_WRITE_ACTIVITY=0`; those snapshots use the
 same payload as `activity --json` and list recent Personal Radar review changes
-with actor, timestamp, status, title, dedupe key, and review reason. The
+with actor, timestamp, status, title, dedupe key, and review reason. It also
+writes combined text and JSON `personal-literature-radar-status-*` snapshots
+unless `PERSONAL_RADAR_WRITE_STATUS=0`; those snapshots use the same
+settings-plus-queue payload as `status --json`. The
 brief script writes a Markdown and JSON roll-up over stored runs
 without collecting again and writes the same activity snapshots. Scheduled
 scripts also refresh stable
 `personal-literature-radar-latest.json`,
 `personal-literature-radar-settings-latest.json`,
 `personal-literature-radar-queue-latest.*`, and
-`personal-literature-radar-activity-latest.*`, and
+`personal-literature-radar-activity-latest.*`,
+`personal-literature-radar-status-latest.*`, and
 `personal-literature-radar-brief-latest.*` files unless
 `PERSONAL_RADAR_WRITE_LATEST=0`. The JSON brief uses the same stored-read contract as
 the CLI `brief --json`: `kind=personal_literature_radar_brief`, selected
@@ -154,10 +159,11 @@ activity snapshot window and size. Use
 threshold for queue and brief snapshots. The status script also supports
 `PERSONAL_RADAR_STATUS_OUTPUT_DIR`, `PERSONAL_RADAR_STATUS_QUEUE_LIMIT`, and
 `PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION`, and
-`PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status-only snapshots. Use
+`PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status snapshots. Use
 `PERSONAL_RADAR_WRITE_SETTINGS=0`
 to skip preflight snapshots, and `PERSONAL_RADAR_WRITE_ACTIVITY=0` to skip
-activity snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
+activity snapshots. Use `PERSONAL_RADAR_WRITE_STATUS=0` to skip status snapshots
+from the run script. Use `PERSONAL_RADAR_WRITE_LATEST=0`
 to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief
@@ -261,8 +267,8 @@ health/freshness, review counts, active queue preview with PDF access summary,
 source provenance summary, recent activity, structured `context_summary`,
 `source_policy`, `source_readiness`, `pipeline_summary`, `oa_enrichment`, aggregate
 `provenance_summary`, and `source_coverage` for every run in the brief window,
-active queue `triage_action_options`, structured `triage_plan` and
-`top_recommendations` with flat bibliographic fields, and paths to the local run index and paper-history files, so local
+active queue source identifiers/link maps, active queue `triage_action_options`, structured `triage_plan` and
+`top_recommendations` with flat bibliographic fields, identifiers, and link maps, and paths to the local run index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring, the Personal history/watch context
 pool used for linking, and a phase trace for collection, PDF policy,

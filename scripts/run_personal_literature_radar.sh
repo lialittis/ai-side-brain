@@ -24,12 +24,16 @@ QUEUE_PATH="$OUTPUT_DIR/personal-literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-queue-$STAMP.json"
 ACTIVITY_PATH="$OUTPUT_DIR/personal-literature-radar-activity-$STAMP.txt"
 ACTIVITY_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-activity-$STAMP.json"
+STATUS_PATH="$OUTPUT_DIR/personal-literature-radar-status-$STAMP.txt"
+STATUS_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-status-$STAMP.json"
 SETTINGS_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-settings-$STAMP.json"
 LATEST_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-latest.json"
 LATEST_QUEUE_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-queue-latest.json"
 LATEST_ACTIVITY_PATH="$OUTPUT_DIR/personal-literature-radar-activity-latest.txt"
 LATEST_ACTIVITY_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-activity-latest.json"
+LATEST_STATUS_PATH="$OUTPUT_DIR/personal-literature-radar-status-latest.txt"
+LATEST_STATUS_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-status-latest.json"
 LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/personal-literature-radar-settings-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
@@ -238,6 +242,37 @@ if [[ "${PERSONAL_RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
   fi
 fi
 
+if [[ "${PERSONAL_RADAR_WRITE_STATUS:-1}" == "1" ]]; then
+  STATUS_BASE_ARGS=()
+  for arg in "${SETTINGS_ARGS[@]}"; do
+    if [[ "$arg" != "--json" ]]; then
+      STATUS_BASE_ARGS+=("$arg")
+    fi
+  done
+  STATUS_ARGS=("${STATUS_BASE_ARGS[@]}")
+  STATUS_TEXT_ARGS=("${STATUS_BASE_ARGS[@]}")
+  STATUS_ARGS[1]="status"
+  STATUS_TEXT_ARGS[1]="status"
+  STATUS_ARGS+=(
+    "--queue-limit" "${PERSONAL_RADAR_STATUS_QUEUE_LIMIT:-${PERSONAL_RADAR_QUEUE_LIMIT:-20}}"
+    "--freshness-max-age-hours" "${PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS:-${PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS:-36}}"
+  )
+  STATUS_TEXT_ARGS+=(
+    "--queue-limit" "${PERSONAL_RADAR_STATUS_QUEUE_LIMIT:-${PERSONAL_RADAR_QUEUE_LIMIT:-20}}"
+    "--freshness-max-age-hours" "${PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS:-${PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS:-36}}"
+  )
+  if [[ -n "${PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${PERSONAL_RADAR_QUEUE_TRIAGE_ACTION:-}}" ]]; then
+    STATUS_ARGS+=("--triage-action" "${PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${PERSONAL_RADAR_QUEUE_TRIAGE_ACTION:-}}")
+    STATUS_TEXT_ARGS+=("--triage-action" "${PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${PERSONAL_RADAR_QUEUE_TRIAGE_ACTION:-}}")
+  fi
+  "$PYTHON_BIN" "${STATUS_ARGS[@]}" --json > "$STATUS_JSON_PATH"
+  "$PYTHON_BIN" "${STATUS_TEXT_ARGS[@]}" > "$STATUS_PATH"
+  if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$STATUS_JSON_PATH" "$LATEST_STATUS_JSON_PATH"
+    cp "$STATUS_PATH" "$LATEST_STATUS_PATH"
+  fi
+fi
+
 echo "Personal Literature Radar JSON: $JSON_PATH"
 if [[ "${PERSONAL_RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
   echo "Personal Literature Radar settings JSON: $SETTINGS_JSON_PATH"
@@ -262,5 +297,13 @@ if [[ "${PERSONAL_RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
   if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
     echo "Personal Literature Radar latest activity: $LATEST_ACTIVITY_PATH"
     echo "Personal Literature Radar latest activity JSON: $LATEST_ACTIVITY_JSON_PATH"
+  fi
+fi
+if [[ "${PERSONAL_RADAR_WRITE_STATUS:-1}" == "1" ]]; then
+  echo "Personal Literature Radar status: $STATUS_PATH"
+  echo "Personal Literature Radar status JSON: $STATUS_JSON_PATH"
+  if [[ "${PERSONAL_RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    echo "Personal Literature Radar latest status: $LATEST_STATUS_PATH"
+    echo "Personal Literature Radar latest status JSON: $LATEST_STATUS_JSON_PATH"
   fi
 fi
