@@ -75,12 +75,20 @@ The page is review-first:
 7. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls, plus a compact
    Radar insight block with the stored summary, relevance reason, matched
-   interests, and relationship to existing team context.
+   interests, relationship to existing team context, release date, current
+   Radar review state, Radar seen count, and inline Radar review controls for
+   watch/dismiss/clear.
+
+The Latest Papers `Publish Date` sort uses normalized Radar release dates for
+imported Radar papers and falls back to the item year for manually submitted
+library entries.
 
 Recent comments on imported library papers are folded back into the Radar
 context matcher as local discussion terms. This lets later Radar runs explain
 that a new paper is related to what the team actually discussed, not only to
-static tags or abstracts.
+static tags or abstracts. Comments on imported Radar papers also appear in
+Radar activity JSON and weekly briefs, so human follow-up is visible in the
+same review trail as watch, dismiss, and import actions.
 Watched Radar papers are also folded back into the context matcher before they
 are imported. Their stored attention summary and any review note from the Queue
 page or `radar-review --reason` become local context text and discussion terms
@@ -381,9 +389,10 @@ This keeps the radar useful before auto-import is enabled: scheduled runs can
 build a searchable recommendation trail, avoid losing candidates that were not
 imported, and show whether a candidate is new this run or has appeared before.
 Use `radar-papers` to inspect the deduplicated paper history, including papers
-that were collected and stored before any import decision. The same history is
-available in the browser at `/radar/papers`, where a team member can add a
-stored paper to the main library.
+that were collected and stored before any import decision. `radar-papers --json`
+records and stored recommendation records expose normalized `release_date`
+directly for scripts. The same history is available in the browser at
+`/radar/papers`, where a team member can add a stored paper to the main library.
 Radar review feedback is also stored on the deduplicated paper history. Mark a
 paper as `watch` to keep it visible as a known candidate and to make it part of
 the Team Radar context used by future runs. This lets the Radar explain that a
@@ -393,9 +402,10 @@ still preserving the metadata trail.
 The CLI and browser both expose review queues: use
 `radar-queue` for the active daily terminal queue ranked with the same shared
 priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
-papers and papers already imported into the library, and the text output includes
-stored signal lines plus an attention summary for why a paper is relevant now,
-how it relates to existing context, and which interests matched. Use
+papers and papers already imported into the library. Queue JSON records expose
+normalized `release_date` directly for scripts, and the text output includes
+release date, stored signal lines, and an attention summary for why a paper is
+relevant now, how it relates to existing context, and which interests matched. Use
 `radar-settings` to verify saved source readiness before a scheduled run. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,

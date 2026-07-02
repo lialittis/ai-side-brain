@@ -12,7 +12,7 @@ from urllib.request import urlopen
 from unittest import mock
 
 from shared.literature_radar import create_radar_paper, radar_context_summary, radar_supported_source_ids, recommend_papers
-from team.literature_radar import build_team_literature_radar_queue_payload
+from team.literature_radar import build_team_literature_radar_activity_payload, build_team_literature_radar_queue_payload
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
@@ -180,6 +180,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 abstract="System security and memory safety evidence for the Team Radar queue.",
                 identifiers={"arxiv_id": "2601.00051"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00051"},
+                release_date="2026-06-27",
                 discovered_at=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
             )
             recommendation = recommend_papers([paper], limit=1)[0]
@@ -272,6 +273,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertEqual(queue_payload["papers"][0]["release_date"], "2026-06-27")
             self.assertIn(
                 "Signal: A queued paper exposed through the JSON route.",
                 queue_payload["papers"][0]["signal_lines"],
@@ -302,6 +304,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertEqual(brief_payload["queue"]["papers"][0]["release_date"], "2026-06-27")
             self.assertEqual(brief_payload["activity"], [])
             self.assertEqual(brief_payload["latest_run"]["id"], run["id"])
             self.assertEqual(brief_payload["latest_run"]["freshness"]["max_age_hours"], 12)
@@ -963,6 +966,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 abstract="System security, memory safety, and LLM security for agents.",
                 identifiers={"semantic_scholar_id": "paper-1"},
                 links={"landing": "https://www.semanticscholar.org/paper/paper-1"},
+                release_date="2026-06-28",
             )
             recommendations = recommend_papers([paper], limit=1)
             recommendations[0]["summary"] = {
@@ -992,6 +996,13 @@ class TeamResearchWebTest(unittest.TestCase):
                 recommendations=recommendations,
                 now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
             )
+            database.mark_literature_radar_paper_review(
+                paper["dedupe_key"],
+                status="watch",
+                actor="alice",
+                reason="Track this for the agent memory-safety workflow.",
+                now=datetime(2026, 7, 1, 10, 2, tzinfo=timezone.utc),
+            )
 
             item_id = import_radar_recommendation_to_library(
                 database,
@@ -1007,6 +1018,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(latest[0]["item"]["id"], item_id)
             self.assertEqual(latest[0]["item"]["title"], "System Security for Memory Safe Agents")
             self.assertEqual(latest[0]["item"]["radar"]["dedupe_key"], paper["dedupe_key"])
+            self.assertEqual(latest[0]["item"]["radar"]["release_date"], "2026-06-28")
+            self.assertEqual(latest[0]["radar_history"]["review_status"], "watch")
             self.assertIn(
                 "Signal: This paper links memory safety to agentic systems.",
                 latest[0]["item"]["radar"]["recommendation"]["signal_lines"][0],
@@ -1030,6 +1043,14 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("System Security for Memory Safe Agents", html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar insight", latest_html)
+            self.assertIn("Watch", latest_html)
+            self.assertIn("Radar seen: 1", latest_html)
+            self.assertIn("Released: 2026-06-28", latest_html)
+            self.assertIn("Track this for the agent memory-safety workflow.", latest_html)
+            self.assertIn('action="/radar/review"', latest_html)
+            self.assertIn('name="return_to" value="latest"', latest_html)
+            self.assertIn('name="status" value="dismissed"', latest_html)
+            self.assertIn(">Clear</button>", latest_html)
             self.assertIn("This paper links memory safety to agentic systems.", latest_html)
             self.assertIn("<strong>Attention:</strong> Prioritize for memory-safe agent workflow review.", latest_html)
             self.assertIn("<strong>Now:</strong> new this run", latest_html)
@@ -1041,6 +1062,29 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Radar Queue", latest_html)
             self.assertNotIn("Priority Candidates", latest_html)
             self.assertNotIn('action="/radar/papers/import"', latest_html)
+
+            database.add_item_comment(
+                item_id,
+                author="Bob",
+                content="Use this for agent hardening notes.",
+                now=datetime(2026, 7, 1, 10, 4, tzinfo=timezone.utc),
+            )
+            activity_payload = build_team_literature_radar_activity_payload(
+                database,
+                days=7,
+                limit=5,
+                now=datetime(2026, 7, 1, 10, 5, tzinfo=timezone.utc),
+            )
+            comment_activity = next(
+                event
+                for event in activity_payload["activity"]
+                if event["action"] == "literature_radar_paper_commented"
+            )
+            self.assertEqual(comment_activity["action_label"], "Commented")
+            self.assertEqual(comment_activity["reason"], "Use this for agent hardening notes.")
+            activity_html = render_literature_radar_page(database, run_id=run["id"])
+            self.assertIn("Commented:", activity_html)
+            self.assertIn("Use this for agent hardening notes.", activity_html)
 
     def test_radar_review_marks_recommendation_and_paper_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1723,12 +1767,14 @@ class TeamResearchWebTest(unittest.TestCase):
             database.update_item_relevance(zeta_id, label="highly_relevant", score=90)
             database.update_library_importance(alpha_id, importance=5)
             database.update_library_importance(zeta_id, importance=1)
+            database.update_item_radar_metadata(alpha_id, {"dedupe_key": "radar-alpha", "release_date": "2026-07-01"})
+            database.update_item_radar_metadata(zeta_id, {"dedupe_key": "radar-zeta", "release_date": "2026-06-01"})
 
             self.assertEqual(
                 [paper["item"]["id"] for paper in database.list_latest_relevant_papers(sort_by="name")],
                 [alpha_id, zeta_id],
             )
-            self.assertEqual(database.list_latest_relevant_papers(sort_by="publish_date")[0]["item"]["id"], zeta_id)
+            self.assertEqual(database.list_latest_relevant_papers(sort_by="publish_date")[0]["item"]["id"], alpha_id)
             self.assertEqual(database.list_latest_relevant_papers(sort_by="relevance")[0]["item"]["id"], zeta_id)
             self.assertEqual(database.list_latest_relevant_papers(sort_by="importance")[0]["item"]["id"], alpha_id)
 

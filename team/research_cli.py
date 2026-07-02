@@ -518,13 +518,15 @@ def print_radar_papers(
             else ""
         )
         action = (latest.get("recommended_action") or "human_review") if latest else "human_review"
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        release_date = str(record.get("release_date") or paper.get("release_date") or "").strip()
+        release_text = f" | released={release_date}" if release_date else ""
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={review_state} | "
-            f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
+            f"latest={record.get('latest_seen_at')}{release_text} | sources={', '.join(record.get('source_ids') or [])} | "
             f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
-        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
         provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
         if provenance:
             print(f"  Source provenance: {source_provenance_report_text(provenance)}")

@@ -1224,6 +1224,7 @@ def render_literature_radar_activity_item(event: dict[str, Any]) -> str:
     return f"""
     <div class="radar-activity-item">
       <div><strong>{html_escape(action)}</strong> {html_escape(title)}</div>
+      {render_radar_activity_detail(after)}
       <div class="meta">{html_escape(actor)} · {html_escape(timestamp)}</div>
     </div>
     """
@@ -1245,6 +1246,8 @@ def radar_activity_action_text(event: dict[str, Any], after: dict[str, Any]) -> 
         return f"Marked {status}:"
     if action == "literature_radar_paper_imported":
         return "Added to library:"
+    if action == "literature_radar_paper_commented":
+        return "Commented:"
     if action == "literature_radar_recommendation_imported":
         return "Imported recommendation:"
     if action == "literature_radar_recommendation_reviewed":
@@ -1252,6 +1255,14 @@ def radar_activity_action_text(event: dict[str, Any], after: dict[str, Any]) -> 
         status = str(review.get("status") or "reviewed").replace("_", " ")
         return f"Updated recommendation {status}:"
     return action.replace("_", " ").title() + ":"
+
+
+def render_radar_activity_detail(record: dict[str, Any]) -> str:
+    comment = record.get("comment") if isinstance(record.get("comment"), dict) else {}
+    content = str(comment.get("content") or "").strip()
+    if not content:
+        return ""
+    return f'<div class="meta">{html_escape(content)}</div>'
 
 
 def render_radar_brief_form(*, days: int, limit: int) -> str:
@@ -2853,7 +2864,11 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
         pdf_access_html = render_item_pdf_access_pill(item)
         provenance_html = render_item_radar_source_provenance_pill(item)
         row_class = "paper removed" if removed else "paper"
-        paper_actions = render_removed_controls(paper) if removed else render_active_actions(paper)
+        paper_actions = (
+            render_removed_controls(paper)
+            if removed
+            else render_item_radar_review_controls(paper.get("radar_history")) + render_active_actions(paper)
+        )
         rows.append(
             f"""
             <article class="{row_class}">
@@ -2863,7 +2878,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
                 </div>
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
-                {render_paper_radar_insight(item)}
+                {render_paper_radar_insight(item, paper.get("radar_history"))}
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
                 {render_paper_comments(paper)}
               </div>
@@ -2872,6 +2887,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {ai_status_pill(paper.get("ai_status"))}
                   {importance_html}
                   {relevance_html}
+                  {render_item_radar_lifecycle_pills(item, paper.get("radar_history"))}
                   {pdf_access_html}
                   {provenance_html}
                   {link_html}
@@ -2886,11 +2902,12 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
-def render_paper_radar_insight(item: dict[str, Any]) -> str:
+def render_paper_radar_insight(item: dict[str, Any], radar_history: dict[str, Any] | None = None) -> str:
     radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
     recommendation = radar.get("recommendation") if isinstance(radar.get("recommendation"), dict) else {}
+    review_note = render_radar_review_reason(radar_review_from_record(radar_history or {})) if radar_history else ""
     if not recommendation:
-        return ""
+        return review_note
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
     context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
     attention = recommendation.get("attention_summary") if isinstance(recommendation.get("attention_summary"), dict) else {}
@@ -2931,6 +2948,7 @@ def render_paper_radar_insight(item: dict[str, Any]) -> str:
           {signal_rows}
         </div>
         {render_radar_attention_summary(recommendation)}
+        {review_note}
         """
     matched_html = (
         f"<p><strong>Matched:</strong> {html_escape(', '.join(matched_terms[:6]))}</p>"
@@ -2947,6 +2965,7 @@ def render_paper_radar_insight(item: dict[str, Any]) -> str:
       {f'<p><strong>Context:</strong> {html_escape(context_text)}</p>' if context_text else ''}
       {matched_html}
     </div>
+    {review_note}
     """
 
 
@@ -2966,6 +2985,34 @@ def render_item_radar_source_provenance_pill(item: dict[str, Any]) -> str:
     radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
     provenance = radar_metadata.get("source_provenance") if isinstance(radar_metadata.get("source_provenance"), dict) else {}
     return render_radar_source_provenance_pill(provenance)
+
+
+def render_item_radar_lifecycle_pills(item: dict[str, Any], radar_history: dict[str, Any] | None = None) -> str:
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    if not radar_metadata and not radar_history:
+        return ""
+    history = radar_history if isinstance(radar_history, dict) else {}
+    paper = history.get("paper") if isinstance(history.get("paper"), dict) else radar_metadata
+    parts = []
+    if history:
+        parts.append(render_radar_review_pill(radar_review_from_record(history)))
+        seen_count = int(history.get("seen_count") or 0)
+        if seen_count:
+            parts.append(f'<span class="pill">Radar seen: {seen_count}</span>')
+    release_html = render_radar_release_pill(paper)
+    if release_html:
+        parts.append(release_html)
+    return "".join(parts)
+
+
+def render_item_radar_review_controls(radar_history: dict[str, Any] | None = None) -> str:
+    if not isinstance(radar_history, dict) or not radar_history:
+        return ""
+    return render_radar_review_controls(
+        str(radar_history.get("dedupe_key") or ""),
+        return_to="latest",
+        review=radar_review_from_record(radar_history),
+    )
 
 
 def render_plain_tags(tags: list[str]) -> str:

@@ -414,12 +414,14 @@ def print_paper_history(
             else ""
         )
         action = (latest.get("recommended_action") or "human_review") if latest else "human_review"
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        release_date = str(record.get("release_date") or paper.get("release_date") or "").strip()
+        release_text = f" | released={release_date}" if release_date else ""
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={record.get('review_status') or 'unreviewed'} | "
-            f"latest={record.get('latest_seen_at')}{latest_signal} | action={action} | {record.get('title')}"
+            f"latest={record.get('latest_seen_at')}{release_text}{latest_signal} | action={action} | {record.get('title')}"
         )
-        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
         provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
         if provenance:
             print(f"  Source provenance: {source_provenance_report_text(provenance)}")

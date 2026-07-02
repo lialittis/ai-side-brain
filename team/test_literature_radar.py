@@ -1272,6 +1272,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 abstract="Memory safety and LLM security for cyber reasoning agents.",
                 identifiers={"arxiv_id": "2601.00005"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00005"},
+                release_date="2026-06-24",
             )
             with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
                 result = run_team_literature_radar(
@@ -1336,10 +1337,13 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             papers_result = json.loads(papers_stdout.getvalue())
             self.assertEqual(papers_result["review"], "unreviewed")
             self.assertEqual(papers_result["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 1, "watch": 0})
+            stored_recommendation = database.list_literature_radar_recommendations(result["run_id"])[0]
+            self.assertEqual(stored_recommendation["release_date"], "2026-06-24")
             papers = papers_result["papers"]
             self.assertEqual(papers[0]["title"], "Memory Safety for Agentic Security")
             self.assertEqual(papers[0]["seen_count"], 1)
             self.assertEqual(papers[0]["source_ids"], ["arxiv"])
+            self.assertEqual(papers[0]["release_date"], "2026-06-24")
             self.assertTrue(papers[0]["pdf_access"]["can_download"])
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "highly_relevant")
             queue_stdout = io.StringIO()
@@ -1386,6 +1390,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(direct_queue["latest_run"]["health_action"]["action"], "review_queue")
             self.assertEqual(direct_queue["latest_run"]["health_action"]["severity"], "good")
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertEqual(queue_result["papers"][0]["release_date"], "2026-06-24")
             self.assertIn("attention_summary", queue_result["papers"][0])
             self.assertIn("why_attention", queue_result["papers"][0]["attention_summary"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -1417,6 +1422,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
             self.assertIn("Source provenance: | total=1 | authoritative=1", queue_text)
             self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", queue_text)
+            self.assertIn("released=2026-06-24", queue_text)
             self.assertIn("action=read_and_summarize_open_access_pdf", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)

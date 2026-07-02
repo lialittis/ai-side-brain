@@ -56,6 +56,7 @@ from shared.literature_radar import (
     radar_source_provenance_summary,
     radar_latest_signal_lines,
     paper_source_provenance,
+    paper_release_date,
     radar_run_freshness,
     radar_run_health_action,
     radar_run_status_from_source_health,
@@ -640,7 +641,7 @@ def team_literature_radar_activity_record(event: dict[str, Any]) -> dict[str, An
         or team_literature_radar_activity_title(before)
         or str(event.get("object_id") or "Radar item"),
         "imported_item_id": imported_item_id,
-        "reason": str(after.get("review_reason") or "").strip(),
+        "reason": team_literature_radar_activity_detail(after),
     }
 
 
@@ -655,7 +656,16 @@ def team_literature_radar_activity_label(action: str, status: str) -> str:
         return f"Marked {selected_status}"
     if action == "literature_radar_paper_imported":
         return "Added to library"
+    if action == "literature_radar_paper_commented":
+        return "Commented"
     return action.replace("_", " ").title()
+
+
+def team_literature_radar_activity_detail(record: dict[str, Any]) -> str:
+    comment = record.get("comment") if isinstance(record.get("comment"), dict) else {}
+    if comment.get("content"):
+        return str(comment.get("content") or "").strip()
+    return str(record.get("review_reason") or "").strip()
 
 
 def append_team_literature_radar_activity_to_brief(brief: str, activity: list[dict[str, Any]]) -> str:
@@ -1526,8 +1536,10 @@ def build_radar_import_metadata(
         "source_provenance": provenance,
         "source_provenance_records": paper.get("source_provenance_records") or [provenance],
         "links": paper.get("links") or {},
+        "release_date": paper_release_date(paper),
         "discovered_at": paper.get("discovered_at"),
         "pdf_access": pdf_access,
+        "review": selected_recommendation.get("review") or {},
         "recommendation": {
             "score": scoring.get("score"),
             "label": scoring.get("label"),

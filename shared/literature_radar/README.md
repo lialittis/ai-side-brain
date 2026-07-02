@@ -101,19 +101,20 @@ dates before falling back to discovery time, and reports show the selected
 release date for review.
 The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
-it carries stored review state such as `watch` or `dismissed` plus the scoring
-profile snapshot, non-secret collection settings, and phase trace used for the
-run. It also carries source policy and venue coverage for DBLP, OpenAlex, and
-OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers
-are surfaced before unreviewed papers, while `dismissed` papers fall behind
-active candidates.
+it carries stored review state such as `watch` or `dismissed`, normalized
+release dates, the scoring profile snapshot, non-secret collection settings,
+and phase trace used for the run. It also carries source policy and venue
+coverage for DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking
+is review-aware: `watch` papers are surfaced before unreviewed papers, while
+`dismissed` papers fall behind active candidates.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
 unimported candidates are sorted by latest recommendation score. Queue records
-include persisted signal lines and promote the latest `attention_summary` to the
-queued paper record for dashboard consumers. Personal and Team surfaces use this
-same queue logic.
+include persisted signal lines, promote the latest `attention_summary`, and
+expose normalized `release_date` directly on the queued paper record for
+dashboard and automation consumers. Personal and Team surfaces use this same
+queue logic.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.

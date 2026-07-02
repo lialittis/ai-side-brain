@@ -152,7 +152,9 @@ Reports mark recommendations as new or seen-before using the local
 `indexes/literature-radar-papers.json` history. When sources provide publication
 or note timestamps, Personal Radar normalizes them as `release_date`, shows the
 date in reports, and uses it to break ties between equally relevant papers
-before falling back to discovery time.
+before falling back to discovery time. The paper-history JSON records expose
+the same normalized `release_date` directly on stored run recommendations,
+`papers`, `queue`, and local automation consumers.
 Generated reports, briefs, and queue output use the same labelled `Signal`,
 `Why`, `Context`, and `Matched` lines, so the immediate run report and later
 daily review surfaces explain recommendations in the same format. Those signal
@@ -172,9 +174,10 @@ Use `queue` for the daily review surface: it prefers unreviewed papers, falls
 back to watched papers when there are no unreviewed items, sorts the active
 queue by latest recommendation score, and excludes dismissed or already-moved
 papers from the priority list. The text queue includes the PDF access summary
-and stored signal lines for why each paper is relevant, how it relates to
-existing context, and which interests matched; the JSON queue includes the same
-lines under `signal_lines`. The JSON queue also includes `access_summary`, which counts downloadable,
+release date, and stored signal lines for why each paper is relevant, how it
+relates to existing context, and which interests matched; the JSON queue
+includes the same lines under `signal_lines` and normalized `release_date`
+directly on queued paper records. The JSON queue also includes `access_summary`, which counts downloadable,
 cached, metadata/link-only, and access-kind buckets for the active queue, plus
 `provenance_summary`, which counts authoritative/secondary source provenance,
 source classes, source IDs, and records with source/PDF URLs. Completed run

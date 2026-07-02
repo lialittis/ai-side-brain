@@ -45,6 +45,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 abstract="Memory safety and LLM security for cyber reasoning agents.",
                 identifiers={"arxiv_id": "2601.00006"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00006"},
+                release_date="2026-06-23",
             )
             with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]) as arxiv:
                 result = run_personal_literature_radar(
@@ -66,6 +67,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             runs = read_personal_radar_index(root)
             self.assertEqual(runs[0]["id"], result["run_id"])
             self.assertEqual(runs[0]["recommendations"][0]["title"], "Memory Safety for Agentic Security")
+            self.assertEqual(runs[0]["recommendations"][0]["release_date"], "2026-06-23")
             self.assertTrue(runs[0]["recommendations"][0]["novelty"]["is_new"])
             self.assertTrue(runs[0]["recommendations"][0]["pdf_access"]["can_download"])
             self.assertEqual(runs[0]["recommendations"][0]["pdf_access"]["access_kind"], "arxiv_pdf")
@@ -88,6 +90,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(history_record["latest_seen_at"], "2026-07-01T12:00:00+00:00")
             self.assertEqual(history_record["seen_count"], 1)
             self.assertEqual(history_record["source_ids"], ["arxiv"])
+            self.assertEqual(history_record["release_date"], "2026-06-23")
             self.assertTrue(history_record["pdf_access"]["can_download"])
             self.assertEqual(history_record["pdf_access"]["access_kind"], "arxiv_pdf")
             self.assertEqual(history_record["latest_recommendation"]["rank"], 1)
@@ -594,6 +597,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 abstract="Agentic security, LLM security, and memory safety.",
                 identifiers={"arxiv_id": "2601.00007"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00007"},
+                release_date="2026-06-25",
             )
             with mock.patch("personal.literature_radar.collect_arxiv", return_value=[paper]):
                 run_personal_literature_radar(
@@ -626,6 +630,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             papers = papers_result["papers"]
             self.assertEqual(papers[0]["title"], "Agentic Security for Memory Safety")
             self.assertEqual(papers[0]["seen_count"], 1)
+            self.assertEqual(papers[0]["release_date"], "2026-06-25")
             self.assertEqual(papers[0]["latest_recommendation"]["label"], "possibly_relevant")
 
             queue_stdout = io.StringIO()
@@ -673,6 +678,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(direct_queue["latest_run"]["health_action"]["severity"], "good")
             self.assertIn("literature-radar-runs.json", queue_result["paths"]["run_index"])
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            self.assertEqual(queue_result["papers"][0]["release_date"], "2026-06-25")
             self.assertIn("attention_summary", queue_result["papers"][0])
             self.assertIn("why_attention", queue_result["papers"][0]["attention_summary"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -688,6 +694,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Health action:", queue_text)
             self.assertIn("action=review_queue", queue_text)
             self.assertIn("Source policy:", queue_text)
+            self.assertIn("released=2026-06-25", queue_text)
             self.assertIn("authoritative=1", queue_text)
             self.assertIn("freshness=", queue_text)
             self.assertIn("Source coverage:", queue_text)

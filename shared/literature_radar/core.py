@@ -3482,6 +3482,7 @@ def build_radar_history_brief(
                 f"({radar_brief_recommendation_score(recommendation)}/100)",
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
+                f"- Released: {radar_brief_recommendation_release_date(recommendation) or 'unknown'}",
                 f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
                 f"- Attention: {attention_report_text(attention)}",
                 *signal_lines,
@@ -4191,6 +4192,19 @@ def radar_brief_recommendation_title(recommendation: dict[str, Any]) -> str:
     )
 
 
+def radar_brief_recommendation_release_date(recommendation: dict[str, Any]) -> str:
+    selected = normalize_release_date(recommendation.get("release_date"))
+    if selected:
+        return selected
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    selected = paper_release_date(paper)
+    if selected:
+        return selected
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    return paper_release_date(nested_paper)
+
+
 def radar_brief_recommendation_score(recommendation: dict[str, Any]) -> int:
     scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
     score = recommendation.get("score", scoring.get("score", 0))
@@ -4420,6 +4434,10 @@ def build_radar_review_queue(
 def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(record)
     enriched["signal_lines"] = radar_latest_signal_lines(record)
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    release_date = paper_release_date(paper)
+    if release_date:
+        enriched["release_date"] = release_date
     latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
     attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
     if attention:

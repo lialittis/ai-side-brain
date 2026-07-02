@@ -16,6 +16,7 @@ from shared.literature_radar import (
     build_venue_coverage_summary,
     dedupe_key as radar_dedupe_key,
     radar_latest_signal_lines,
+    paper_release_date,
     radar_source_policy_summary,
     radar_source_provenance_summary,
 )
@@ -618,6 +619,25 @@ class TeamResearchDatabase:
         }
         with self.connect() as connection:
             self._insert_paper_comment(connection, comment)
+            radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+            radar_dedupe_key = str(radar_metadata.get("dedupe_key") or "").strip()
+            if radar_dedupe_key:
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=cleaned_author,
+                        action="literature_radar_paper_commented",
+                        object_type="literature_radar_paper_comment",
+                        object_id=radar_dedupe_key,
+                        before=None,
+                        after={
+                            "dedupe_key": radar_dedupe_key,
+                            "title": item.get("title") or radar_dedupe_key,
+                            "comment": comment,
+                        },
+                        now=now,
+                    ),
+                )
         return comment
 
     def list_item_comments(self, item_id: str) -> list[dict[str, Any]]:
@@ -1685,6 +1705,11 @@ class TeamResearchDatabase:
             if item["id"] in seen:
                 continue
             seen.add(item["id"])
+            radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+            radar_history = None
+            radar_dedupe_key = str(radar_metadata.get("dedupe_key") or "").strip()
+            if radar_dedupe_key:
+                radar_history = self.get_literature_radar_paper(radar_dedupe_key)
             screening = loads(row["screening_json"])
             if topic_id and screening.get("topic_profile_id") != topic_id:
                 continue
@@ -1721,6 +1746,7 @@ class TeamResearchDatabase:
                     "recoverable": recoverable,
                     "tags": self.get_item_tags(item["id"]),
                     "comments": self.list_item_comments(item["id"]),
+                    "radar_history": radar_history,
                     "link": item.get("url") or item.get("object_key"),
                 }
             )
@@ -2025,6 +2051,7 @@ class TeamResearchDatabase:
             "latest_seen_at": timestamp,
             "seen_count": int(existing.get("seen_count") or 0) + (1 if count_seen else 0),
             "source_ids": source_ids,
+            "release_date": paper_release_date(paper),
             "imported_item_id": imported_item_id or existing.get("imported_item_id"),
             "pdf_access": (
                 paper.get("pdf_access")
@@ -2395,6 +2422,7 @@ def build_literature_radar_recommendation_record(
         "dedupe_key": dedupe_key,
         "rank": rank,
         "title": paper.get("title") or dedupe_key,
+        "release_date": paper_release_date(paper),
         "scoring": scoring,
         "label": scoring.get("label") or "needs_review",
         "score": float(scoring.get("score") or 0),
@@ -2527,7 +2555,7 @@ def sorted_latest_papers(papers: list[dict[str, Any]], *, sort_by: str) -> list[
         return sorted(
             papers,
             key=lambda paper: (
-                paper["item"].get("year") or -1,
+                latest_paper_publish_sort_value(paper),
                 paper["item"].get("created_at") or "",
             ),
             reverse=True,
@@ -2559,3 +2587,18 @@ def sorted_latest_papers(papers: list[dict[str, Any]], *, sort_by: str) -> list[
         ),
         reverse=True,
     )
+
+
+def latest_paper_publish_sort_value(paper: dict[str, Any]) -> str:
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    release_date = paper_release_date(radar_metadata)
+    if release_date:
+        return release_date
+    year = item.get("year")
+    if year is None or str(year).strip() == "":
+        return ""
+    try:
+        return f"{int(year):04d}"
+    except (TypeError, ValueError):
+        return str(year)

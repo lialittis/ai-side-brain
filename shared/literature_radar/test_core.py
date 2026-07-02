@@ -586,6 +586,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             },
             {
                 "title": "Unreviewed High Score",
+                "paper": {"release_date": "2026-06-26"},
                 "latest_seen_at": "2026-07-01T11:00:00+00:00",
                 "latest_recommendation": {
                     "score": 90,
@@ -636,8 +637,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             queue["papers"][0]["attention_summary"]["why_attention"],
             "Prioritize for memory-safety review.",
         )
+        self.assertEqual(queue["papers"][0]["release_date"], "2026-06-26")
         self.assertNotIn("signal_lines", records[2])
         self.assertNotIn("attention_summary", records[2])
+        self.assertNotIn("release_date", records[2])
 
         watch_queue = build_radar_review_queue([records[0], records[3]], limit=3)
         self.assertEqual(watch_queue["review"], "watch")
@@ -1634,6 +1637,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             abstract="Memory safety and system security for weekly radar review.",
             identifiers={"arxiv_id": "2601.00031"},
             links={"arxiv": "https://arxiv.org/abs/2601.00031"},
+            release_date="2026-06-29",
         )
         recommendation = recommend_papers(
             [paper],
@@ -1660,6 +1664,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             abstract="Agentic security paper that should stay on the team's watch list.",
             identifiers={"arxiv_id": "2601.00032"},
             links={"arxiv": "https://arxiv.org/abs/2601.00032"},
+            release_date="2026-06-30",
         )
         watch_recommendation = recommend_papers(
             [watch_paper],
@@ -1796,6 +1801,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Weekly Memory Safety Radar", brief)
         self.assertIn("Review: watch", brief)
         self.assertIn("Review: dismissed", brief)
+        self.assertIn("Released: 2026-06-30", brief)
+        self.assertIn("Released: 2026-06-29", brief)
         self.assertIn("reason: outside current sprint", brief)
         self.assertIn("Signal: Weekly watch summary for agentic security.", brief)
         self.assertIn("Why: Strong weekly match for agentic security.", brief)
