@@ -988,13 +988,17 @@ def create_radar_paper(
     venue: str | None = None,
     identifiers: dict[str, str] | None = None,
     links: dict[str, str] | None = None,
+    release_date: Any | None = None,
     discovered_at: datetime | None = None,
     source_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_discovered_at = iso_timestamp(discovered_at or datetime.now(timezone.utc))
     clean_identifiers = normalize_identifiers(identifiers or {})
     clean_links = {key: str(value).strip() for key, value in (links or {}).items() if str(value).strip()}
-    selected_source_record = source_record or {"source_id": source_id, "source_paper_id": source_paper_id}
+    selected_source_record = dict(source_record or {"source_id": source_id, "source_paper_id": source_paper_id})
+    selected_release_date = normalize_release_date(release_date) or source_record_release_date(selected_source_record)
+    if selected_release_date and not source_record_release_date(selected_source_record):
+        selected_source_record["release_date"] = selected_release_date
     paper = {
         "id": stable_id(
             "radar",
@@ -1010,6 +1014,7 @@ def create_radar_paper(
         "authors": [normalize_spaces(author) for author in authors or [] if normalize_spaces(author)],
         "abstract": normalize_spaces(abstract),
         "year": year,
+        "release_date": selected_release_date,
         "venue": normalize_spaces(venue or ""),
         "identifiers": clean_identifiers,
         "links": clean_links,
@@ -1068,6 +1073,7 @@ def build_paper_source_provenance(
         "license": normalize_spaces(license_text or clean_links.get("license") or ""),
         "oa_status": normalize_spaces(oa_status or clean_links.get("oa_status") or ""),
         "local_pdf_path": normalize_spaces(local_pdf_path),
+        "release_date": source_record_release_date(selected_source_record),
         "collected_at": normalize_spaces(collected_at),
     }
 
@@ -1085,8 +1091,14 @@ def paper_source_provenance(paper: dict[str, Any]) -> dict[str, Any]:
     identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
     source_records = paper.get("source_records") if isinstance(paper.get("source_records"), list) else []
     source_record = next((record for record in source_records if isinstance(record, dict)), {})
+    selected_source_id = str(
+        source_record.get("collector_id")
+        or paper.get("source_id")
+        or source_record.get("source_id")
+        or ""
+    )
     provenance = build_paper_source_provenance(
-        source_id=str(paper.get("source_id") or source_record.get("source_id") or ""),
+        source_id=selected_source_id,
         source_paper_id=str(paper.get("source_paper_id") or source_record.get("source_paper_id") or ""),
         links=links,
         identifiers=identifiers,
@@ -1120,6 +1132,101 @@ def normalize_identifiers(identifiers: dict[str, Any]) -> dict[str, str]:
             text = text.removesuffix(".pdf")
         normalized[selected_key] = text.lower()
     return normalized
+
+
+def normalize_release_date(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).date().isoformat()
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+    if isinstance(value, dict):
+        return release_date_from_date_parts(value)
+    text = normalize_spaces(str(value))
+    if not text:
+        return ""
+    year_match = re.fullmatch(r"\d{4}", text)
+    if year_match:
+        return text
+    date_match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
+    if date_match:
+        return date_match.group(1)
+    year_month_match = re.match(r"^(\d{4}-\d{2})$", text)
+    if year_month_match:
+        return year_month_match.group(1)
+    return ""
+
+
+def release_date_from_date_parts(record: dict[str, Any]) -> str:
+    for key in ("date-parts", "date_parts"):
+        date_parts = record.get(key)
+        if isinstance(date_parts, list) and date_parts:
+            parts = date_parts[0] if isinstance(date_parts[0], list) else date_parts
+            return release_date_from_parts(parts)
+    for key in ("published-print", "published-online", "published", "issued"):
+        value = record.get(key)
+        if isinstance(value, dict):
+            selected = release_date_from_date_parts(value)
+            if selected:
+                return selected
+    return ""
+
+
+def release_date_from_parts(parts: list[Any]) -> str:
+    numeric_parts = []
+    for part in parts[:3]:
+        try:
+            numeric_parts.append(int(part))
+        except (TypeError, ValueError):
+            break
+    if not numeric_parts:
+        return ""
+    year = numeric_parts[0]
+    if year < 1000 or year > 9999:
+        return ""
+    if len(numeric_parts) == 1:
+        return f"{year:04d}"
+    month = max(1, min(12, numeric_parts[1]))
+    if len(numeric_parts) == 2:
+        return f"{year:04d}-{month:02d}"
+    day = max(1, min(31, numeric_parts[2]))
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def source_record_release_date(source_record: dict[str, Any]) -> str:
+    if not isinstance(source_record, dict):
+        return ""
+    for key in ("release_date", "publication_date", "publicationDate", "published_at", "published_date", "published"):
+        selected = normalize_release_date(source_record.get(key))
+        if selected:
+            return selected
+    for key in ("pdate", "tcdate", "cdate"):
+        selected = normalize_release_date(source_record.get(key))
+        if selected:
+            return selected
+    selected = release_date_from_date_parts(source_record)
+    if selected:
+        return selected
+    year = source_record.get("venue_year") or source_record.get("openreview_venue_year")
+    return normalize_release_date(year)
+
+
+def paper_release_date(paper: dict[str, Any]) -> str:
+    selected = normalize_release_date(paper.get("release_date"))
+    if selected:
+        return selected
+    for source_record in paper.get("source_records") or []:
+        selected = source_record_release_date(source_record)
+        if selected:
+            return selected
+    return normalize_release_date(paper.get("year"))
 
 
 def dedupe_key(paper: dict[str, Any]) -> str:
@@ -1162,6 +1269,10 @@ def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
                 target[field] = paper[field]
         if not target.get("year") and paper.get("year"):
             target["year"] = paper["year"]
+        target_release_date = paper_release_date(target)
+        paper_selected_release_date = paper_release_date(paper)
+        if paper_selected_release_date and paper_selected_release_date > target_release_date:
+            target["release_date"] = paper_selected_release_date
         target["authors"] = target.get("authors") or paper.get("authors") or []
         target["identifiers"] = {**(paper.get("identifiers") or {}), **(target.get("identifiers") or {})}
         target["links"] = {**(paper.get("links") or {}), **(target.get("links") or {})}
@@ -2414,7 +2525,11 @@ def recommend_papers(
         )
     return sorted(
         recommendations,
-        key=lambda item: (item["scoring"]["score"], item["paper"].get("discovered_at", "")),
+        key=lambda item: (
+            item["scoring"]["score"],
+            paper_release_date(item["paper"]),
+            item["paper"].get("discovered_at", ""),
+        ),
         reverse=True,
     )[:limit]
 
@@ -2549,6 +2664,9 @@ def build_recommendation_attention_summary(
     novelty_text = novelty_report_text(novelty)
     if novelty_text and novelty_text != "unknown":
         why_now_parts.append(novelty_text)
+    release_date = paper_release_date(paper)
+    if release_date:
+        why_now_parts.append(f"released={release_date}")
     if pdf_access:
         why_now_parts.append(pdf_access_report_text(pdf_access))
     if related_items:
@@ -2861,6 +2979,7 @@ def build_recommendation_report(
                 f"## {index}. {paper.get('title') or 'Untitled paper'}",
                 "",
                 f"- Relevance: {scoring['label']} ({scoring['score']}/100)",
+                f"- Released: {paper_release_date(paper) or 'unknown'}",
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
                 f"- Novelty: {novelty_report_text(recommendation.get('novelty') or {})}",
                 f"- Attention: {attention_report_text(attention)}",

@@ -951,6 +951,8 @@ def annotate_dblp_venue_paper(
         }
         for source_record in paper.get("source_records") or []
     ]
+    updated["source_provenance"] = paper_source_provenance(updated)
+    updated["source_provenance_records"] = [updated["source_provenance"]]
     return updated
 
 
@@ -1304,6 +1306,8 @@ def annotate_openalex_venue_paper(
         }
         for source_record in paper.get("source_records") or []
     ]
+    updated["source_provenance"] = paper_source_provenance(updated)
+    updated["source_provenance_records"] = [updated["source_provenance"]]
     return updated
 
 
@@ -1570,6 +1574,8 @@ def annotate_openreview_venue_paper(
         }
         for source_record in paper.get("source_records") or []
     ]
+    updated["source_provenance"] = paper_source_provenance(updated)
+    updated["source_provenance_records"] = [updated["source_provenance"]]
     return updated
 
 

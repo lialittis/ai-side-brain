@@ -347,6 +347,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 venue="arXiv",
                 identifiers={"arxiv_id": "2601.00006"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00006"},
+                release_date="2026-06-30",
                 discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
             )
             paper["source_records"].append(
@@ -484,6 +485,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("OpenAlex Venues", html)
             self.assertIn("OpenReview Venues", html)
             self.assertIn("Memory Safety for Agentic Security Workflows", html)
+            self.assertIn("Released: 2026-06-30", html)
             self.assertIn("Ada Lovelace, Grace Hopper", html)
             self.assertIn("A local summary for radar review.", html)
             self.assertIn("Connects to memory safety.", html)
@@ -499,6 +501,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("local-radar-summary-v0.1", html)
             self.assertIn("Daily Review", queue_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", queue_html)
+            self.assertIn("Released: 2026-06-30", queue_html)
             self.assertIn("Worth team attention.", queue_html)
             self.assertIn('name="return_to" value="queue"', queue_html)
             self.assertIn("Status: partial", html)
@@ -1049,6 +1052,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 abstract="Memory safety and system security for low-level software.",
                 identifiers={"arxiv_id": "2601.00036"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00036"},
+                release_date="2026-06-29",
             )
             recommendations = recommend_papers([paper], limit=1)
             run = database.create_literature_radar_run(
@@ -1101,8 +1105,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Watchable Memory Safety Radar Paper", reviewed_html)
             history_html = render_literature_radar_papers_page(database)
             self.assertIn(">Watch</span>", history_html)
+            self.assertIn("Released: 2026-06-29", history_html)
             self.assertIn("<strong>Review note:</strong> Track this for allocator hardening.", history_html)
             queue_html = render_literature_radar_queue_page(database, limit=20)
+            self.assertIn("Released: 2026-06-29", queue_html)
             self.assertIn("<strong>Review note:</strong> Track this for allocator hardening.", queue_html)
             other_paper = create_radar_paper(
                 source_id="arxiv",

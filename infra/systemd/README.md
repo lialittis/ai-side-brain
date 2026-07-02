@@ -46,7 +46,7 @@ override the script behavior. Brief timers write Markdown and JSON roll-ups to
 `team/logs/` and `memory/06_Logs/` by default; they do not call external paper
 sources.
 Collection timers also write read-only settings/readiness snapshots and active
-queue snapshots by default: `literature-radar-settings-*` and
+queue snapshots by default: JSON and text `literature-radar-settings-*` files and
 `literature-radar-queue-*` under `team/logs/`, plus
 `personal-literature-radar-settings-*` and `personal-literature-radar-queue-*`
 under `memory/06_Logs/`. Settings snapshots include the active relevance

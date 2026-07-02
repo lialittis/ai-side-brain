@@ -99,6 +99,13 @@ if [[ -n "${PERSONAL_RADAR_OPENREVIEW_VENUES:-}" ]]; then
     SETTINGS_ARGS+=("--openreview-venue-profile" "$venue_profile")
   done
 fi
+if [[ -n "${PERSONAL_RADAR_OPENREVIEW_INVITATIONS:-}" ]]; then
+  read -r -a OPENREVIEW_INVITATIONS <<< "$PERSONAL_RADAR_OPENREVIEW_INVITATIONS"
+  for invitation in "${OPENREVIEW_INVITATIONS[@]}"; do
+    ARGS+=("--openreview-invitation" "$invitation")
+    SETTINGS_ARGS+=("--openreview-invitation" "$invitation")
+  done
+fi
 if [[ "${PERSONAL_RADAR_OPENREVIEW_INCLUDE_UNACCEPTED:-0}" == "1" ]]; then
   ARGS+=("--include-openreview-unaccepted")
   SETTINGS_ARGS+=("--include-openreview-unaccepted")

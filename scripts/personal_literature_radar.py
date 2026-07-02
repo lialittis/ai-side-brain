@@ -207,6 +207,10 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
             selected_usenix_cycles = list(preset.get("usenix_security_cycles") or [])
     if args.seed_paper_id and not any(source in selected_sources for source in PERSONAL_RADAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
+    if args.openreview_invitation and "openreview" not in selected_sources:
+        selected_sources.append("openreview")
+    if args.openreview_venue_profile and "openreview_venues" not in selected_sources:
+        selected_sources.append("openreview_venues")
     collection_config = personal_radar_collection_config(
         selected_sources=selected_sources,
         source_preset=(preset or {}).get("id"),

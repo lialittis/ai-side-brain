@@ -34,6 +34,8 @@ if "--output" in args:
 
 if command in {"queue", "radar-queue"} and "--json" not in args:
     print(f"{command} text queue")
+elif command in {"settings", "radar-settings"} and "--json" not in args:
+    print(f"{command} text settings")
 else:
     print(json.dumps({"args": args, "command": command, "script": args[0] if args else ""}, sort_keys=True))
 """
@@ -61,6 +63,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PYTHON_BIN": str(fake_python),
                     "RADAR_OUTPUT_DIR": str(output_dir),
                     "RADAR_SOURCE_PRESET": "team_security_daily",
+                    "RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -78,10 +81,18 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_run["command"], "radar-run")
             self.assertIn("--source-preset", latest_run["args"])
             self.assertIn("team_security_daily", latest_run["args"])
+            self.assertIn("--openreview-invitation", latest_run["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_run["args"])
             latest_settings = read_json(output_dir / "literature-radar-settings-latest.json")
             self.assertEqual(latest_settings["command"], "radar-settings")
             self.assertIn("--source-preset", latest_settings["args"])
             self.assertIn("team_security_daily", latest_settings["args"])
+            self.assertIn("--openreview-invitation", latest_settings["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_settings["args"])
+            self.assertIn(
+                "radar-settings text settings",
+                (output_dir / "literature-radar-settings-latest.txt").read_text(),
+            )
             self.assertIn("radar-run markdown", (output_dir / "literature-radar-latest.md").read_text())
             self.assertEqual(
                 read_json(output_dir / "literature-radar-queue-latest.json")["command"],
@@ -123,6 +134,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_OUTPUT_DIR": str(output_dir),
                     "PERSONAL_RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
+                    "PERSONAL_RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -131,10 +143,14 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_personal_run["command"], "run")
             self.assertIn("--source-preset", latest_personal_run["args"])
             self.assertIn("security_memory_agentic_daily", latest_personal_run["args"])
+            self.assertIn("--openreview-invitation", latest_personal_run["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_run["args"])
             latest_personal_settings = read_json(output_dir / "personal-literature-radar-settings-latest.json")
             self.assertEqual(latest_personal_settings["command"], "settings")
             self.assertIn("--source-preset", latest_personal_settings["args"])
             self.assertIn("security_memory_agentic_daily", latest_personal_settings["args"])
+            self.assertIn("--openreview-invitation", latest_personal_settings["args"])
+            self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", latest_personal_settings["args"])
             self.assertEqual(
                 read_json(output_dir / "personal-literature-radar-queue-latest.json")["command"],
                 "queue",

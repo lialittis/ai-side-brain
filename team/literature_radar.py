@@ -227,6 +227,8 @@ def run_team_literature_radar(
             selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
+    if openreview_invitations and "openreview" not in selected_sources:
+        selected_sources.append("openreview")
     collection_config = team_radar_collection_config(
         selected_sources=selected_sources,
         source_preset=(preset or {}).get("id"),

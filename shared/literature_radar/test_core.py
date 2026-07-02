@@ -40,6 +40,7 @@ from shared.literature_radar import (
     format_radar_source_stats,
     merge_duplicate_papers,
     mvp_source_ids,
+    paper_release_date,
     paper_source_provenance,
     pdf_access_report_text,
     radar_dblp_venue_profile_selection_summary,
@@ -1367,6 +1368,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 "and LLM security for cyber reasoning agents."
             ),
             links={"landing": "https://arxiv.org/abs/2601.00002"},
+            release_date="2026-07-01",
             discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
         )
 
@@ -1384,13 +1386,41 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("attention_summary", recommendations[0])
         self.assertIn("memory safety", recommendations[0]["attention_summary"]["relationship_to_interests"])
         self.assertEqual(recommendations[0]["pdf_access"]["access_date"], "2026-07-01T12:30:00+00:00")
+        self.assertEqual(paper_release_date(recommendations[0]["paper"]), "2026-07-01")
         self.assertIn("Memory Safety for Agentic Security", report)
         self.assertIn("Relevance: highly_relevant", report)
+        self.assertIn("Released: 2026-07-01", report)
         self.assertIn("Attention: Matched interest keywords", report)
         self.assertIn("Why: Matched interest keywords", report)
         self.assertIn("Matched: LLM security", report)
         self.assertIn("PDF policy: metadata/link only", report)
         self.assertIn("accessed=2026-07-01T12:30:00+00:00", report)
+
+    def test_recommendations_use_release_date_before_discovery_time_for_latest_order(self) -> None:
+        older_release_later_discovery = create_radar_paper(
+            source_id="semantic_scholar",
+            source_paper_id="older-release",
+            title="Older Release Memory Safety for Agentic Security",
+            abstract="Memory safety, system security, and LLM security.",
+            release_date="2026-01-01",
+            discovered_at=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+        )
+        newer_release_earlier_discovery = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="newer-release",
+            title="Newer Release Memory Safety for Agentic Security",
+            abstract="Memory safety, system security, and LLM security.",
+            release_date="2026-07-01",
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+        recommendations = recommend_papers(
+            [older_release_later_discovery, newer_release_earlier_discovery],
+            now=datetime(2026, 7, 2, 13, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(recommendations[0]["paper"]["source_paper_id"], "newer-release")
+        self.assertEqual(paper_release_date(recommendations[0]["paper"]), "2026-07-01")
 
     def test_recommend_papers_accepts_custom_scorer(self) -> None:
         paper = create_radar_paper(

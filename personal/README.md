@@ -119,7 +119,8 @@ preview with PDF access summary, recent activity, index paths, and the generated
 `PERSONAL_RADAR_RECOMMENDATION_LIMIT`, `PERSONAL_RADAR_SUMMARIZE`,
 `PERSONAL_RADAR_SUMMARY_PROVIDER=local|openrouter`, `PERSONAL_RADAR_DBLP_VENUES`,
 `PERSONAL_RADAR_DBLP_AUTHOR_PIDS`, `PERSONAL_RADAR_OPENALEX_AUTHOR_IDS`,
-`PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_SEED_PAPER_IDS`,
+`PERSONAL_RADAR_OPENREVIEW_VENUES`, `PERSONAL_RADAR_OPENREVIEW_INVITATIONS`,
+`PERSONAL_RADAR_SEED_PAPER_IDS`,
 `PERSONAL_RADAR_AUTHOR_IDS`, `PERSONAL_RADAR_SOURCE_CONTACT_EMAIL`,
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
@@ -148,7 +149,10 @@ authors to expand around papers and researchers you already care about. Personal
 Radar still writes only review reports and index entries until you explicitly
 move accepted papers into private memory.
 Reports mark recommendations as new or seen-before using the local
-`indexes/literature-radar-papers.json` history.
+`indexes/literature-radar-papers.json` history. When sources provide publication
+or note timestamps, Personal Radar normalizes them as `release_date`, shows the
+date in reports, and uses it to break ties between equally relevant papers
+before falling back to discovery time.
 Generated reports, briefs, and queue output use the same labelled `Signal`,
 `Why`, `Context`, and `Matched` lines, so the immediate run report and later
 daily review surfaces explain recommendations in the same format. Those signal

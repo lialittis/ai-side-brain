@@ -939,10 +939,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         payload = json.loads(json_stdout.getvalue())
         self.assertTrue(payload["success"])
         self.assertEqual(payload["kind"], "personal_literature_radar_settings")
-        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openreview", "openalex"])
+        self.assertEqual(
+            payload["settings"]["sources"],
+            ["semantic_scholar_recommendations", "openreview", "openalex", "openreview_venues"],
+        )
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
-        self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
         self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])
         self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
         self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
@@ -958,7 +961,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
         self.assertIn("Personal Literature Radar Settings", text)
-        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenReview Venues", text)
         self.assertIn("Scoring: Security, memory safety, and agentic security radar", text)
         self.assertIn("Venue profiles:", text)
         self.assertIn("DBLP/OpenAlex: USENIX Security, IEEE Symposium on Security and Privacy", text)
@@ -1458,6 +1461,37 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(venues.call_args.kwargs["year"], 2026)
             self.assertTrue(venues.call_args.kwargs["accepted_only"])
             self.assertEqual(venues.call_args.kwargs["max_results"], 2)
+
+    def test_personal_literature_radar_auto_enables_openreview_for_invitations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paper = create_radar_paper(
+                source_id="openreview",
+                source_paper_id="workshop123",
+                title="Workshop Agentic Security Paper",
+                abstract="Agentic security, prompt injection, and memory safety workshop work.",
+                links={"landing": "https://openreview.net/forum?id=workshop123"},
+            )
+            with (
+                mock.patch("personal.literature_radar.collect_arxiv", return_value=[]),
+                mock.patch("personal.literature_radar.collect_openreview_notes", return_value=[paper]) as openreview,
+            ):
+                result = run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    query_terms=["agentic security"],
+                    max_results=2,
+                    openreview_invitations=["SafetyWorkshop.cc/2026/Workshop/-/Submission"],
+                    now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(result["sources"], ["arxiv", "openreview"])
+            self.assertEqual(result["collected_count"], 1)
+            openreview.assert_called_once()
+            self.assertEqual(
+                openreview.call_args.kwargs["invitations"],
+                ["SafetyWorkshop.cc/2026/Workshop/-/Submission"],
+            )
 
     def test_personal_literature_radar_cli_passes_seed_paper_ids(self) -> None:
         fake_result = {

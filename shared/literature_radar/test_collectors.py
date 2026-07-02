@@ -606,6 +606,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["title"], "Memory Safety for Agentic Security")
         self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["release_date"], "2026-01-01")
         self.assertEqual(paper["identifiers"]["arxiv_id"], "2601.00001v1")
         self.assertEqual(paper["links"]["pdf"], "http://arxiv.org/pdf/2601.00001v1")
         self.assertEqual(paper["source_records"][0]["primary_category"], "cs.CR")
@@ -647,6 +648,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["abstract"], "Memory safety and system security metadata.")
         self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["release_date"], "2026-03-04")
         self.assertEqual(paper["venue"], "Proceedings of Example Security")
         self.assertEqual(paper["identifiers"]["doi"], "10.1145/example")
         self.assertEqual(paper["links"]["pdf"], "https://example.org/crossref-paper.pdf")
@@ -838,6 +840,8 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["source_records"][0]["venue_group"], "security")
         self.assertEqual(paper["source_records"][0]["venue_year"], 2026)
         self.assertIn("venue_query_url", paper["source_records"][0])
+        self.assertEqual(paper["source_provenance"]["source_id"], "dblp_venues")
+        self.assertEqual(paper["source_provenance_records"][0]["source_id"], "dblp_venues")
 
     def test_builds_and_parses_openalex_works(self) -> None:
         url = build_openalex_works_url(
@@ -864,6 +868,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["abstract"], "Memory safety and system security")
         self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["release_date"], "2026-02-03")
         self.assertEqual(paper["venue"], "Example Conference")
         self.assertEqual(paper["identifiers"]["openalex_id"], "w1234567890")
         self.assertEqual(paper["identifiers"]["doi"], "10.1145/example")
@@ -973,6 +978,8 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
             source_record["openalex_source_name"],
             "ACM Conference on Computer and Communications Security",
         )
+        self.assertEqual(paper["source_provenance"]["source_id"], "openalex_venues")
+        self.assertEqual(paper["source_provenance_records"][0]["source_id"], "openalex_venues")
 
     def test_builds_and_parses_openreview_notes(self) -> None:
         url = build_openreview_notes_url(
@@ -996,6 +1003,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["title"], "Agentic Security for LLM Systems")
         self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["release_date"], "2026-01-01")
         self.assertEqual(paper["venue"], "ICLR.cc 2026 Conference")
         self.assertEqual(paper["links"]["landing"], "https://openreview.net/forum?id=note123")
         self.assertEqual(paper["links"]["pdf"], "https://openreview.net/pdf?id=note123")
@@ -1056,6 +1064,8 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(source_record["openreview_venue_group"], "ai_ml")
         self.assertTrue(source_record["openreview_accepted"])
         self.assertEqual(source_record["openreview_acceptance_status"], "accepted")
+        self.assertEqual(paper["source_provenance"]["source_id"], "openreview_venues")
+        self.assertEqual(paper["source_provenance_records"][0]["source_id"], "openreview_venues")
 
     def test_openreview_venue_profiles_include_neurips_and_icml_presets(self) -> None:
         profiles = {profile["id"]: profile for profile in openreview_venue_profiles()}
@@ -1127,6 +1137,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(paper["title"], "LLM Security for Memory Safe Agents")
         self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
+        self.assertEqual(paper["release_date"], "2026-01-02")
         self.assertEqual(paper["identifiers"]["semantic_scholar_id"], "649def34f8be52c8b66281af98ae884c09aef38b")
         self.assertEqual(paper["identifiers"]["doi"], "10.1145/example")
         self.assertEqual(paper["identifiers"]["arxiv_id"], "2601.00001")

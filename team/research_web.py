@@ -30,6 +30,7 @@ from shared.literature_radar import (
     format_radar_context_summary,
     format_radar_source_provenance_summary,
     openreview_venue_profile_selection_summary,
+    paper_release_date,
     radar_dblp_venue_profile_selection_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
@@ -1565,6 +1566,7 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
           {source_tags}
           {imported}
           {render_radar_review_pill(review)}
+          {render_radar_release_pill(paper)}
           {render_pdf_access_pill(record.get("pdf_access") or {})}
         </div>
         {render_radar_review_reason(review)}
@@ -2205,6 +2207,7 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
           {render_novelty_pill(novelty)}
           {render_radar_review_pill(review)}
           <span class="pill">Score: {html_escape(int(float(scoring.get("score") or record.get("score") or 0)))}</span>
+          {render_radar_release_pill(paper)}
           {render_pdf_access_pill(pdf_access)}
           <span class="pill">Action: {html_escape(action)}</span>
           {render_radar_source_pills(paper)}
@@ -2406,6 +2409,15 @@ def render_radar_source_provenance_pill(provenance: dict[str, Any]) -> str:
     )
     css = "good" if provenance.get("authoritative_metadata") else ""
     return f'<span class="pill {css}" title="{html_escape(details)}">Source: {html_escape(source_id)} · {html_escape(source_class)}</span>'
+
+
+def render_radar_release_pill(paper: dict[str, Any]) -> str:
+    if not isinstance(paper, dict):
+        return ""
+    release_date = paper_release_date(paper)
+    if not release_date:
+        return ""
+    return f'<span class="pill" title="release date from source metadata">Released: {html_escape(release_date)}</span>'
 
 
 def render_radar_source_pills(paper: dict[str, Any]) -> str:
@@ -2792,6 +2804,7 @@ def render_latest_radar_queue_item(
         {relevance_pill(label)}
         <span class="pill">Score: {score}</span>
         <span class="pill">Action: {html_escape(action)}</span>
+        {render_radar_release_pill(paper)}
         {pdf_access_html}
         {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
         {source_tags}

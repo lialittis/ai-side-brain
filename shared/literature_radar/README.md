@@ -92,7 +92,13 @@ summary path uses only stored metadata, scoring reasons, and PDF-access policy;
 Personal and Team adapters can optionally replace that phase with shared
 OpenRouter structured summaries.
 Recommendation reports can include novelty metadata supplied by Personal or
-Team storage, keeping "new this run" separate from relevance score.
+Team storage, keeping "new this run" separate from relevance score. Collected
+papers also carry a normalized `release_date` when the source provides one
+(for example arXiv `published`, Crossref date-parts, OpenAlex
+`publication_date`, Semantic Scholar `publicationDate`, or OpenReview note
+timestamps). Recommendations with the same relevance score prefer newer release
+dates before falling back to discovery time, and reports show the selected
+release date for review.
 The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
 it carries stored review state such as `watch` or `dismissed` plus the scoring

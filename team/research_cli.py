@@ -854,7 +854,12 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         settings["crossref_mailto"] = args.crossref_mailto
     if args.unpaywall_email:
         settings["unpaywall_email"] = args.unpaywall_email
-    return apply_team_radar_source_preset(settings, selected_source_preset)
+    settings = apply_team_radar_source_preset(settings, selected_source_preset)
+    if settings.get("openreview_invitations") and "openreview" not in settings["sources"]:
+        settings["sources"].append("openreview")
+    if settings.get("openreview_venue_profiles") and "openreview_venues" not in settings["sources"]:
+        settings["sources"].append("openreview_venues")
+    return settings
 
 
 def main(argv: list[str] | None = None) -> int:

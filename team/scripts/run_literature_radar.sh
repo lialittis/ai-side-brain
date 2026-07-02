@@ -25,6 +25,7 @@ QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
 ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.txt"
 ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.json"
 SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.json"
+SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.txt"
 LATEST_REPORT_PATH="$OUTPUT_DIR/literature-radar-latest.md"
 LATEST_JSON_PATH="$OUTPUT_DIR/literature-radar-latest.json"
 LATEST_QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-latest.txt"
@@ -32,6 +33,7 @@ LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-latest.json"
 LATEST_ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-latest.txt"
 LATEST_ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-latest.json"
 LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-latest.json"
+LATEST_SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-settings-latest.txt"
 mkdir -p "$OUTPUT_DIR"
 
 USE_SAVED_DEFAULTS="${RADAR_USE_SAVED_DEFAULTS:-0}"
@@ -100,6 +102,12 @@ if [[ -n "${RADAR_OPENREVIEW_VENUES:-}" ]]; then
     ARGS+=("--openreview-venue-profile" "$venue_profile")
   done
 fi
+if [[ -n "${RADAR_OPENREVIEW_INVITATIONS:-}" ]]; then
+  read -r -a OPENREVIEW_INVITATIONS <<< "$RADAR_OPENREVIEW_INVITATIONS"
+  for invitation in "${OPENREVIEW_INVITATIONS[@]}"; do
+    ARGS+=("--openreview-invitation" "$invitation")
+  done
+fi
 if [[ "${RADAR_OPENREVIEW_INCLUDE_UNACCEPTED:-0}" == "1" ]]; then
   ARGS+=("--include-openreview-unaccepted")
 fi
@@ -156,6 +164,7 @@ fi
 
 if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
   SETTINGS_ARGS=("team/research_cli.py" "radar-settings")
+  SETTINGS_TEXT_ARGS=("team/research_cli.py" "radar-settings")
   SKIP_NEXT=0
   for ((i = 2; i < ${#ARGS[@]}; i++)); do
     if [[ "$SKIP_NEXT" == "1" ]]; then
@@ -168,14 +177,20 @@ if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
         ;;
       --import-results)
         ;;
+      --json)
+        SETTINGS_ARGS+=("${ARGS[$i]}")
+        ;;
       *)
         SETTINGS_ARGS+=("${ARGS[$i]}")
+        SETTINGS_TEXT_ARGS+=("${ARGS[$i]}")
         ;;
     esac
   done
   "$PYTHON_BIN" "${SETTINGS_ARGS[@]}" > "$SETTINGS_JSON_PATH"
+  "$PYTHON_BIN" "${SETTINGS_TEXT_ARGS[@]}" > "$SETTINGS_TEXT_PATH"
   if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
     cp "$SETTINGS_JSON_PATH" "$LATEST_SETTINGS_JSON_PATH"
+    cp "$SETTINGS_TEXT_PATH" "$LATEST_SETTINGS_TEXT_PATH"
   fi
 fi
 
@@ -244,12 +259,14 @@ echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
 if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
   echo "Literature Radar settings JSON: $SETTINGS_JSON_PATH"
+  echo "Literature Radar settings: $SETTINGS_TEXT_PATH"
 fi
 if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
   echo "Literature Radar latest report: $LATEST_REPORT_PATH"
   echo "Literature Radar latest JSON: $LATEST_JSON_PATH"
   if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
     echo "Literature Radar latest settings JSON: $LATEST_SETTINGS_JSON_PATH"
+    echo "Literature Radar latest settings: $LATEST_SETTINGS_TEXT_PATH"
   fi
 fi
 if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then

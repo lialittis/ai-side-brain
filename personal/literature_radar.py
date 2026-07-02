@@ -162,6 +162,8 @@ def run_personal_literature_radar(
             selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
     if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
+    if openreview_invitations and "openreview" not in selected_sources:
+        selected_sources.append("openreview")
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     collection_config = personal_radar_collection_config(
         selected_sources=selected_sources,

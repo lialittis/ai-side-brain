@@ -108,7 +108,9 @@ team member can jump directly to unreviewed, watch, or dismissed candidates.
 Stored run details and generated Markdown reports use the same labelled signal
 lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
 answer to "why should the team read this?" consistent across ad hoc runs, daily
-queue review, and weekly briefs.
+queue review, and weekly briefs. When source metadata includes publication or
+note timestamps, Radar stores a normalized `release_date`, shows it in reports,
+and uses it to prefer newer papers when relevance scores tie.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
 with the current priority candidates. Each candidate shows the same signal
 lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
@@ -248,8 +250,8 @@ Useful options:
   `author.id` filter. IDs look like `A123456789`.
 - `--openreview-invitation`: OpenReview invitation ID to collect, such as a
   venue submission invitation; repeatable. `OPENREVIEW_INVITATIONS` can also
-  provide comma-separated IDs. The `openreview` source requires at least one
-  invitation ID.
+  provide comma-separated IDs. Passing an invitation ID automatically enables
+  the `openreview` source for ad hoc and scheduled runs.
 - `--openreview-venue-profile`: OpenReview accepted-paper venue profile or
   group for the `openreview_venues` source; repeatable. Initial selectors are
   `iclr`, `neurips`, `neurips_datasets`, `neurips_creative_ai`, `icml`,
@@ -480,8 +482,9 @@ should ignore web-saved defaults and use only explicit environment variables.
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
 local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. Before
-collection, it writes a read-only `literature-radar-settings-*` preflight JSON
-snapshot unless `RADAR_WRITE_SETTINGS=0`; that snapshot reflects saved defaults
+collection, it writes read-only `literature-radar-settings-*` preflight
+snapshots unless `RADAR_WRITE_SETTINGS=0`: a JSON file for automation and a
+text file for quick operator review. Those snapshots reflect saved defaults
 plus explicit environment overrides passed to the scheduled run. It also writes
 text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
@@ -489,9 +492,10 @@ includes latest-run health/freshness, source-error counts, PDF access summary, s
 relevance/context signal, and matched interests for daily review. The JSON
 snapshot uses the same queue payload as `radar-queue --json`, including
 `latest_run` health, `access_summary`, `provenance_summary`, plus per-paper `signal_lines`. Stable
-`literature-radar-settings-latest.json` and `literature-radar-queue-latest.*`
-files are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT`
-to change how many active queue papers are included.
+`literature-radar-settings-latest.json`, `literature-radar-settings-latest.txt`,
+and `literature-radar-queue-latest.*` files are refreshed when latest-copy
+output is enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue
+papers are included.
 The run script and brief script also write text and JSON
 `literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
 snapshots use the same activity payload as `radar-activity --json` and show
@@ -559,6 +563,10 @@ It reads `.env` first and supports these optional variables:
   `openalex_authors` source.
 - `RADAR_OPENREVIEW_VENUES`: space-separated OpenReview venue profile/group
   selectors for the `openreview_venues` source.
+- `RADAR_OPENREVIEW_INVITATIONS`: space-separated explicit OpenReview
+  invitation IDs for conference workshops or other venues whose IDs are not
+  encoded as stable presets; this automatically enables the `openreview`
+  source in the scheduled run.
 - `RADAR_OPENREVIEW_INCLUDE_UNACCEPTED=1`: include non-accepted OpenReview
   submissions for preset venue runs.
 - `RADAR_SEED_PAPER_IDS`, `RADAR_NEGATIVE_SEED_PAPER_IDS`: space-separated

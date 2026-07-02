@@ -1190,6 +1190,36 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(openreview.call_args.kwargs["invitations"], ["ICLR.cc/2026/Conference/-/Submission"])
             self.assertEqual(openreview.call_args.kwargs["max_results"], 2)
 
+    def test_run_team_literature_radar_auto_enables_openreview_for_invitations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="openreview",
+                source_paper_id="workshop123",
+                title="Workshop Agentic Security for LLM Systems",
+                abstract="LLM security, agent safety, and prompt injection defenses.",
+                links={"landing": "https://openreview.net/forum?id=workshop123"},
+            )
+            with (
+                mock.patch("team.literature_radar.collect_arxiv", return_value=[]),
+                mock.patch("team.literature_radar.collect_openreview_notes", return_value=[paper]) as openreview,
+            ):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["LLM security"],
+                    max_results=2,
+                    openreview_invitations=["SafetyWorkshop.cc/2026/Workshop/-/Submission"],
+                )
+
+            self.assertEqual(result["sources"], ["arxiv", "openreview"])
+            self.assertEqual(result["collected_count"], 1)
+            openreview.assert_called_once()
+            self.assertEqual(
+                openreview.call_args.kwargs["invitations"],
+                ["SafetyWorkshop.cc/2026/Workshop/-/Submission"],
+            )
+
     def test_run_team_literature_radar_collects_conference_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -1860,10 +1890,13 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(json_code, 0)
         payload = json.loads(json_stdout.getvalue())
         self.assertTrue(payload["success"])
-        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openreview", "openalex"])
+        self.assertEqual(
+            payload["settings"]["sources"],
+            ["semantic_scholar_recommendations", "openreview", "openalex", "openreview_venues"],
+        )
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
-        self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
         self.assertIn(
             {"keyword": "agentic security", "weight": 90},
@@ -1873,7 +1906,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
         self.assertIn("Team Literature Radar Settings", text)
-        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex", text)
+        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenReview Venues", text)
         self.assertIn("Scoring: Team Interests", text)
         self.assertIn("agentic security=90", text)
         self.assertIn("Venue profiles:", text)
