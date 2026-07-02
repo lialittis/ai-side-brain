@@ -133,6 +133,11 @@ Use the `Team Security Daily` preset for the current security, memory-safety,
 and agentic-security workflow; it combines latest paper APIs with DBLP/OpenReview
 venue profiles plus USENIX Security and NDSS accepted-paper pages. Scheduled
 runs can also set `RADAR_SOURCE_PRESET=team_security_daily`.
+Radar settings JSON and CLI preflight output include DBLP/OpenAlex required
+top-venue coverage counts, so operators can tell whether the current selectors
+cover all configured security, systems, PL/memory-safety, and
+software-engineering venue groups before collection runs. The same preflight
+output reports Unpaywall OA enrichment readiness for legal PDF/license checks.
 For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can provide one fallback
 contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
 settings are configured.
@@ -146,6 +151,11 @@ unless `RADAR_WRITE_LATEST=0`.
 Radar signal lines are persisted in stored run recommendations, paper history,
 and imported library-item metadata, so future API or notification surfaces can
 reuse the same explanation without reprocessing the paper.
+Relevance and importance edits on imported Radar papers become future Radar
+context signals once a new candidate already overlaps with that prior paper by
+tags, interests, discussion terms, or title. This lets later queue entries say
+when they relate to work the team has already marked high priority. Those edits
+also appear in Radar activity feeds and briefs for imported Radar papers.
 `python team/research_cli.py radar-queue --json` and, when the web UI is
 running, `/radar/queue.json?limit=20` expose the same stored active queue,
 latest-run health, source stats, source coverage, persisted signal lines, and

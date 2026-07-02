@@ -89,6 +89,16 @@ that a new paper is related to what the team actually discussed, not only to
 static tags or abstracts. Comments on imported Radar papers also appear in
 Radar activity JSON and weekly briefs, so human follow-up is visible in the
 same review trail as watch, dismiss, and import actions.
+Manual relevance and importance edits on imported Latest Papers are also folded
+back into the Radar context matcher. They do not make unrelated candidates
+match by themselves, but when a future paper shares tags, interests, discussion
+terms, or title overlap with a prior library paper, Radar records the prior
+paper's relevance label, score, and importance in the relationship detail. This
+helps the daily queue explain that a candidate connects to work the team already
+marked as high priority. Those relevance and importance edits are also recorded
+as Literature Radar activity for imported Radar papers, so `/radar`, activity
+JSON, and weekly briefs show the same human feedback that later influences
+context matching.
 Watched Radar papers are also folded back into the context matcher before they
 are imported. Their stored attention summary and any review note from the Queue
 page or `radar-review --reason` become local context text and discussion terms
@@ -130,10 +140,11 @@ For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
 Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
 machine-readable contract for scripts and dashboards.
-Watch, dismiss, clear, and add-to-library actions are also recorded in the
-Team `audit_events` table as Literature Radar activity. The `/radar` page shows
-a compact Recent Activity feed so team members can see the latest triage and
-import decisions without opening the database.
+Watch, dismiss, clear, add-to-library, comment, relevance-edit, and
+importance-edit actions are also recorded in the Team `audit_events` table as
+Literature Radar activity. The `/radar` page shows a compact Recent Activity
+feed so team members can see the latest triage, import, and feedback decisions
+without opening the database.
 If the latest scheduled run produced no stored papers but did fail or complete,
 the same panel still shows latest-run health, counts, and source-error status so
 an empty queue is not confused with a healthy run that simply found nothing.
@@ -190,12 +201,17 @@ The same read-only settings and readiness contract is available as local JSON at
 without starting collectors, downloading PDFs, or calling AI. The JSON also
 includes the current Team Interest scoring profile and a compact
 `scoring_profile_summary`, so operators can confirm which weighted interests
-will drive relevance before a scheduled run spends API calls. When DBLP,
+will drive relevance before a scheduled run spends API calls. It also reports
+`oa_enrichment` for Unpaywall so operators can see whether legal OA PDF/license
+resolution is ready for DOI-capable source selections. When DBLP,
 OpenAlex, or OpenReview venue profile selectors are configured, the payload also
 includes `venue_profile_summary` with the expanded top-conference profiles that
-will be queried. Optional trend-signal sources such as Hugging Face Papers are
-reported in `trend_signal_options` as read-only, not-yet-runnable signals rather
-than authoritative bibliographic collectors. The `links` block includes `/radar`, `/radar/queue?limit=20`,
+will be queried. The DBLP/OpenAlex section includes `required_coverage` so the
+Radar page, CLI settings output, and automation can show how many required
+security, systems, PL/memory-safety, and software-engineering top venues are
+covered by the current selectors. Optional trend-signal sources such as Hugging
+Face Papers are reported in `trend_signal_options` as read-only, not-yet-runnable
+signals rather than authoritative bibliographic collectors. The `links` block includes `/radar`, `/radar/queue?limit=20`,
 `/radar/queue.json?limit=20`, and `/radar/brief.json?days=7&limit=20` so local
 dashboards and operators can jump from readiness checks to the daily review
 surface.
@@ -420,9 +436,10 @@ source coverage status, `source_policy` authoritative/trend-signal counts, a
 paper records, and links back to the HTML review surfaces.
 `/radar/activity.json?days=7&limit=50` and
 `python team/research_cli.py radar-activity --json` return the same recent
-watch, dismiss, clear, and add-to-library audit digest with
+watch, dismiss, clear, add-to-library, comment, relevance-edit, and
+importance-edit audit digest with
 `kind=team_literature_radar_activity`, actor, action label, paper title, dedupe
-key, optional review reason, and imported item ID.
+key, optional activity detail or review reason, and imported item ID.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
@@ -509,7 +526,8 @@ papers are included.
 The run script and brief script also write text and JSON
 `literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
 snapshots use the same activity payload as `radar-activity --json` and show
-recent watch, dismiss, clear, and add-to-library audit events. The brief script
+recent watch, dismiss, clear, add-to-library, comment, relevance-edit, and
+importance-edit audit events. The brief script
 writes a stored-run roll-up without collecting again and refreshes
 `literature-radar-brief-latest.*` plus `literature-radar-activity-latest.*`
 when latest-copy output is enabled. The cycle script runs both in order; if

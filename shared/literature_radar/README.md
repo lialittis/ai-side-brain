@@ -36,6 +36,9 @@ source readiness, supported source IDs, source option records, and read-only
 trend-signal options into one contract that product surfaces can expose before
 running collectors. Trend signals are listed separately from runnable collectors
 until their collectors are implemented.
+The same preflight payload also reports `oa_enrichment` for Unpaywall so
+Personal and Team operators can see whether legal open-access PDF/license
+resolution is ready for DOI-capable source selections before a run starts.
 Adapters can attach scoring-profile and venue-profile summaries so operators
 can verify relevance and top-conference coverage before scheduled API calls.
 
@@ -86,6 +89,11 @@ produced candidates and recommendations. These source records keep the
 bibliographic provider source (`dblp`, `openalex`, or `openreview`) separate
 from the venue-profile `collector_id`, so run history can explain both where the
 metadata came from and which collector path found it.
+The DBLP/OpenAlex venue-profile settings summary also includes
+`required_coverage`, a manifest check against the configured security, systems,
+programming-languages/memory-safety, and software-engineering top-venue groups.
+Personal and Team preflight outputs use that to show whether the current
+selectors cover all required top venues before a scheduled run spends API calls.
 
 The core also provides product-neutral recommendation summaries. The local
 summary path uses only stored metadata, scoring reasons, and PDF-access policy;
@@ -123,6 +131,14 @@ while still keeping accepted-paper writes manual.
 Both adapters can reuse lightweight review intent, such as watched-paper notes
 or reasons, as local context for later runs without making the shared core own
 product storage or review UI.
+Context items may also carry product-owned feedback such as relevance labels,
+manual relevance scores, or importance ratings. The shared matcher never lets
+that feedback make an unrelated item match by itself, but once tags, interests,
+discussion terms, or title overlap link a paper to prior work, the feedback is
+included in the relationship text and gives high-priority prior work a small
+ranking boost in the context list. Product adapters own how those edits are
+stored or audited; Team Side-Brain records imported-paper relevance and
+importance edits as Radar activity.
 Deduplication uses DOI, arXiv, Semantic Scholar, OpenAlex, corpus, and
 title/year aliases together. This lets a title-only venue-profile record merge
 with DOI-bearing Crossref/OpenAlex/Semantic Scholar metadata when the title and

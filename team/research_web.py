@@ -1001,6 +1001,9 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
     ]
     if settings.get("conference_year"):
         chips.append(render_radar_metric_chip("conference year", settings["conference_year"]))
+    venue_coverage = radar_settings_top_venue_coverage_label(settings)
+    if venue_coverage:
+        chips.append(render_radar_metric_chip("top venues", venue_coverage))
     tracker_count = radar_tracker_count(settings)
     if tracker_count:
         chips.append(render_radar_metric_chip("tracked lists", tracker_count))
@@ -1128,6 +1131,19 @@ def radar_settings_venue_profile_summary(settings: dict[str, Any]) -> dict[str, 
     }
 
 
+def radar_settings_top_venue_coverage_label(settings: dict[str, Any]) -> str:
+    summary = radar_settings_venue_profile_summary(settings)
+    section = summary.get("dblp_openalex") if isinstance(summary.get("dblp_openalex"), dict) else {}
+    coverage = section.get("required_coverage") if isinstance(section.get("required_coverage"), dict) else {}
+    required = int(coverage.get("required_count") or 0)
+    if not required:
+        return ""
+    covered = int(coverage.get("covered_count") or 0)
+    missing = int(coverage.get("missing_count") or 0)
+    suffix = "complete" if missing == 0 else f"{missing} missing"
+    return f"{covered}/{required} {suffix}"
+
+
 def render_radar_readiness_missing(readiness: dict[str, Any]) -> str:
     required = readiness.get("missing_required") if isinstance(readiness.get("missing_required"), list) else []
     recommended = readiness.get("missing_recommended") if isinstance(readiness.get("missing_recommended"), list) else []
@@ -1224,7 +1240,7 @@ def render_literature_radar_activity_item(event: dict[str, Any]) -> str:
     return f"""
     <div class="radar-activity-item">
       <div><strong>{html_escape(action)}</strong> {html_escape(title)}</div>
-      {render_radar_activity_detail(after)}
+      {render_radar_activity_detail(after, before=before, action=str(event.get("action") or ""))}
       <div class="meta">{html_escape(actor)} · {html_escape(timestamp)}</div>
     </div>
     """
@@ -1248,6 +1264,10 @@ def radar_activity_action_text(event: dict[str, Any], after: dict[str, Any]) -> 
         return "Added to library:"
     if action == "literature_radar_paper_commented":
         return "Commented:"
+    if action == "literature_radar_paper_relevance_updated":
+        return "Updated relevance:"
+    if action == "literature_radar_paper_importance_updated":
+        return "Updated importance:"
     if action == "literature_radar_recommendation_imported":
         return "Imported recommendation:"
     if action == "literature_radar_recommendation_reviewed":
@@ -1257,12 +1277,29 @@ def radar_activity_action_text(event: dict[str, Any], after: dict[str, Any]) -> 
     return action.replace("_", " ").title() + ":"
 
 
-def render_radar_activity_detail(record: dict[str, Any]) -> str:
+def render_radar_activity_detail(
+    record: dict[str, Any],
+    *,
+    before: dict[str, Any] | None = None,
+    action: str = "",
+) -> str:
     comment = record.get("comment") if isinstance(record.get("comment"), dict) else {}
     content = str(comment.get("content") or "").strip()
-    if not content:
-        return ""
-    return f'<div class="meta">{html_escape(content)}</div>'
+    if content:
+        return f'<div class="meta">{html_escape(content)}</div>'
+    if action == "literature_radar_paper_relevance_updated":
+        prior = before or {}
+        detail = (
+            "Relevance: "
+            f"{prior.get('relevance_label') or 'unknown'} -> {record.get('relevance_label') or 'unknown'} "
+            f"(score {float(prior.get('relevance_score') or 0):g} -> {float(record.get('relevance_score') or 0):g})"
+        )
+        return f'<div class="meta">{html_escape(detail)}</div>'
+    if action == "literature_radar_paper_importance_updated":
+        prior = before or {}
+        detail = f"Importance: {int(prior.get('importance') or 0)} -> {int(record.get('importance') or 0)}"
+        return f'<div class="meta">{html_escape(detail)}</div>'
+    return ""
 
 
 def render_radar_brief_form(*, days: int, limit: int) -> str:

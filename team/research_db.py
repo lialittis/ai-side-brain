@@ -792,19 +792,24 @@ class TeamResearchDatabase:
         *,
         label: str,
         score: float,
+        actor: str = "team-member",
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
         timestamp = iso_timestamp(now or datetime.now(timezone.utc))
         bundle = self.get_bundle(item_id)
+        item = bundle["item"]
         screening = bundle.get("screening")
         if not screening:
             raise ValueError(f"Research item {item_id} has no relevance screening")
         updated = dict(screening)
+        before_label = str(screening.get("label") or "")
+        before_score = float(screening.get("score") or 0)
+        selected_score = min(100.0, max(0.0, float(score)))
         updated.update(
             {
                 "label": label,
-                "score": min(100.0, max(0.0, float(score))),
+                "score": selected_score,
                 "confidence": "high",
                 "screened_at": timestamp,
             }
@@ -819,6 +824,31 @@ class TeamResearchDatabase:
         updated["source_trace"] = source_trace
         with self.connect() as connection:
             self._upsert_screening(connection, updated)
+            radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+            radar_dedupe_key = str(radar_metadata.get("dedupe_key") or "").strip()
+            if radar_dedupe_key and (before_label != label or before_score != selected_score):
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=actor,
+                        action="literature_radar_paper_relevance_updated",
+                        object_type="literature_radar_paper_relevance",
+                        object_id=radar_dedupe_key,
+                        before={
+                            "dedupe_key": radar_dedupe_key,
+                            "title": item.get("title") or radar_dedupe_key,
+                            "relevance_label": before_label,
+                            "relevance_score": before_score,
+                        },
+                        after={
+                            "dedupe_key": radar_dedupe_key,
+                            "title": item.get("title") or radar_dedupe_key,
+                            "relevance_label": label,
+                            "relevance_score": selected_score,
+                        },
+                        now=now,
+                    ),
+                )
         return updated
 
     def update_library_importance(
@@ -826,16 +856,19 @@ class TeamResearchDatabase:
         item_id: str,
         *,
         importance: int,
+        actor: str = "team-member",
         now: datetime | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
         timestamp = iso_timestamp(now or datetime.now(timezone.utc))
         selected_importance = min(5, max(0, int(importance)))
         bundle = self.get_bundle(item_id)
+        item = bundle["item"]
         entries = bundle.get("library_entries") or []
         updated_entries = []
         with self.connect() as connection:
             for entry in entries:
+                before_importance = library_importance(entry)
                 updated = dict(entry)
                 updated.update(
                     {
@@ -845,6 +878,31 @@ class TeamResearchDatabase:
                 )
                 self._upsert_library_entry(connection, updated)
                 updated_entries.append(updated)
+                radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+                radar_dedupe_key = str(radar_metadata.get("dedupe_key") or "").strip()
+                if radar_dedupe_key and before_importance != selected_importance:
+                    self._insert_audit_event(
+                        connection,
+                        create_audit_event(
+                            actor=actor,
+                            action="literature_radar_paper_importance_updated",
+                            object_type="literature_radar_paper_importance",
+                            object_id=radar_dedupe_key,
+                            before={
+                                "dedupe_key": radar_dedupe_key,
+                                "title": item.get("title") or radar_dedupe_key,
+                                "importance": before_importance,
+                                "library_entry_id": entry.get("id") or "",
+                            },
+                            after={
+                                "dedupe_key": radar_dedupe_key,
+                                "title": item.get("title") or radar_dedupe_key,
+                                "importance": selected_importance,
+                                "library_entry_id": entry.get("id") or "",
+                            },
+                            now=now,
+                        ),
+                    )
         return updated_entries
 
     def remove_item(

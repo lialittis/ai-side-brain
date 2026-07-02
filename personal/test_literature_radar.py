@@ -953,6 +953,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
         self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
+        self.assertEqual(payload["oa_enrichment"]["status"], "ready")
+        self.assertTrue(payload["oa_enrichment"]["configured"])
         self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])
         self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
         self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
@@ -963,6 +965,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             [topic["id"] for topic in payload["scoring_profile"]["topics"]],
         )
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["missing_count"], 12)
         self.assertEqual(payload["venue_profile_summary"]["openreview"]["profiles"][0]["name"], "ICLR")
         self.assertNotIn("run_id", payload)
         self.assertEqual(text_code, 0)
@@ -971,8 +975,12 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenReview Venues", text)
         self.assertIn("Scoring: Security, memory safety, and agentic security radar", text)
         self.assertIn("Venue profiles:", text)
-        self.assertIn("DBLP/OpenAlex: USENIX Security, IEEE Symposium on Security and Privacy", text)
+        self.assertIn(
+            "DBLP/OpenAlex: USENIX Security, IEEE Symposium on Security and Privacy, ACM CCS, NDSS; +2 more (top venues 6/18)",
+            text,
+        )
         self.assertIn("OpenReview: ICLR", text)
+        self.assertIn("OA enrichment: provider=Unpaywall status=ready configured=yes", text)
         self.assertIn("Source policy:", text)
         self.assertIn("Source readiness:", text)
         self.assertIn("status=blocked", text)

@@ -94,7 +94,11 @@ set. Before collection, it writes a read-only
 `PERSONAL_RADAR_WRITE_SETTINGS=0`. That snapshot includes source readiness and
 the active topic-profile scoring summary plus expanded DBLP/OpenAlex and
 OpenReview venue profile summaries, so you can confirm the relevance and venue
-coverage before scheduled collection starts. It also writes a text and JSON
+coverage before scheduled collection starts. The DBLP/OpenAlex summary includes
+required top-venue coverage counts for the configured security, systems,
+PL/memory-safety, and software-engineering conference groups. The preflight
+snapshot also reports Unpaywall OA enrichment readiness for legal PDF/license
+checks. It also writes a text and JSON
 `personal-literature-radar-queue-*` snapshot
 for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
 run script also writes text and JSON `personal-literature-radar-activity-*`

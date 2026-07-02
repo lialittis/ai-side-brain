@@ -31,6 +31,7 @@ from personal.literature_radar import (
 from shared.literature_radar import (
     build_radar_preflight_payload,
     format_radar_context_summary,
+    format_radar_oa_enrichment,
     format_radar_run_health_action,
     format_radar_source_provenance_summary,
     format_radar_source_policy,
@@ -316,6 +317,9 @@ def print_settings(result: dict[str, Any]) -> None:
     )
     if venue_profile_summary:
         print(format_settings_venue_profiles(venue_profile_summary))
+    oa_enrichment = result.get("oa_enrichment") if isinstance(result.get("oa_enrichment"), dict) else {}
+    if oa_enrichment:
+        print(format_radar_oa_enrichment(oa_enrichment))
     source_policy = result.get("source_policy") if isinstance(result.get("source_policy"), dict) else {}
     if source_policy:
         print(format_radar_source_policy(source_policy))
@@ -346,10 +350,22 @@ def format_settings_venue_profiles(summary: dict[str, Any]) -> str:
         ]
         if profile_count:
             suffix = f"; +{profile_count - 4} more" if profile_count > 4 else ""
-            parts.append(f"{label}: {', '.join(names[:4])}{suffix}")
+            coverage = radar_settings_required_coverage_text(section)
+            coverage_suffix = f" ({coverage})" if coverage else ""
+            parts.append(f"{label}: {', '.join(names[:4])}{suffix}{coverage_suffix}")
         elif section.get("status") == "invalid":
             parts.append(f"{label}: invalid ({section.get('error')})")
     return "Venue profiles: " + " | ".join(parts) if parts else "Venue profiles: none"
+
+
+def radar_settings_required_coverage_text(section: dict[str, Any]) -> str:
+    coverage = section.get("required_coverage") if isinstance(section.get("required_coverage"), dict) else {}
+    required = int(coverage.get("required_count") or 0)
+    if not required:
+        return ""
+    covered = int(coverage.get("covered_count") or 0)
+    missing = int(coverage.get("missing_count") or 0)
+    return f"top venues {covered}/{required}" if missing else f"top venues complete {covered}/{required}"
 
 
 def print_run(result: dict[str, Any]) -> None:

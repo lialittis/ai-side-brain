@@ -760,6 +760,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("cache PDFs: yes", html)
             self.assertIn("source contact: yes", html)
             self.assertIn("conference year: 2026", html)
+            self.assertIn("top venues: 6/18 12 missing", html)
             self.assertIn("tracked lists: 3", html)
             self.assertIn("last run: none", html)
             self.assertIn("Save as defaults", html)
@@ -835,6 +836,9 @@ class TeamResearchWebTest(unittest.TestCase):
             payload["scoring_profile_summary"]["top_interests"],
         )
         self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["required_count"], 18)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
+        self.assertFalse(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["complete"])
         self.assertIn(
             "USENIX Security",
             [profile["name"] for profile in payload["venue_profile_summary"]["dblp_openalex"]["profiles"]],
@@ -1069,11 +1073,24 @@ class TeamResearchWebTest(unittest.TestCase):
                 content="Use this for agent hardening notes.",
                 now=datetime(2026, 7, 1, 10, 4, tzinfo=timezone.utc),
             )
+            database.update_item_relevance(
+                item_id,
+                label="highly_relevant",
+                score=94,
+                actor="Alice",
+                now=datetime(2026, 7, 1, 10, 5, tzinfo=timezone.utc),
+            )
+            database.update_library_importance(
+                item_id,
+                importance=5,
+                actor="Alice",
+                now=datetime(2026, 7, 1, 10, 6, tzinfo=timezone.utc),
+            )
             activity_payload = build_team_literature_radar_activity_payload(
                 database,
                 days=7,
                 limit=5,
-                now=datetime(2026, 7, 1, 10, 5, tzinfo=timezone.utc),
+                now=datetime(2026, 7, 1, 10, 7, tzinfo=timezone.utc),
             )
             comment_activity = next(
                 event
@@ -1082,9 +1099,30 @@ class TeamResearchWebTest(unittest.TestCase):
             )
             self.assertEqual(comment_activity["action_label"], "Commented")
             self.assertEqual(comment_activity["reason"], "Use this for agent hardening notes.")
+            relevance_activity = next(
+                event
+                for event in activity_payload["activity"]
+                if event["action"] == "literature_radar_paper_relevance_updated"
+            )
+            self.assertEqual(relevance_activity["action_label"], "Updated relevance")
+            self.assertEqual(
+                relevance_activity["reason"],
+                "Relevance: highly_relevant -> highly_relevant (score 100 -> 94)",
+            )
+            importance_activity = next(
+                event
+                for event in activity_payload["activity"]
+                if event["action"] == "literature_radar_paper_importance_updated"
+            )
+            self.assertEqual(importance_activity["action_label"], "Updated importance")
+            self.assertEqual(importance_activity["reason"], "Importance: 0 -> 5")
             activity_html = render_literature_radar_page(database, run_id=run["id"])
             self.assertIn("Commented:", activity_html)
             self.assertIn("Use this for agent hardening notes.", activity_html)
+            self.assertIn("Updated relevance:", activity_html)
+            self.assertIn("Relevance: highly_relevant -&gt; highly_relevant (score 100 -&gt; 94)", activity_html)
+            self.assertIn("Updated importance:", activity_html)
+            self.assertIn("Importance: 0 -&gt; 5", activity_html)
 
     def test_radar_review_marks_recommendation_and_paper_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

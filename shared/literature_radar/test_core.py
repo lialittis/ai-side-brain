@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from shared.literature_radar import (
+    CONFERENCE_SOURCE_GROUPS,
     LOCAL_RADAR_SUMMARY_PROCESSOR,
     RADAR_PIPELINE_PHASES,
     add_local_recommendation_summaries,
@@ -35,6 +36,7 @@ from shared.literature_radar import (
     enrich_paper_with_unpaywall,
     enrich_radar_papers_with_unpaywall,
     expand_dblp_venue_profiles,
+    format_radar_oa_enrichment,
     format_radar_source_provenance_summary,
     format_radar_source_coverage,
     format_radar_source_stats,
@@ -217,6 +219,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
         self.assertEqual(payload["source_readiness"]["status"], "ready_with_warnings")
         self.assertEqual(payload["source_readiness"]["warning_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(payload["oa_enrichment"]["status"], "missing_recommended")
+        self.assertEqual(payload["oa_enrichment"]["provider"], "unpaywall")
+        self.assertEqual(payload["oa_enrichment"]["relevant_source_ids"], ["semantic_scholar_recommendations", "openalex"])
+        self.assertIn("status=missing_recommended", format_radar_oa_enrichment(payload["oa_enrichment"]))
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
         self.assertEqual(payload["scoring_profile_summary"]["interest_count"], 2)
         self.assertEqual(
@@ -488,18 +494,6 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("sources=team-library=1, team-radar-watch=1", report)
 
     def test_dblp_venue_profiles_cover_required_conference_groups(self) -> None:
-        profiles = dblp_venue_profiles()
-        names = {profile["name"] for profile in profiles}
-
-        self.assertIn("USENIX Security", names)
-        self.assertIn("IEEE Symposium on Security and Privacy", names)
-        self.assertIn("ACM CCS", names)
-        self.assertIn("OSDI", names)
-        self.assertIn("EuroSys", names)
-        self.assertIn("PLDI", names)
-        self.assertIn("OOPSLA", names)
-        self.assertIn("ECOOP", names)
-        self.assertIn("ICSE", names)
         self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["security"])],
             ["usenix_security", "ieee_sp", "acm_ccs", "ndss", "raid", "acsac"],
@@ -512,11 +506,29 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [profile["id"] for profile in expand_dblp_venue_profiles(["programming_languages_memory_safety"])],
             ["pldi", "oopsla", "popl", "ecoop"],
         )
+        self.assertEqual(
+            [profile["id"] for profile in expand_dblp_venue_profiles(["software_engineering"])],
+            ["icse", "fse", "ase"],
+        )
         self.assertEqual([profile["id"] for profile in expand_dblp_venue_profiles(["acm_ccs"])], ["acm_ccs"])
         dblp_summary = radar_dblp_venue_profile_selection_summary(["security", "pldi"])
         self.assertEqual(dblp_summary["status"], "ready")
         self.assertEqual(dblp_summary["profile_count"], 7)
         self.assertEqual(dblp_summary["groups"]["security"], 6)
+        self.assertEqual(dblp_summary["required_coverage"]["required_count"], 18)
+        self.assertEqual(dblp_summary["required_coverage"]["covered_count"], 7)
+        self.assertEqual(dblp_summary["required_coverage"]["groups"]["security"]["missing"], [])
+        self.assertEqual(
+            dblp_summary["required_coverage"]["groups"]["software_engineering"]["missing"],
+            ["ICSE", "FSE", "ASE"],
+        )
+        full_summary = radar_dblp_venue_profile_selection_summary(
+            ["security", "systems", "programming_languages_memory_safety", "software_engineering"]
+        )
+        self.assertTrue(full_summary["required_coverage"]["complete"])
+        self.assertEqual(full_summary["required_coverage"]["covered_count"], 18)
+        for group, required_names in CONFERENCE_SOURCE_GROUPS.items():
+            self.assertEqual(full_summary["required_coverage"]["groups"][group]["covered"], required_names)
         self.assertIn("USENIX Security", [profile["name"] for profile in dblp_summary["profiles"]])
         openreview_summary = openreview_venue_profile_selection_summary(["iclr", "ai_ml"])
         self.assertEqual(openreview_summary["status"], "ready")
@@ -1547,6 +1559,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                     "abstract": "Prior team work on agentic security and LLM security.",
                     "tags": ["agentic-security"],
                     "interest_terms": ["agentic security", "LLM security"],
+                    "team_feedback": {
+                        "relevance_label": "highly_relevant",
+                        "relevance_score": 94,
+                        "importance": 5,
+                    },
                     "link": "https://example.org/baseline",
                 },
                 {
@@ -1569,8 +1586,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("LLM security", context["matched_interest_terms"])
         self.assertEqual(context["related_items"][0]["id"], "item_1")
         self.assertIn("agentic security", context["related_items"][0]["matched_terms"])
+        self.assertEqual(context["related_items"][0]["team_feedback"]["importance"], 5)
+        self.assertIn("team feedback: highly_relevant, score 94, importance 5", context["related_items"][0]["relationship"])
         self.assertIn("Related to existing context", context["relationship_summary"])
         self.assertIn("Context: Matches active interests", report)
+        self.assertIn("team feedback: highly_relevant, score 94, importance 5", report)
 
     def test_formats_latest_signal_lines_for_daily_queues(self) -> None:
         lines = radar_latest_signal_lines(

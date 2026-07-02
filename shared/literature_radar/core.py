@@ -272,6 +272,20 @@ RADAR_SOURCE_RECOMMENDED_CONFIG: dict[str, list[tuple[str, str]]] = {
     "openalex_venues": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
     "crossref": [("crossref_mailto_configured", "Crossref mailto/contact")],
 }
+RADAR_OA_ENRICHMENT_SOURCE_IDS = {
+    "dblp",
+    "dblp_authors",
+    "dblp_venues",
+    "semantic_scholar",
+    "semantic_scholar_authors",
+    "semantic_scholar_citations",
+    "semantic_scholar_references",
+    "semantic_scholar_recommendations",
+    "openalex",
+    "openalex_authors",
+    "openalex_venues",
+    "crossref",
+}
 
 CONFERENCE_SOURCE_GROUPS: dict[str, list[str]] = {
     "security": ["USENIX Security", "IEEE S&P", "ACM CCS", "NDSS", "RAID", "ACSAC"],
@@ -761,6 +775,7 @@ def build_radar_preflight_payload(
         "collection_config": selected_config,
         "source_policy": radar_source_policy_summary(selected_sources),
         "source_readiness": radar_source_readiness_summary(selected_sources, selected_config),
+        "oa_enrichment": radar_oa_enrichment_summary(selected_sources, selected_config),
     }
     if scoring_profile is not None:
         payload["scoring_profile"] = dict(scoring_profile)
@@ -772,6 +787,51 @@ def build_radar_preflight_payload(
     if paths is not None:
         payload["paths"] = dict(paths)
     return payload
+
+
+def radar_oa_enrichment_summary(
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_sources = unique_source_ids(list(sources or []))
+    relevant_source_ids = [
+        source_id
+        for source_id in selected_sources
+        if source_id in RADAR_OA_ENRICHMENT_SOURCE_IDS
+    ]
+    configured = bool((collection_config or {}).get("unpaywall_email_configured"))
+    policy = radar_source_policy_record("unpaywall")
+    if not relevant_source_ids:
+        status = "not_applicable"
+    elif configured:
+        status = "ready"
+    else:
+        status = "missing_recommended"
+    return {
+        "provider": "unpaywall",
+        "label": policy["name"],
+        "source_class": policy["source_class"],
+        "status": status,
+        "configured": configured,
+        "relevant_source_ids": relevant_source_ids,
+        "recommended_config": []
+        if configured or not relevant_source_ids
+        else [{"key": "unpaywall_email_configured", "label": "Unpaywall email/contact"}],
+        "purpose": "legal OA/PDF URL and license enrichment for DOI-bearing candidates",
+    }
+
+
+def format_radar_oa_enrichment(summary: dict[str, Any]) -> str:
+    if not summary:
+        return "OA enrichment: not recorded"
+    relevant = summary.get("relevant_source_ids") if isinstance(summary.get("relevant_source_ids"), list) else []
+    source_text = ",".join(str(source_id) for source_id in relevant) if relevant else "none"
+    return (
+        f"OA enrichment: provider={summary.get('label') or summary.get('provider') or 'unknown'} "
+        f"status={summary.get('status') or 'unknown'} "
+        f"configured={'yes' if summary.get('configured') else 'no'} "
+        f"sources={source_text}"
+    )
 
 
 def radar_scoring_profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -851,6 +911,7 @@ def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str,
             "profile_count": 0,
             "groups": {},
             "profiles": [],
+            "required_coverage": radar_required_conference_coverage_summary([]),
             "error": str(error),
         }
     groups: dict[str, int] = {}
@@ -873,7 +934,52 @@ def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str,
         "profile_count": len(profile_records),
         "groups": groups,
         "profiles": profile_records,
+        "required_coverage": radar_required_conference_coverage_summary(profile_records),
     }
+
+
+def radar_required_conference_coverage_summary(profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    selected_aliases_by_group: dict[str, set[str]] = {}
+    for profile in profiles:
+        group = str(profile.get("group") or "").strip()
+        if group:
+            aliases = radar_venue_profile_aliases(profile)
+            selected_aliases_by_group.setdefault(group, set()).update(aliases)
+    groups = {}
+    total_required = 0
+    total_covered = 0
+    missing_total = 0
+    for group, required_names in CONFERENCE_SOURCE_GROUPS.items():
+        selected_aliases = selected_aliases_by_group.get(group, set())
+        covered = [name for name in required_names if normalize_selector(name) in selected_aliases]
+        missing = [name for name in required_names if normalize_selector(name) not in selected_aliases]
+        total_required += len(required_names)
+        total_covered += len(covered)
+        missing_total += len(missing)
+        groups[group] = {
+            "required_count": len(required_names),
+            "covered_count": len(covered),
+            "missing_count": len(missing),
+            "covered": covered,
+            "missing": missing,
+        }
+    return {
+        "required_count": total_required,
+        "covered_count": total_covered,
+        "missing_count": missing_total,
+        "complete": missing_total == 0,
+        "groups": groups,
+    }
+
+
+def radar_venue_profile_aliases(profile: dict[str, Any]) -> set[str]:
+    values = [
+        profile.get("id"),
+        profile.get("name"),
+        *(profile.get("dblp_venues") if isinstance(profile.get("dblp_venues"), list) else []),
+        *(profile.get("query_terms") if isinstance(profile.get("query_terms"), list) else []),
+    ]
+    return {normalize_selector(value) for value in values if normalize_selector(value)}
 
 
 def radar_source_presets() -> list[dict[str, Any]]:
@@ -2782,6 +2888,8 @@ def score_context_item_for_paper(paper: dict[str, Any], context_item: dict[str, 
     )
     if score <= 0:
         return None
+    team_feedback = radar_context_team_feedback(context_item)
+    score += radar_context_feedback_boost(team_feedback)
     return {
         "id": context_item.get("id") or item_key or context_item.get("title") or "",
         "title": context_item.get("title") or "Untitled context item",
@@ -2791,8 +2899,58 @@ def score_context_item_for_paper(paper: dict[str, Any], context_item: dict[str, 
         "matched_terms": matched_terms,
         "matched_discussion_terms": matched_discussion_terms,
         "title_overlap": title_overlap[:5],
-        "relationship": context_relationship_text(matched_tags, matched_terms, title_overlap, matched_discussion_terms),
+        "relationship": context_relationship_text(
+            matched_tags,
+            matched_terms,
+            title_overlap,
+            matched_discussion_terms,
+            team_feedback=team_feedback,
+        ),
+        **({"team_feedback": team_feedback} if team_feedback else {}),
     }
+
+
+def radar_context_team_feedback(context_item: dict[str, Any]) -> dict[str, Any]:
+    feedback = context_item.get("team_feedback") if isinstance(context_item.get("team_feedback"), dict) else {}
+    relevance_label = normalize_spaces(feedback.get("relevance_label") or "")
+    try:
+        relevance_score = float(feedback.get("relevance_score") or 0)
+    except (TypeError, ValueError):
+        relevance_score = 0.0
+    try:
+        importance = int(feedback.get("importance") or 0)
+    except (TypeError, ValueError):
+        importance = 0
+    selected: dict[str, Any] = {}
+    if relevance_label:
+        selected["relevance_label"] = relevance_label
+    if relevance_score > 0:
+        selected["relevance_score"] = round(relevance_score, 2)
+    if importance > 0:
+        selected["importance"] = min(5, max(0, importance))
+    return selected
+
+
+def radar_context_feedback_boost(feedback: dict[str, Any]) -> int:
+    if not feedback:
+        return 0
+    boost = 0
+    label = str(feedback.get("relevance_label") or "")
+    if label == "highly_relevant":
+        boost += 3
+    elif label == "possibly_relevant":
+        boost += 1
+    score = float(feedback.get("relevance_score") or 0)
+    if score >= 80:
+        boost += 2
+    elif score >= 50:
+        boost += 1
+    importance = int(feedback.get("importance") or 0)
+    if importance >= 4:
+        boost += 2
+    elif importance >= 2:
+        boost += 1
+    return boost
 
 
 def relationship_to_context(matched_interest_terms: list[str], related_items: list[dict[str, Any]]) -> str:
@@ -2812,6 +2970,7 @@ def context_relationship_text(
     matched_terms: list[str],
     title_overlap: list[str],
     matched_discussion_terms: list[str] | None = None,
+    team_feedback: dict[str, Any] | None = None,
 ) -> str:
     parts = []
     if matched_tags:
@@ -2820,9 +2979,25 @@ def context_relationship_text(
         parts.append(f"shared interests: {', '.join(matched_terms)}")
     if matched_discussion_terms:
         parts.append(f"discussion terms: {', '.join(matched_discussion_terms)}")
+    feedback_text = radar_context_feedback_text(team_feedback or {})
+    if feedback_text:
+        parts.append(f"team feedback: {feedback_text}")
     if title_overlap:
         parts.append(f"title overlap: {', '.join(title_overlap[:5])}")
     return "; ".join(parts) or "related context"
+
+
+def radar_context_feedback_text(feedback: dict[str, Any]) -> str:
+    if not feedback:
+        return ""
+    parts = []
+    if feedback.get("relevance_label"):
+        parts.append(str(feedback["relevance_label"]))
+    if feedback.get("relevance_score"):
+        parts.append(f"score {float(feedback['relevance_score']):g}")
+    if feedback.get("importance"):
+        parts.append(f"importance {int(feedback['importance'])}")
+    return ", ".join(parts)
 
 
 def radar_text_discussion_terms(
@@ -3126,6 +3301,8 @@ def radar_context_summary(
     discussion_terms = set()
     link_count = 0
     comment_context_count = 0
+    team_feedback_count = 0
+    high_priority_feedback_count = 0
     for item in items:
         source = normalize_spaces(item.get("source") or "unknown") or "unknown"
         source_counts[source] = source_counts.get(source, 0) + 1
@@ -3133,6 +3310,15 @@ def radar_context_summary(
             link_count += 1
         if item.get("comment_context"):
             comment_context_count += 1
+        feedback = radar_context_team_feedback(item)
+        if feedback:
+            team_feedback_count += 1
+            if (
+                feedback.get("relevance_label") == "highly_relevant"
+                or float(feedback.get("relevance_score") or 0) >= 80
+                or int(feedback.get("importance") or 0) >= 4
+            ):
+                high_priority_feedback_count += 1
         for term in item.get("interest_terms") or []:
             normalized = normalize_spaces(term)
             if normalized:
@@ -3154,6 +3340,8 @@ def radar_context_summary(
         "discussion_term_count": len(discussion_terms),
         "linked_context_item_with_link_count": link_count,
         "comment_context_count": comment_context_count,
+        "team_feedback_context_count": team_feedback_count,
+        "high_priority_feedback_context_count": high_priority_feedback_count,
     }
 
 
@@ -3171,7 +3359,9 @@ def format_radar_context_summary(summary: dict[str, Any]) -> str:
         f"related_items={int(summary.get('related_item_count') or 0)}; "
         f"interest_terms={int(summary.get('interest_term_count') or 0)}; "
         f"discussion_terms={int(summary.get('discussion_term_count') or 0)}; "
-        f"comment_context={int(summary.get('comment_context_count') or 0)}"
+        f"comment_context={int(summary.get('comment_context_count') or 0)}; "
+        f"team_feedback={int(summary.get('team_feedback_context_count') or 0)}; "
+        f"high_priority_feedback={int(summary.get('high_priority_feedback_context_count') or 0)}"
     )
 
 

@@ -503,7 +503,18 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 links={"arxiv": "https://arxiv.org/abs/2601.00011"},
             )
             baseline["tags"] = ["agentic-security"]
-            import_radar_recommendation(database, recommend_papers([baseline])[0])
+            baseline_import = import_radar_recommendation(database, recommend_papers([baseline])[0])
+            database.update_item_relevance(
+                baseline_import["item_id"],
+                label="highly_relevant",
+                score=94,
+                now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
+            database.update_library_importance(
+                baseline_import["item_id"],
+                importance=5,
+                now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
             candidate = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.00012",
@@ -525,20 +536,100 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             context = result["recommendations"][0]["context"]
             self.assertIn("LLM security", context["matched_interest_terms"])
             self.assertEqual(context["related_items"][0]["title"], "Agentic Security Baseline")
+            self.assertEqual(context["related_items"][0]["team_feedback"]["importance"], 5)
+            self.assertIn(
+                "team feedback: highly_relevant, score 94, importance 5",
+                context["related_items"][0]["relationship"],
+            )
             self.assertIn("Related to existing context", context["relationship_summary"])
             self.assertIn("attention_summary", result["recommendations"][0])
             self.assertIn("agentic security", result["recommendations"][0]["attention_summary"]["why_attention"])
             self.assertIn("Context: Matches active interests", result["report"])
+            self.assertIn("team feedback: highly_relevant, score 94, importance 5", result["report"])
             self.assertIn("Attention:", result["report"])
             stored = database.list_literature_radar_recommendations(result["run_id"])[0]
             self.assertEqual(stored["context"]["related_items"][0]["title"], "Agentic Security Baseline")
+            self.assertEqual(stored["context"]["related_items"][0]["team_feedback"]["relevance_score"], 94)
             self.assertIn("attention_summary", stored)
             stored_run = database.get_literature_radar_run(result["run_id"])
+            self.assertEqual(stored_run["context_summary"]["team_feedback_context_count"], 1)
+            self.assertEqual(stored_run["context_summary"]["high_priority_feedback_context_count"], 1)
             pipeline_by_phase = {record["phase"]: record for record in stored_run["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["context_linking"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["linked_recommendation_count"], 1)
             self.assertEqual(pipeline_by_phase["context_linking"]["metrics"]["related_item_count"], 1)
             self.assertEqual(pipeline_by_phase["attention_summary"]["status"], "succeeded")
+
+    def test_cli_radar_activity_reports_imported_paper_feedback_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00021",
+                title="Feedback Driven Radar Paper",
+                abstract="Memory safety and system security for agentic systems.",
+                links={"arxiv": "https://arxiv.org/abs/2601.00021"},
+            )
+            paper["tags"] = ["memory-safety"]
+            imported = import_radar_recommendation(database, recommend_papers([paper])[0])
+            database.update_item_relevance(
+                imported["item_id"],
+                label="possibly_relevant",
+                score=61,
+                actor="alice",
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+            database.update_library_importance(
+                imported["item_id"],
+                importance=4,
+                actor="alice",
+                now=datetime(2026, 7, 1, 10, 2, tzinfo=timezone.utc),
+            )
+
+            activity_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_stdout):
+                activity_code = research_cli.main(
+                    [
+                        "radar-activity",
+                        "--db-path",
+                        str(db_path),
+                        "--days",
+                        "7",
+                        "--limit",
+                        "5",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(activity_code, 0)
+            activity = json.loads(activity_stdout.getvalue())
+            labels = [event["action_label"] for event in activity["activity"]]
+            self.assertIn("Updated relevance", labels)
+            self.assertIn("Updated importance", labels)
+            reasons = [event["reason"] for event in activity["activity"]]
+            self.assertIn("Relevance: highly_relevant -> possibly_relevant (score 100 -> 61)", reasons)
+            self.assertIn("Importance: 0 -> 4", reasons)
+
+            activity_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_text_stdout):
+                activity_text_code = research_cli.main(["radar-activity", "--db-path", str(db_path)])
+            self.assertEqual(activity_text_code, 0)
+            activity_text = activity_text_stdout.getvalue()
+            self.assertIn("Updated relevance: Feedback Driven Radar Paper", activity_text)
+            self.assertIn(
+                "reason=Relevance: highly_relevant -> possibly_relevant (score 100 -> 61)",
+                activity_text,
+            )
+            self.assertIn("Updated importance: Feedback Driven Radar Paper", activity_text)
+            self.assertIn("reason=Importance: 0 -> 4", activity_text)
+
+            brief = build_team_literature_radar_brief_payload(
+                database,
+                days=7,
+                now=datetime(2026, 7, 1, 10, 3, tzinfo=timezone.utc),
+            )
+            self.assertIn("Updated relevance: Feedback Driven Radar Paper", brief["brief"])
+            self.assertIn("Updated importance: Feedback Driven Radar Paper", brief["brief"])
 
     def test_run_team_literature_radar_links_recommendations_to_watched_radar_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1903,7 +1994,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
         self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
+        self.assertEqual(payload["oa_enrichment"]["status"], "ready")
+        self.assertTrue(payload["oa_enrichment"]["configured"])
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 5)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["missing_count"], 13)
         self.assertIn(
             {"keyword": "agentic security", "weight": 90},
             payload["scoring_profile_summary"]["top_interests"],
@@ -1916,8 +2011,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn("Scoring: Team Interests", text)
         self.assertIn("agentic security=90", text)
         self.assertIn("Venue profiles:", text)
-        self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +1 more", text)
+        self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +1 more (top venues 5/18)", text)
         self.assertIn("OpenReview: ICLR", text)
+        self.assertIn("OA enrichment: provider=Unpaywall status=ready configured=yes", text)
         self.assertIn("Source policy:", text)
         self.assertIn("Source readiness:", text)
         self.assertIn("status=blocked", text)

@@ -641,7 +641,7 @@ def team_literature_radar_activity_record(event: dict[str, Any]) -> dict[str, An
         or team_literature_radar_activity_title(before)
         or str(event.get("object_id") or "Radar item"),
         "imported_item_id": imported_item_id,
-        "reason": team_literature_radar_activity_detail(after),
+        "reason": team_literature_radar_activity_detail(after, before=before, action=action),
     }
 
 
@@ -658,13 +658,32 @@ def team_literature_radar_activity_label(action: str, status: str) -> str:
         return "Added to library"
     if action == "literature_radar_paper_commented":
         return "Commented"
+    if action == "literature_radar_paper_relevance_updated":
+        return "Updated relevance"
+    if action == "literature_radar_paper_importance_updated":
+        return "Updated importance"
     return action.replace("_", " ").title()
 
 
-def team_literature_radar_activity_detail(record: dict[str, Any]) -> str:
+def team_literature_radar_activity_detail(
+    record: dict[str, Any],
+    *,
+    before: dict[str, Any] | None = None,
+    action: str = "",
+) -> str:
     comment = record.get("comment") if isinstance(record.get("comment"), dict) else {}
     if comment.get("content"):
         return str(comment.get("content") or "").strip()
+    if action == "literature_radar_paper_relevance_updated":
+        prior = before or {}
+        return (
+            "Relevance: "
+            f"{prior.get('relevance_label') or 'unknown'} -> {record.get('relevance_label') or 'unknown'} "
+            f"(score {float(prior.get('relevance_score') or 0):g} -> {float(record.get('relevance_score') or 0):g})"
+        )
+    if action == "literature_radar_paper_importance_updated":
+        prior = before or {}
+        return f"Importance: {int(prior.get('importance') or 0)} -> {int(record.get('importance') or 0)}"
     return str(record.get("review_reason") or "").strip()
 
 
@@ -812,6 +831,7 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
 def team_radar_library_context_item(paper: dict[str, Any]) -> dict[str, Any]:
     item = paper.get("item") or {}
     screening = paper.get("screening") or {}
+    team_record = paper.get("team_record") or {}
     radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
     comment_context = team_radar_comment_context_text(paper.get("comments") or [])
     abstract_parts = [str(item.get("abstract") or "").strip()]
@@ -828,6 +848,12 @@ def team_radar_library_context_item(paper: dict[str, Any]) -> dict[str, Any]:
         "interest_terms": screening.get("matched_terms") or screening.get("matched_positive_keywords") or [],
         "discussion_terms": team_radar_comment_discussion_terms(paper.get("comments") or []),
         "comment_context": comment_context,
+        "team_feedback": {
+            "relevance_label": screening.get("label") or "",
+            "relevance_score": screening.get("score") or 0,
+            "importance": paper.get("importance") or 0,
+            "review_status": team_record.get("review_status") or "",
+        },
         "link": paper.get("link") or item.get("url") or "",
         "source": "team-library",
     }
