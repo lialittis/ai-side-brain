@@ -511,6 +511,11 @@ def print_radar_papers(
             f"latest={record.get('latest_seen_at')} | sources={', '.join(record.get('source_ids') or [])} | "
             f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
+        review_reason = str(record.get("review_reason") or "").strip()
+        if not review_reason and isinstance(record.get("review"), dict):
+            review_reason = str(record["review"].get("reason") or "").strip()
+        if review_reason:
+            print(f"  Review reason: {review_reason}")
         for line in radar_latest_signal_lines(latest):
             print(f"  {line}")
 

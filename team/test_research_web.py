@@ -44,6 +44,7 @@ from team.research_web import (
     update_paper_tags,
     render_literature_radar_page,
     render_literature_radar_brief_page,
+    render_literature_radar_queue_page,
     render_literature_radar_papers_page,
 )
 
@@ -60,6 +61,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Submit To Library", submit)
         self.assertIn("Interests", latest)
         self.assertIn("Radar", latest)
+        self.assertIn('href="/radar/queue?limit=20">Queue</a>', latest)
         self.assertNotIn("Radar Queue", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
@@ -222,6 +224,13 @@ class TeamResearchWebTest(unittest.TestCase):
                     queue_content_type = response.headers.get("Content-Type")
                     queue_status = response.status
                 with urlopen(
+                    f"http://127.0.0.1:{port}/radar/queue?limit=1",
+                    timeout=5,
+                ) as response:
+                    queue_html = response.read().decode("utf-8")
+                    queue_html_content_type = response.headers.get("Content-Type")
+                    queue_html_status = response.status
+                with urlopen(
                     f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5&freshness_max_age_hours=12",
                     timeout=5,
                 ) as response:
@@ -260,7 +269,19 @@ class TeamResearchWebTest(unittest.TestCase):
                 "Signal: A queued paper exposed through the JSON route.",
                 queue_payload["papers"][0]["signal_lines"],
             )
+            self.assertEqual(queue_payload["links"]["html"], "/radar/queue?limit=1")
+            self.assertEqual(queue_payload["links"]["json"], "/radar/queue.json?limit=1")
             self.assertEqual(queue_payload["links"]["radar_papers"], "/radar/papers?limit=1")
+            self.assertEqual(queue_html_status, 200)
+            self.assertEqual(queue_html_content_type, "text/html; charset=utf-8")
+            self.assertIn("Radar Queue", queue_html)
+            self.assertIn("Daily Review", queue_html)
+            self.assertIn("Route Verified Radar Queue Paper", queue_html)
+            self.assertIn('href="/radar/queue.json?limit=1">Queue JSON</a>', queue_html)
+            self.assertIn('class="nav-item active" href="/radar/queue?limit=20">Queue</a>', queue_html)
+            self.assertIn('name="reason" placeholder="Why watch this?"', queue_html)
+            self.assertIn('name="reason" placeholder="Why dismiss this?"', queue_html)
+            self.assertIn('name="return_to" value="queue"', queue_html)
             self.assertEqual(brief_status, 200)
             self.assertEqual(brief_content_type, "application/json")
             self.assertTrue(brief_payload["success"])
@@ -285,6 +306,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertTrue(settings_payload["success"])
             self.assertEqual(settings_payload["links"]["html"], "/radar")
             self.assertEqual(settings_payload["supported_source_ids"], radar_supported_source_ids())
+            self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
+            self.assertEqual(settings_payload["trend_signal_options"][0]["collector_status"], "not_implemented")
             self.assertEqual(settings_payload["source_readiness"]["status"], "ready_with_warnings")
             self.assertEqual(settings_payload["settings"]["sources"], list(settings_payload["source_policy"]["authoritative_source_ids"]))
             self.assertEqual(brief_payload["source_policy"]["authoritative_count"], 1)
@@ -404,12 +427,14 @@ class TeamResearchWebTest(unittest.TestCase):
             )
 
             html = render_literature_radar_page(database)
+            queue_html = render_literature_radar_queue_page(database, limit=20)
 
             self.assertIn("Literature Radar", html)
             self.assertIn("Scheduled recommendations", html)
             self.assertIn('action="/radar/run"', html)
             self.assertIn("Run Radar", html)
             self.assertIn("/radar/brief?days=7&amp;limit=20", html)
+            self.assertIn("/radar/queue?limit=20", html)
             self.assertIn("Weekly Brief", html)
             self.assertIn("/radar/papers?limit=50", html)
             self.assertIn("Paper History", html)
@@ -444,6 +469,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Baseline Paper", html)
             self.assertIn("shared interests: memory safety", html)
             self.assertIn("local-radar-summary-v0.1", html)
+            self.assertIn("Daily Review", queue_html)
+            self.assertIn("Memory Safety for Agentic Security Workflows", queue_html)
+            self.assertIn("Worth team attention.", queue_html)
+            self.assertIn('name="return_to" value="queue"', queue_html)
             self.assertIn("Status: partial", html)
             self.assertIn("Source coverage", html)
             self.assertIn("Source readiness", html)
@@ -746,6 +775,8 @@ class TeamResearchWebTest(unittest.TestCase):
 
         self.assertTrue(payload["success"])
         self.assertEqual(payload["links"]["html"], "/radar")
+        self.assertEqual(payload["links"]["queue_html"], "/radar/queue?limit=20")
+        self.assertEqual(payload["links"]["queue_json"], "/radar/queue.json?limit=20")
         self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openalex"])
         self.assertEqual(payload["collection_config"]["seed_paper_ids"], ["seed-1"])
         self.assertTrue(payload["collection_config"]["openalex_mailto_configured"])
@@ -765,6 +796,9 @@ class TeamResearchWebTest(unittest.TestCase):
         )
         self.assertEqual(payload["venue_profile_summary"]["openreview"]["profiles"][0]["name"], "ICLR")
         self.assertEqual(payload["supported_source_ids"], radar_supported_source_ids())
+        self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])
+        self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
+        self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
         self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
@@ -992,6 +1026,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     "dedupe_key": paper["dedupe_key"],
                     "status": "watch",
                     "actor": "alice",
+                    "reason": "Track this for allocator hardening.",
                 },
             )
 
@@ -999,13 +1034,18 @@ class TeamResearchWebTest(unittest.TestCase):
             stored_paper = database.get_literature_radar_paper(paper["dedupe_key"])
             self.assertEqual(stored_paper["review_status"], "watch")
             self.assertEqual(stored_paper["reviewed_by"], "alice")
+            self.assertEqual(stored_paper["review_reason"], "Track this for allocator hardening.")
             stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
             self.assertEqual(stored_recommendation["review"]["status"], "watch")
+            self.assertEqual(stored_recommendation["review"]["reason"], "Track this for allocator hardening.")
             reviewed_html = render_literature_radar_page(database, run_id=run["id"])
             self.assertIn(">Watch</span>", reviewed_html)
             self.assertIn(">Clear</button>", reviewed_html)
             history_html = render_literature_radar_papers_page(database)
             self.assertIn(">Watch</span>", history_html)
+            self.assertIn("<strong>Review note:</strong> Track this for allocator hardening.", history_html)
+            queue_html = render_literature_radar_queue_page(database, limit=20)
+            self.assertIn("<strong>Review note:</strong> Track this for allocator hardening.", queue_html)
             other_paper = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.00037",
@@ -1145,15 +1185,18 @@ class TeamResearchWebTest(unittest.TestCase):
                 paper["dedupe_key"],
                 status="dismissed",
                 actor="alice",
+                reason="Out of current system security scope.",
             )
 
             latest_html = render_latest_papers_page(database)
+            dismissed_history_html = render_literature_radar_papers_page(database, review_status="dismissed")
 
             self.assertIn("Radar Queue", latest_html)
             self.assertIn("0 unreviewed, 0 watch, 1 dismissed from 1 stored Radar paper.", latest_html)
             self.assertIn('href="/radar/papers?limit=50&amp;review=dismissed">Dismissed 1</a>', latest_html)
             self.assertNotIn("Priority Candidates", latest_html)
             self.assertNotIn("Dismissed Radar History Paper", latest_html)
+            self.assertIn("<strong>Review note:</strong> Out of current system security scope.", dismissed_history_html)
 
     def test_latest_radar_queue_orders_priority_candidates_by_score(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

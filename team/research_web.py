@@ -255,6 +255,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
         [
             f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
             f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar</a>',
+            f'<a class="nav-item {"active" if active == "radar_queue" else ""}" href="/radar/queue?limit=20">Queue</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Interests</a>',
         ]
@@ -625,6 +626,15 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .radar-context-title {{ font-weight: 750; }}
     .radar-context-items {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .radar-review-note {{
+      color: #344054;
+      font-size: 13px;
+      line-height: 1.35;
+      background: #fff8eb;
+      border-left: 3px solid #f3b84d;
+      padding: 6px 8px;
+      border-radius: 4px;
+    }}
     .radar-links {{
       display: flex;
       flex-wrap: wrap;
@@ -656,6 +666,18 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .pill.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
     .inline-form {{ display: inline-flex; gap: 6px; align-items: center; }}
+    .mini-input {{
+      width: 18ch;
+      min-width: 12ch;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 5px 7px;
+      font-size: 12px;
+      color: var(--text);
+      background: #fff;
+    }}
+    .mini-input:focus {{ outline: 2px solid #bcd4ff; outline-offset: 1px; }}
     .tag-editor {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
     .tag-chip-form, .tag-add-form {{
       display: inline-flex;
@@ -808,6 +830,13 @@ def radar_papers_path(*, notice: str = "", review_filter: str = "all") -> str:
     return "/radar/papers" + (f"?{urlencode(params)}" if params else "")
 
 
+def radar_queue_path(*, notice: str = "", limit: int = 20) -> str:
+    params = {"limit": max(1, int(limit))}
+    if notice:
+        params["notice"] = notice
+    return f"/radar/queue?{urlencode(params)}"
+
+
 def render_literature_radar_page(
     database: TeamResearchDatabase,
     *,
@@ -865,6 +894,45 @@ def render_literature_radar_brief_page(
     </section>
     """
     return page("Radar Brief", body, active="radar")
+
+
+def render_literature_radar_queue_page(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 20,
+    notice: str = "",
+) -> str:
+    selected_limit = max(1, int(limit))
+    payload = build_team_literature_radar_queue_payload(database, limit=selected_limit)
+    records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
+    review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    selected_review = str(payload.get("review") or "all")
+    latest_runs = database.list_literature_radar_runs(limit=1)
+    latest_run = latest_runs[0] if latest_runs else None
+    access_summary = payload.get("access_summary") if isinstance(payload.get("access_summary"), dict) else {}
+    body = f"""
+    {render_topline("Radar Queue", "Daily review queue for stored Literature Radar candidates.", "/radar", "Run Radar")}
+    {render_notice(notice)}
+    <section class="panel radar-queue" aria-label="Literature Radar daily review queue">
+      <div class="radar-queue-head">
+        <div>
+          <h2>Daily Review</h2>
+          <div class="muted">{html_escape(radar_queue_status_line(review_counts))}</div>
+        </div>
+        <div class="radar-queue-actions">
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
+          <a class="button" href="/radar/papers?limit=50">Paper History</a>
+          <a class="button" href="{html_escape(payload['links']['json'])}">Queue JSON</a>
+        </div>
+      </div>
+      {render_latest_radar_run_health(latest_run)}
+      {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=50)}
+      {render_radar_queue_access_summary_from_payload(access_summary)}
+      {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="queue")}
+      {render_empty_radar_queue(records, review_counts)}
+    </section>
+    """
+    return page("Radar Queue", body, active="radar_queue")
 
 
 def render_literature_radar_papers_page(
@@ -1013,6 +1081,7 @@ def build_literature_radar_settings_payload(
         source_preset_label=radar_source_preset_label(settings),
         links={
             "html": "/radar",
+            "queue_html": "/radar/queue?limit=20",
             "queue_json": "/radar/queue.json?limit=20",
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
@@ -1097,6 +1166,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     review_counts = database.literature_radar_paper_review_counts()
     return f"""
     <div class="radar-brief-link">
+      <a class="button" href="/radar/queue?limit=20">Daily Queue</a>
       <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
@@ -1402,6 +1472,7 @@ def render_radar_paper_history_item(record: dict[str, Any], *, review_filter: st
           {render_radar_review_pill(review)}
           {render_pdf_access_pill(record.get("pdf_access") or {})}
         </div>
+        {render_radar_review_reason(review)}
         {render_radar_paper_latest_signal(record.get("latest_recommendation"))}
         <div class="radar-links">{links}{import_control}{render_radar_review_controls(record.get("dedupe_key") or "", return_to="papers", review=review, review_filter=review_filter)}</div>
       </div>
@@ -2081,6 +2152,13 @@ def render_radar_review_pill(review: dict[str, Any]) -> str:
     return '<span class="pill">Unreviewed</span>'
 
 
+def render_radar_review_reason(review: dict[str, Any]) -> str:
+    reason = str(review.get("reason") or "").strip()
+    if not reason:
+        return ""
+    return f'<div class="radar-review-note"><strong>Review note:</strong> {html_escape(reason)}</div>'
+
+
 def render_radar_review_controls(
     dedupe_key: str,
     *,
@@ -2088,6 +2166,7 @@ def render_radar_review_controls(
     return_to: str = "run",
     review: dict[str, Any],
     review_filter: str = "all",
+    include_watch_reason: bool = False,
 ) -> str:
     if not dedupe_key:
         return ""
@@ -2099,6 +2178,7 @@ def render_radar_review_controls(
         run_id,
         return_to,
         review_filter,
+        include_reason=include_watch_reason,
     )
     dismiss_button = (
         ""
@@ -2110,6 +2190,7 @@ def render_radar_review_controls(
             run_id,
             return_to,
             review_filter,
+            include_reason=include_watch_reason,
         )
     )
     clear_button = (
@@ -2127,7 +2208,14 @@ def render_radar_review_button(
     run_id: str,
     return_to: str,
     review_filter: str = "all",
+    include_reason: bool = False,
 ) -> str:
+    reason_placeholder = "Why dismiss this?" if status == "dismissed" else "Why watch this?"
+    reason_input = (
+        f'<input class="mini-input" name="reason" placeholder="{html_escape(reason_placeholder)}">'
+        if include_reason
+        else ""
+    )
     return f"""
     <form class="inline-form" method="post" action="/radar/review">
       <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
@@ -2135,6 +2223,7 @@ def render_radar_review_button(
       <input type="hidden" name="run_id" value="{html_escape(run_id)}">
       <input type="hidden" name="return_to" value="{html_escape(return_to)}">
       <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
+      {reason_input}
       <button class="mini-button" type="submit">{html_escape(label)}</button>
     </form>
     """
@@ -2319,6 +2408,7 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
           <div class="muted">{html_escape(status_line)}</div>
         </div>
         <div class="radar-queue-actions">
+          <a class="button" href="/radar/queue?limit=20">Daily Queue</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
           <a class="button" href="/radar">Run Radar</a>
           <a class="button" href="/radar/queue.json?limit=20">JSON</a>
@@ -2327,9 +2417,20 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
       {render_radar_queue_access_summary(priority_records)}
-      {render_latest_radar_queue_preview(priority_records, review_filter=selected_review)}
+      {render_latest_radar_queue_preview(priority_records, review_filter=selected_review, return_to="latest")}
     </section>
     """
+
+
+def radar_queue_status_line(counts: dict[str, Any]) -> str:
+    total = int(counts.get("all") or 0)
+    unreviewed = int(counts.get("unreviewed") or 0)
+    watch = int(counts.get("watch") or 0)
+    dismissed = int(counts.get("dismissed") or 0)
+    return (
+        f"{unreviewed} unreviewed, {watch} watch, {dismissed} dismissed from {total} stored Radar paper"
+        f"{'' if total == 1 else 's'}."
+    )
 
 
 def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
@@ -2429,10 +2530,18 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
     """
 
 
-def render_latest_radar_queue_preview(records: list[dict[str, Any]], *, review_filter: str) -> str:
+def render_latest_radar_queue_preview(
+    records: list[dict[str, Any]],
+    *,
+    review_filter: str,
+    return_to: str = "latest",
+) -> str:
     if not records:
         return ""
-    items = "".join(render_latest_radar_queue_item(record, review_filter=review_filter) for record in records)
+    items = "".join(
+        render_latest_radar_queue_item(record, review_filter=review_filter, return_to=return_to)
+        for record in records
+    )
     return f"""
     <div class="radar-queue-preview">
       <h3>Priority Candidates</h3>
@@ -2443,6 +2552,10 @@ def render_latest_radar_queue_preview(records: list[dict[str, Any]], *, review_f
 
 def render_radar_queue_access_summary(records: list[dict[str, Any]]) -> str:
     summary = radar_pdf_access_summary(records)
+    return render_radar_queue_access_summary_from_payload(summary)
+
+
+def render_radar_queue_access_summary_from_payload(summary: dict[str, Any]) -> str:
     if int(summary.get("total") or 0) == 0:
         return ""
     kind_text = radar_access_kind_summary_text(summary.get("kinds") if isinstance(summary.get("kinds"), dict) else {})
@@ -2460,6 +2573,15 @@ def render_radar_queue_access_summary(records: list[dict[str, Any]]) -> str:
     """
 
 
+def render_empty_radar_queue(records: list[dict[str, Any]], review_counts: dict[str, Any]) -> str:
+    if records:
+        return ""
+    total = int(review_counts.get("all") or 0)
+    if total:
+        return '<p class="empty">No active unimported Radar candidates in the current priority queue.</p>'
+    return '<p class="empty">No stored Literature Radar papers yet. Run Radar or wait for the scheduled collector.</p>'
+
+
 def radar_access_kind_summary_text(kinds: dict[str, Any]) -> str:
     if not kinds:
         return ""
@@ -2470,7 +2592,12 @@ def radar_access_kind_summary_text(kinds: dict[str, Any]) -> str:
     )
 
 
-def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str) -> str:
+def render_latest_radar_queue_item(
+    record: dict[str, Any],
+    *,
+    review_filter: str,
+    return_to: str = "latest",
+) -> str:
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
     latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
     pdf_access = record.get("pdf_access") if isinstance(record.get("pdf_access"), dict) else {}
@@ -2483,6 +2610,13 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids[:4])
     if len(source_ids) > 4:
         source_tags += f'<span class="pill">+{len(source_ids) - 4} sources</span>'
+    review_controls = render_radar_review_controls(
+        record.get("dedupe_key") or "",
+        return_to=return_to,
+        review=review,
+        review_filter=review_filter,
+        include_watch_reason=return_to == "queue",
+    )
     return f"""
     <article class="radar-queue-item">
       <div class="radar-queue-title">{html_escape(record.get("title") or "Untitled radar paper")}</div>
@@ -2498,12 +2632,13 @@ def render_latest_radar_queue_item(record: dict[str, Any], *, review_filter: str
         {pdf_access_html}
         {source_tags}
       </div>
+      {render_radar_review_reason(review)}
       {render_radar_attention_summary(latest)}
       {render_radar_signal_lines(latest, include_attention=not bool(latest.get("attention_summary")))}
       <div class="radar-links">
         {render_radar_links(paper)}
-        {render_radar_paper_import_control(record, review_filter=review_filter, return_to="latest")}
-        {render_radar_review_controls(record.get("dedupe_key") or "", return_to="latest", review=review, review_filter=review_filter)}
+        {render_radar_paper_import_control(record, review_filter=review_filter, return_to=return_to)}
+        {review_controls}
       </div>
     </article>
     """
@@ -3497,6 +3632,14 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
+            elif parsed.path == "/radar/queue":
+                self.respond_html(
+                    render_literature_radar_queue_page(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        notice=notice,
+                    )
+                )
             elif parsed.path == "/radar/queue.json":
                 self.respond_json(
                     build_team_literature_radar_queue_payload(
@@ -3574,6 +3717,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 notice = f"Added {item_id} to the library."
                 if fields.get("return_to") == "latest":
                     self.redirect(f"/?notice={quote(notice)}")
+                elif fields.get("return_to") == "queue":
+                    self.redirect(radar_queue_path(notice=notice))
                 else:
                     self.redirect(
                         radar_papers_path(
@@ -3586,6 +3731,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 status = result["status"]
                 if result.get("return_to") == "latest":
                     self.redirect(f"/?notice={quote(f'Marked radar paper as {status}.')}")
+                elif result.get("return_to") == "queue":
+                    self.redirect(radar_queue_path(notice=f"Marked radar paper as {status}."))
                 elif result.get("return_to") == "papers":
                     self.redirect(
                         radar_papers_path(

@@ -57,6 +57,7 @@ python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py queue
 python scripts/personal_literature_radar.py papers
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch
+python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch --reason "track for agent security notes"
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status dismissed
 python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Logs/personal-literature-radar-weekly.md
 python scripts/personal_literature_radar.py brief --days 7 --json
@@ -64,9 +65,10 @@ python scripts/personal_literature_radar.py brief --days 7 --json
 
 `settings` is a read-only preflight command. It prints selected sources, active
 topic-profile scoring summary, expanded venue profile summary, source policy,
-and source readiness without collecting metadata, downloading PDFs, or calling
-AI. Use it before enabling a cron/systemd job or after changing source,
-topic-profile, seed, author, venue, or contact-email environment variables.
+source readiness, and optional trend-signal metadata without collecting
+metadata, downloading PDFs, or calling AI. Use it before enabling a cron/systemd
+job or after changing source, topic-profile, seed, author, venue, or
+contact-email environment variables.
 
 For periodic personal reports, run the one-shot script from cron or a systemd
 timer:
@@ -163,9 +165,14 @@ queue snapshots distinguish misconfiguration, an empty healthy queue, and a
 collector problem. The latest-run JSON also includes `source_policy` for the
 authoritative/trend-signal source mix and `health_action`, a compact
 machine-readable next step such as `review_queue`, `configure_blocked_sources`,
-or `inspect_source_errors`.
+or `inspect_source_errors`. Text queue output also shows the stored review
+reason when a watched or dismissed paper has one.
 Use `papers --review unreviewed`, `papers --review watch`, or
 `papers --review dismissed` to inspect the local review queues with counts.
+When marking a paper as `watch`, add `--reason` for lightweight intent capture.
+That reason, the stored attention summary, and paper metadata become local
+context for later Personal Radar runs, so a watched candidate can influence
+future recommendations without writing it into long-term memory.
 That paper history stores the PDF-access decision metadata for each deduplicated
 paper without downloading or redistributing PDFs. Recommendation reports also
 include the access kind, source URL, access timestamp, OA status, license, local

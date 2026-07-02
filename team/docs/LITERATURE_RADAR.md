@@ -38,6 +38,7 @@ The web UI exposes stored radar runs at:
 
 ```text
 http://127.0.0.1:8790/radar
+http://127.0.0.1:8790/radar/queue
 http://127.0.0.1:8790/radar/brief?days=7
 http://127.0.0.1:8790/radar/brief.json?days=7
 http://127.0.0.1:8790/radar/papers
@@ -51,14 +52,19 @@ The page is review-first:
 2. the Radar page lists recent runs, source/query context, ranked
    recommendations, new/seen-before labels, summaries when available, relevance
    reasons, source tags, legal PDF/OA status, and paper links;
-3. the Radar Papers page exposes deduplicated collected-paper history, including
+3. the Radar Queue page is the daily team-member review surface. It reads
+   stored Radar state, shows the current priority candidates with the same
+   attention summary and signal lines as Latest Papers, and lets a user watch
+   or dismiss with an optional note, or add a paper to the library without
+   starting collectors or AI;
+4. the Radar Papers page exposes deduplicated collected-paper history, including
    papers that have not been imported, and can promote a stored paper into the
    Team library;
-4. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
+5. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
    `dismissed`, uses the review counts to see queue size, and marks Radar
    papers without importing them into the main library;
-5. a team member clicks `Add to Library` only for papers worth tracking;
-6. imported papers appear in Latest Papers with the normal tag, relevance,
+6. a team member clicks `Add to Library` only for papers worth tracking;
+7. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls, plus a compact
    Radar insight block with the stored summary, relevance reason, matched
    interests, and relationship to existing team context.
@@ -67,6 +73,11 @@ Recent comments on imported library papers are folded back into the Radar
 context matcher as local discussion terms. This lets later Radar runs explain
 that a new paper is related to what the team actually discussed, not only to
 static tags or abstracts.
+Watched Radar papers are also folded back into the context matcher before they
+are imported. Their stored attention summary and any review note from the Queue
+page or `radar-review --reason` become local context text and discussion terms
+for future runs, so a lightweight `Watch` decision can steer later
+recommendations without polluting the main library.
 
 This keeps automatic collection broad without filling the team library with
 every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
@@ -88,8 +99,12 @@ with the current priority candidates. Each candidate shows the same signal
 lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
 answer to "why should the team read this?" consistent across ad hoc runs, daily
 queue review, and weekly briefs. The queue also shows paper links, PDF
-policy/access-kind status, the stored recommended action, plus watch, dismiss,
-and add-to-library actions that return to the daily page.
+policy/access-kind status, stored review notes, the stored recommended action,
+plus watch, dismiss, and add-to-library actions that return to the daily page.
+For focused daily review, `/radar/queue?limit=20` shows the same active queue as
+a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
+Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
+machine-readable contract for scripts and dashboards.
 If the latest scheduled run produced no stored papers but did fail or complete,
 the same panel still shows latest-run health, counts, and source-error status so
 an empty queue is not confused with a healthy run that simply found nothing.
@@ -143,7 +158,12 @@ includes the current Team Interest scoring profile and a compact
 will drive relevance before a scheduled run spends API calls. When DBLP,
 OpenAlex, or OpenReview venue profile selectors are configured, the payload also
 includes `venue_profile_summary` with the expanded top-conference profiles that
-will be queried.
+will be queried. Optional trend-signal sources such as Hugging Face Papers are
+reported in `trend_signal_options` as read-only, not-yet-runnable signals rather
+than authoritative bibliographic collectors. The `links` block includes `/radar`, `/radar/queue?limit=20`,
+`/radar/queue.json?limit=20`, and `/radar/brief.json?days=7&limit=20` so local
+dashboards and operators can jump from readiness checks to the daily review
+surface.
 
 ## CLI Runner
 

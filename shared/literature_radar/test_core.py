@@ -59,6 +59,8 @@ from shared.literature_radar import (
     radar_source_option_metadata,
     radar_source_options,
     radar_supported_source_ids,
+    radar_text_discussion_terms,
+    radar_trend_signal_options,
     openreview_venue_profile_selection_summary,
     recommend_papers,
     score_paper_against_profile,
@@ -68,6 +70,23 @@ from shared.literature_radar import (
 
 
 class SharedLiteratureRadarCoreTest(unittest.TestCase):
+    def test_text_discussion_terms_extracts_stable_context_tokens(self) -> None:
+        terms = radar_text_discussion_terms(
+            [
+                "Watch reason: Track CHERI capability isolation for agentic runtime security.",
+                "Radar summary: capability isolation and memory safety.",
+            ],
+            extra_stop_words={"runtime"},
+        )
+
+        self.assertIn("cheri", terms)
+        self.assertIn("capability", terms)
+        self.assertIn("isolation", terms)
+        self.assertNotIn("watch", terms)
+        self.assertNotIn("radar", terms)
+        self.assertNotIn("runtime", terms)
+        self.assertEqual(terms.count("capability"), 1)
+
     def test_source_registry_prefers_api_and_mvp_sources(self) -> None:
         sources = {source["id"]: source for source in source_registry()}
 
@@ -114,6 +133,14 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual([option["id"] for option in options if option["selected"]], ["openalex"])
         self.assertEqual(options[0]["label"], "arXiv")
         self.assertIn("policy", options[0])
+        trend_options = radar_trend_signal_options(["hugging_face_papers"])
+        self.assertIn("hugging_face_papers", [option["id"] for option in trend_options])
+        self.assertEqual(
+            [option["id"] for option in trend_options if option["selected"]],
+            ["hugging_face_papers"],
+        )
+        self.assertEqual(trend_options[0]["collector_status"], "not_implemented")
+        self.assertFalse(trend_options[0]["policy"]["authoritative_metadata"])
         self.assertEqual(
             RADAR_PIPELINE_PHASES,
             [
@@ -176,6 +203,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(payload["kind"], "test_radar_settings")
         self.assertEqual(payload["source_labels"], ["Semantic Scholar Seeds", "OpenAlex"])
+        self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])
+        self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
+        self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
         self.assertEqual(payload["source_readiness"]["status"], "ready_with_warnings")
         self.assertEqual(payload["source_readiness"]["warning_source_ids"], ["semantic_scholar_recommendations"])

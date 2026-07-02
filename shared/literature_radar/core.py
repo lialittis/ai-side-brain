@@ -719,6 +719,21 @@ def radar_source_options(selected_sources: list[str] | tuple[str, ...] | None = 
     ]
 
 
+def radar_trend_signal_options(selected_sources: list[str] | tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    selected_source_ids = set(unique_source_ids(list(selected_sources or [])))
+    return [
+        {
+            "id": str(source["id"]),
+            "label": str(source["name"]),
+            "selected": str(source["id"]) in selected_source_ids,
+            "metadata": radar_source_option_metadata(str(source["id"])),
+            "policy": radar_source_policy_record(str(source["id"])),
+            "collector_status": "not_implemented",
+        }
+        for source in trend_signal_source_registry()
+    ]
+
+
 def build_radar_preflight_payload(
     *,
     kind: str,
@@ -740,7 +755,9 @@ def build_radar_preflight_payload(
         "source_preset_label": source_preset_label or str(settings.get("source_preset") or "Custom"),
         "source_labels": [radar_source_label(source_id) for source_id in selected_sources],
         "supported_source_ids": radar_supported_source_ids(),
+        "supported_trend_signal_ids": [str(source["id"]) for source in trend_signal_source_registry()],
         "source_options": radar_source_options(selected_sources),
+        "trend_signal_options": radar_trend_signal_options(selected_sources),
         "collection_config": selected_config,
         "source_policy": radar_source_policy_summary(selected_sources),
         "source_readiness": radar_source_readiness_summary(selected_sources, selected_config),
@@ -2476,6 +2493,47 @@ def context_relationship_text(
     if title_overlap:
         parts.append(f"title overlap: {', '.join(title_overlap[:5])}")
     return "; ".join(parts) or "related context"
+
+
+def radar_text_discussion_terms(
+    texts: list[str],
+    *,
+    limit: int = 12,
+    extra_stop_words: set[str] | None = None,
+) -> list[str]:
+    stop_words = {
+        "about",
+        "after",
+        "also",
+        "because",
+        "from",
+        "have",
+        "paper",
+        "radar",
+        "reason",
+        "should",
+        "summary",
+        "that",
+        "their",
+        "there",
+        "this",
+        "watch",
+        "with",
+    }
+    if extra_stop_words:
+        stop_words.update(str(word).strip().lower() for word in extra_stop_words if str(word).strip())
+    terms = []
+    seen = set()
+    for text in texts:
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{3,}", str(text or "")):
+            normalized = token.strip(".,;:!?()[]{}").lower()
+            if normalized in stop_words or normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+            if len(terms) >= limit:
+                return terms
+    return terms
 
 
 def normalized_tag_set(tags: list[Any]) -> set[str]:

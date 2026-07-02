@@ -32,8 +32,10 @@ Shared source labels, option metadata, and selected-source option records are
 derived from the same registry, so Personal CLI, Team CLI, and Team web preflight
 surfaces describe sources consistently.
 The shared preflight payload builder combines selected settings, source policy,
-source readiness, supported source IDs, and source option records into one
-read-only contract that product surfaces can expose before running collectors.
+source readiness, supported source IDs, source option records, and read-only
+trend-signal options into one contract that product surfaces can expose before
+running collectors. Trend signals are listed separately from runnable collectors
+until their collectors are implemented.
 Adapters can attach scoring-profile and venue-profile summaries so operators
 can verify relevance and top-conference coverage before scheduled API calls.
 
@@ -95,6 +97,9 @@ interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.
 Personal Side-Brain can load an editable JSON topic profile from `indexes/`
 while still keeping accepted-paper writes manual.
+Both adapters can reuse lightweight review intent, such as watched-paper notes
+or reasons, as local context for later runs without making the shared core own
+product storage or review UI.
 
 ## Primary Sources
 
@@ -183,8 +188,9 @@ Current implemented collectors:
 - `build_radar_preflight_payload(...)` and
   `radar_scoring_profile_summary(...)` provide a shared read-only settings
   contract for Personal and Team scheduled runs. The payload includes selected
-  sources, source policy/readiness, non-secret collection config, and the active
-  relevance scoring profile summary without starting collectors or calling AI.
+  sources, source policy/readiness, non-secret collection config, trend-signal
+  option metadata, and the active relevance scoring profile summary without
+  starting collectors or calling AI.
 - `radar_run_health_action(...)` turns latest-run status, source readiness,
   source coverage, errors, and freshness into one machine-readable next step for
   daily queue JSON, CLI output, and Team web health chips.

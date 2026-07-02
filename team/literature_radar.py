@@ -60,6 +60,7 @@ from shared.literature_radar import (
     radar_source_readiness_summary,
     radar_source_skip_stat,
     radar_supported_source_ids,
+    radar_text_discussion_terms,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -81,6 +82,7 @@ TEAM_RADAR_DEFAULT_PDF_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / "team" / "data" / "literature-radar-pdfs"
 )
 TEAM_RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
+TEAM_RADAR_DISCUSSION_STOP_WORDS = {"team", "interests", "context", "attention"}
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
     "id": "team-literature-radar",
     "name": "Team Literature Radar",
@@ -461,6 +463,8 @@ def build_team_literature_radar_queue_payload(
         "links": {
             "latest_papers": "/",
             "radar": "/radar",
+            "html": f"/radar/queue?limit={selected_limit}",
+            "json": f"/radar/queue.json?limit={selected_limit}",
             "radar_papers": f"/radar/papers?limit={selected_limit}",
             "weekly_brief": "/radar/brief?days=7&limit=20",
         },
@@ -630,19 +634,28 @@ def team_radar_context_items(database: TeamResearchDatabase, *, limit: int = 80)
             if isinstance(record.get("latest_recommendation"), dict)
             else {}
         )
+        review = team_radar_review_record(record)
+        watched_context = team_radar_watched_context_text(record, latest)
         add_context_item(
             {
                 "id": f"radar:{record.get('dedupe_key') or ''}",
                 "dedupe_key": record.get("dedupe_key") or "",
                 "title": record.get("title") or paper.get("title"),
-                "abstract": paper.get("abstract") or "",
+                "abstract": watched_context,
                 "year": paper.get("year"),
                 "venue": paper.get("venue") or "",
                 "tags": tags_from_radar_paper(paper),
                 "interest_terms": latest.get("matched_positive_keywords") or [],
                 "link": landing_url(paper),
                 "source": "team-radar-watch",
-                "review": team_radar_review_record(record),
+                "review": review,
+                "discussion_terms": radar_text_discussion_terms(
+                    [
+                        review.get("reason") or "",
+                        watched_context,
+                    ],
+                    extra_stop_words=TEAM_RADAR_DISCUSSION_STOP_WORDS,
+                ),
             }
         )
     if len(context_items) < limit and library_limit < limit:
@@ -690,37 +703,37 @@ def team_radar_comment_context_text(comments: list[dict[str, Any]], *, limit: in
     return f"Team comments: {' | '.join(snippets)}"[:max_chars]
 
 
+def team_radar_watched_context_text(
+    record: dict[str, Any],
+    latest: dict[str, Any],
+    *,
+    max_chars: int = 720,
+) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    review = team_radar_review_record(record)
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    parts = [
+        str(paper.get("abstract") or "").strip(),
+        f"Watch reason: {review['reason']}" if review.get("reason") else "",
+        f"Radar summary: {summary.get('short_summary')}" if summary.get("short_summary") else "",
+        f"Radar interests: {attention.get('relationship_to_interests')}"
+        if attention.get("relationship_to_interests")
+        else "",
+        f"Radar context: {attention.get('relationship_to_existing_work')}"
+        if attention.get("relationship_to_existing_work")
+        else "",
+        f"Radar attention: {attention.get('why_attention')}" if attention.get("why_attention") else "",
+    ]
+    return " ".join(part for part in parts if part)[:max_chars]
+
+
 def team_radar_comment_discussion_terms(comments: list[dict[str, Any]], *, limit: int = 12) -> list[str]:
-    stop_words = {
-        "about",
-        "after",
-        "also",
-        "because",
-        "from",
-        "have",
-        "paper",
-        "should",
-        "team",
-        "that",
-        "their",
-        "there",
-        "this",
-        "with",
-    }
-    terms = []
-    seen = set()
-    for comment in list(comments)[-5:]:
-        if not isinstance(comment, dict):
-            continue
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{3,}", str(comment.get("content") or "")):
-            normalized = token.strip(".,;:!?()[]{}").lower()
-            if normalized in stop_words or normalized in seen:
-                continue
-            seen.add(normalized)
-            terms.append(normalized)
-            if len(terms) >= limit:
-                return terms
-    return terms
+    return radar_text_discussion_terms(
+        [str(comment.get("content") or "") for comment in list(comments)[-5:] if isinstance(comment, dict)],
+        limit=limit,
+        extra_stop_words=TEAM_RADAR_DISCUSSION_STOP_WORDS,
+    )
 
 
 def team_radar_query_terms(database: TeamResearchDatabase, *, limit: int = 8) -> list[str]:

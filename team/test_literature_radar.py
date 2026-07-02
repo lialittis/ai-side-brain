@@ -558,13 +558,24 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 watched["dedupe_key"],
                 status="watch",
                 actor="alice",
+                reason="Track capability compartmentalization for agentic runtime isolation.",
                 now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
             )
+            watched_context_item = next(
+                item
+                for item in team_radar_context_items(database)
+                if item["id"] == f"radar:{watched['dedupe_key']}"
+            )
+            self.assertIn(
+                "Watch reason: Track capability compartmentalization",
+                watched_context_item["abstract"],
+            )
+            self.assertIn("capability", watched_context_item["discussion_terms"])
             candidate = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.00014",
                 title="Memory Safety for Agentic Security",
-                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                abstract="Memory safety, LLM security, and capability isolation for cyber reasoning agents.",
                 links={"arxiv": "https://arxiv.org/abs/2601.00014"},
             )
             candidate["tags"] = ["agentic-security"]
@@ -583,6 +594,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(context["related_items"][0]["title"], "Watched Agentic Security Baseline")
             self.assertEqual(context["related_items"][0]["id"], f"radar:{watched['dedupe_key']}")
             self.assertIn("agentic security", context["related_items"][0]["matched_terms"])
+            self.assertIn("capability", context["related_items"][0]["matched_discussion_terms"])
+            self.assertIn("discussion terms:", context["related_items"][0]["relationship"])
             self.assertIn("Related to existing context", context["relationship_summary"])
             stored = database.list_literature_radar_recommendations(second["run_id"])[0]
             self.assertEqual(stored["context"]["related_items"][0]["title"], "Watched Agentic Security Baseline")
@@ -1335,6 +1348,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             self.assertEqual(queue_result["links"]["radar"], "/radar")
+            self.assertEqual(queue_result["links"]["html"], "/radar/queue?limit=3")
+            self.assertEqual(queue_result["links"]["json"], "/radar/queue.json?limit=3")
             queue_text_stdout = io.StringIO()
             with contextlib.redirect_stdout(queue_text_stdout):
                 queue_text_code = research_cli.main(["radar-queue", "--db-path", str(db_path)])
@@ -1406,6 +1421,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(watch_queue["review"], "watch")
             self.assertEqual(watch_queue["latest_run"]["id"], result["run_id"])
             self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            watch_queue_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_queue_text_stdout):
+                watch_queue_text_code = research_cli.main(["radar-queue", "--db-path", str(db_path)])
+            self.assertEqual(watch_queue_text_code, 0)
+            self.assertIn("Review reason: team priority", watch_queue_text_stdout.getvalue())
             stored_recommendations = database.list_literature_radar_recommendations(result["run_id"])
             self.assertEqual(stored_recommendations[0]["review"]["status"], "watch")
             self.assertEqual(stored_recommendations[0]["review"]["reviewed_by"], "alice")

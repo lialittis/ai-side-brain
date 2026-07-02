@@ -12,6 +12,7 @@ from unittest import mock
 from personal.literature_radar import (
     build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
+    personal_radar_context_items,
     read_personal_radar_index,
     read_personal_radar_paper_history,
     read_personal_radar_topic_profile,
@@ -387,13 +388,19 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 watched["dedupe_key"],
                 status="watch",
                 actor="alice",
+                reason="Track capability isolation for personal agent security notes.",
                 now=datetime(2026, 7, 1, 12, 30, tzinfo=timezone.utc),
             )
+            watched_context_item = next(
+                item for item in personal_radar_context_items(root) if item["id"] == watched["dedupe_key"]
+            )
+            self.assertIn("Watch reason: Track capability isolation", watched_context_item["abstract"])
+            self.assertIn("capability", watched_context_item["discussion_terms"])
             candidate = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.00013",
                 title="Memory Safety for Agentic Security",
-                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                abstract="Memory safety, LLM security, and capability isolation for cyber reasoning agents.",
                 identifiers={"arxiv_id": "2601.00013"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00013"},
             )
@@ -413,6 +420,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(context["related_items"][0]["title"], "Watched Agentic Security Baseline")
             self.assertEqual(context["related_items"][0]["id"], watched["dedupe_key"])
             self.assertIn("agentic security", context["related_items"][0]["matched_tags"])
+            self.assertIn("capability", context["related_items"][0]["matched_discussion_terms"])
             self.assertIn("Related to existing context", context["relationship_summary"])
 
     def test_run_personal_literature_radar_excludes_dismissed_papers_from_context(self) -> None:
@@ -622,7 +630,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "--root-path",
                         str(root),
                         "--freshness-max-age-hours",
-                        "12",
+                        "72",
                         "--json",
                     ]
                 )
@@ -636,7 +644,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
             self.assertIn("freshness", queue_result["latest_run"])
-            self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 12)
+            self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 72)
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_result["latest_run"]["source_coverage"]["failed_count"], 0)
             self.assertEqual(queue_result["latest_run"]["source_policy"]["authoritative_count"], 1)
@@ -698,6 +706,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "watch",
                         "--actor",
                         "alice",
+                        "--reason",
+                        "Track for allocator hardening.",
                         "--json",
                     ]
                 )
@@ -706,8 +716,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             reviewed = json.loads(review_stdout.getvalue())
             self.assertEqual(reviewed["review_status"], "watch")
             self.assertEqual(reviewed["reviewed_by"], "alice")
+            self.assertEqual(reviewed["review_reason"], "Track for allocator hardening.")
             updated_history = read_personal_radar_paper_history(root)
             self.assertEqual(updated_history[papers[0]["dedupe_key"]]["review_status"], "watch")
+            self.assertEqual(
+                updated_history[papers[0]["dedupe_key"]]["review_reason"],
+                "Track for allocator hardening.",
+            )
             updated_runs = read_personal_radar_index(root)
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["status"], "watch")
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["reviewed_by"], "alice")
@@ -728,6 +743,11 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(watch_queue["review"], "watch")
             self.assertEqual(watch_queue["latest_run"]["status"], "succeeded")
             self.assertEqual(watch_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            watch_queue_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(watch_queue_text_stdout):
+                watch_queue_text_code = personal_literature_radar.main(["queue", "--root-path", str(root)])
+            self.assertEqual(watch_queue_text_code, 0)
+            self.assertIn("Review reason: Track for allocator hardening.", watch_queue_text_stdout.getvalue())
 
             brief_stdout = io.StringIO()
             with contextlib.redirect_stdout(brief_stdout):
@@ -871,6 +891,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
         self.assertEqual(payload["source_policy"]["authoritative_count"], 3)
+        self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])
+        self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
+        self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         self.assertEqual(payload["scoring_profile"]["type"], "topic_profile")
         self.assertEqual(payload["scoring_profile_summary"]["topic_count"], 4)
         self.assertIn(

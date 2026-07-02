@@ -70,6 +70,7 @@ from shared.literature_radar import (
     radar_source_readiness_summary,
     radar_source_skip_stat,
     radar_supported_source_ids,
+    radar_text_discussion_terms,
     recommend_papers,
     summarize_radar_recommendations_with_openrouter,
 )
@@ -619,6 +620,8 @@ def personal_radar_history_context_item(record: dict[str, Any]) -> dict[str, Any
     )
     context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    review = personal_radar_review_record(record)
     return {
         "id": record.get("dedupe_key") or record.get("title"),
         "dedupe_key": record.get("dedupe_key"),
@@ -627,8 +630,12 @@ def personal_radar_history_context_item(record: dict[str, Any]) -> dict[str, Any
             str(value or "")
             for value in [
                 paper.get("abstract") or "",
+                f"Watch reason: {review['reason']}" if review.get("reason") else "",
                 summary.get("short_summary") or "",
                 context.get("relationship_summary") or "",
+                attention.get("why_attention") or "",
+                attention.get("relationship_to_interests") or "",
+                attention.get("relationship_to_existing_work") or "",
             ]
             if str(value or "").strip()
         ),
@@ -638,9 +645,18 @@ def personal_radar_history_context_item(record: dict[str, Any]) -> dict[str, Any
         "interest_terms": latest.get("matched_positive_keywords") or context.get("matched_interest_terms") or [],
         "link": personal_radar_paper_link(paper),
         "source": "personal-radar-watch"
-        if personal_radar_review_record(record)["status"] == "watch"
+        if review["status"] == "watch"
         else "personal-radar-history",
-        "review": personal_radar_review_record(record),
+        "review": review,
+        "discussion_terms": radar_text_discussion_terms(
+            [
+                review.get("reason") or "",
+                summary.get("short_summary") or "",
+                attention.get("why_attention") or "",
+                attention.get("relationship_to_interests") or "",
+                attention.get("relationship_to_existing_work") or "",
+            ]
+        ),
     }
 
 
