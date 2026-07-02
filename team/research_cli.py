@@ -28,6 +28,7 @@ from shared.literature_radar import (
     format_radar_triage_summary,
     radar_latest_signal_lines,
     radar_supported_source_ids,
+    parse_official_accepted_page_specs,
     source_provenance_report_text,
 )
 from shared.research import topic_profile_by_id
@@ -202,6 +203,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="DBLP venue profile or group for dblp_venues; e.g. security, systems, acm_ccs",
     )
     radar.add_argument("--usenix-cycle", action="append", type=int, default=[], help="USENIX Security cycle; repeatable")
+    radar.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
     radar.add_argument("--output", type=Path, help="write Markdown recommendation report")
     radar.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -279,6 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
     radar_settings.add_argument("--conference-year", type=int)
     radar_settings.add_argument("--venue-profile", action="append", default=[])
     radar_settings.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    radar_settings.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
     radar_settings.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_review = subparsers.add_parser(
@@ -830,6 +843,13 @@ def saved_radar_list(settings: dict[str, Any], key: str) -> list[str]:
     return [part.strip() for part in re.split(r"[\n, ]+", str(value)) if part.strip()]
 
 
+def saved_radar_official_pages(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    value = settings.get("official_accepted_pages") or []
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
 def saved_radar_int(settings: dict[str, Any], key: str, default: int) -> int:
     try:
         return int(settings.get(key) or default)
@@ -926,6 +946,8 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         "openreview_venue_profiles": args.openreview_venue_profile
         or saved_radar_list(saved_defaults, "openreview_venue_profiles"),
         "venue_profiles": args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles"),
+        "official_accepted_pages": parse_official_accepted_page_specs(args.official_accepted_page)
+        or saved_radar_official_pages(saved_defaults),
     }
     if args.openalex_mailto:
         settings["openalex_mailto"] = args.openalex_mailto
@@ -938,6 +960,8 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         settings["sources"].append("openreview")
     if settings.get("openreview_venue_profiles") and "openreview_venues" not in settings["sources"]:
         settings["sources"].append("openreview_venues")
+    if settings.get("official_accepted_pages") and "official_accepted_pages" not in settings["sources"]:
+        settings["sources"].append("official_accepted_pages")
     return settings
 
 
@@ -1065,6 +1089,9 @@ def main(argv: list[str] | None = None) -> int:
             dblp_author_pids=args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids") or None,
             dblp_venue_profiles=args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None,
             usenix_security_cycles=args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles") or None,
+            official_accepted_pages=parse_official_accepted_page_specs(args.official_accepted_page)
+            or saved_radar_official_pages(saved_defaults)
+            or None,
             source_preset=selected_source_preset,
         )
         if args.output:

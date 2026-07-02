@@ -1684,6 +1684,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["top_recommendations"][0]["identifiers"]["arxiv_id"], "2601.00005")
             self.assertEqual(brief["top_recommendations"][0]["links"]["arxiv"], "https://arxiv.org/abs/2601.00005")
             self.assertEqual(brief["top_recommendations"][0]["run_id"], result["run_id"])
+            self.assertEqual(brief["top_recommendations"][0]["imported_item_id"], "")
+            self.assertEqual(brief["top_recommendations"][0]["import_result"], {})
             self.assertEqual(brief["top_recommendations"][0]["triage_hint"]["action"], "import_to_library")
             self.assertIn("download allowed", brief["top_recommendations"][0]["pdf_policy"])
             self.assertEqual(brief["latest_run"]["id"], result["run_id"])
@@ -1900,6 +1902,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "1",
                             "--usenix-cycle",
                             "2",
+                            "--official-accepted-page",
+                            "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://www.ieee-security.org/accepted.html",
                             "--json",
                         ]
                     )
@@ -1916,6 +1920,17 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(runner.call_args.kwargs["cache_pdfs"])
             self.assertEqual(runner.call_args.kwargs["pdf_cache_dir"], Path("team/data/custom-pdf-cache"))
             self.assertEqual(runner.call_args.kwargs["pdf_cache_max_bytes"], 12345)
+            self.assertEqual(
+                runner.call_args.kwargs["official_accepted_pages"],
+                [
+                    {
+                        "source_id": "ieee_sp",
+                        "venue": "IEEE Symposium on Security and Privacy 2026",
+                        "year": 2026,
+                        "page_url": "https://www.ieee-security.org/accepted.html",
+                    }
+                ],
+            )
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
             self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["65/9612"])

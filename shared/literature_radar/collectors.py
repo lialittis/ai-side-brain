@@ -498,6 +498,121 @@ def parse_ndss_accepted_papers(
     )
 
 
+def collect_official_accepted_papers(
+    *,
+    source_id: str,
+    venue: str,
+    year: int,
+    page_url: str,
+    max_results: int = 300,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+    source_context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    content = (fetcher or fetch_url)(page_url)
+    return parse_accepted_paper_page(
+        content,
+        source_id=source_id,
+        venue=venue,
+        year=year,
+        page_url=page_url,
+        collected_at=now,
+        source_context=source_context,
+    )[:max_results]
+
+
+def collect_configured_official_accepted_pages(
+    pages: list[dict[str, Any]] | None,
+    *,
+    default_year: int,
+    max_results: int = 300,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    papers: list[dict[str, Any]] = []
+    for page in normalize_official_accepted_page_configs(pages, default_year=default_year):
+        papers.extend(
+            collect_official_accepted_papers(
+                source_id="official_accepted_pages",
+                venue=page["venue"],
+                year=page["year"],
+                page_url=page["page_url"],
+                max_results=max_results,
+                fetcher=fetcher,
+                now=now,
+                source_context={
+                    "configured_source_id": page.get("source_id") or "",
+                    "venue_profile_id": page.get("venue_profile_id") or page.get("source_id") or "",
+                    "venue_group": page.get("venue_group") or "",
+                },
+            )
+        )
+    return papers
+
+
+def normalize_official_accepted_page_configs(
+    pages: list[dict[str, Any]] | None,
+    *,
+    default_year: int,
+) -> list[dict[str, Any]]:
+    normalized = []
+    for index, page in enumerate(pages or []):
+        if not isinstance(page, dict):
+            raise ValueError(f"Official accepted-paper page #{index + 1} must be an object.")
+        page_url = normalize_spaces(str(page.get("page_url") or page.get("url") or page.get("source_url") or ""))
+        venue = normalize_spaces(str(page.get("venue") or page.get("venue_name") or ""))
+        if not page_url:
+            raise ValueError(f"Official accepted-paper page #{index + 1} requires page_url.")
+        if not venue:
+            raise ValueError(f"Official accepted-paper page #{index + 1} requires venue.")
+        try:
+            year = int(page.get("year") or default_year)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Official accepted-paper page #{index + 1} has invalid year.") from error
+        normalized.append(
+            {
+                "source_id": normalize_selector(str(page.get("source_id") or page.get("id") or "")),
+                "venue_profile_id": normalize_selector(str(page.get("venue_profile_id") or "")),
+                "venue_group": normalize_selector(str(page.get("venue_group") or page.get("group") or "")),
+                "venue": venue,
+                "year": year,
+                "page_url": page_url,
+            }
+        )
+    return normalized
+
+
+def parse_official_accepted_page_specs(values: list[str] | None) -> list[dict[str, Any]]:
+    pages = []
+    for raw_value in values or []:
+        for raw_line in str(raw_value or "").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = [part.strip() for part in line.split("|")]
+            if len(parts) != 4:
+                raise ValueError(
+                    "Official accepted page specs must use: "
+                    "source_id | venue name | year | https://official.example/accepted-papers"
+                )
+            source_id, venue, year_text, page_url = parts
+            if not venue or not page_url:
+                raise ValueError("Official accepted page specs require venue name and URL.")
+            try:
+                year = int(year_text) if year_text else None
+            except ValueError as error:
+                raise ValueError(f"Invalid official accepted page year: {year_text}") from error
+            pages.append(
+                {
+                    "source_id": normalize_selector(source_id),
+                    "venue": venue,
+                    "year": year,
+                    "page_url": page_url,
+                }
+            )
+    return pages
+
+
 def parse_accepted_paper_page(
     content: bytes | str,
     *,

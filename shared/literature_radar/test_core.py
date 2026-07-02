@@ -31,6 +31,8 @@ from shared.literature_radar import (
     build_venue_coverage_summary,
     cache_open_access_pdf,
     cache_recommendation_pdfs,
+    collect_configured_official_accepted_pages,
+    collect_official_accepted_papers,
     collect_radar_source,
     create_radar_paper,
     default_radar_topic_profile,
@@ -143,6 +145,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "openreview_venues",
             "usenix_security",
             "ndss",
+            "official_accepted_pages",
         ]
         self.assertEqual(radar_supported_source_ids(), supported_adapter_sources)
         self.assertEqual(mvp_source_ids(), supported_adapter_sources)
@@ -199,6 +202,72 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("## Source Policy", report)
         self.assertIn("trend_signals=1", report)
         self.assertIn("secondary context", report)
+
+    def test_generic_official_accepted_page_collector_records_source_context(self) -> None:
+        fetched_urls = []
+
+        def fetcher(url: str) -> bytes:
+            fetched_urls.append(url)
+            return b"""
+            <html><body>
+              <h2><a href="/paper/runtime-hardening">Runtime Hardening for Memory-Safe Agents</a></h2>
+              <p>Alice Example, Bob Researcher</p>
+              <p>We study system security and memory safety for agentic runtimes.</p>
+              <h2>Accepted Papers</h2>
+              <h2>Second Security Paper with Agentic Systems</h2>
+              <p>Carol Analyst and Dan Builder</p>
+            </body></html>
+            """
+
+        papers = collect_official_accepted_papers(
+            source_id="ieee_sp",
+            venue="IEEE Symposium on Security and Privacy 2026",
+            year=2026,
+            page_url="https://www.ieee-security.org/accepted-papers.html",
+            max_results=1,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            source_context={"venue_profile_id": "ieee_sp"},
+        )
+
+        self.assertEqual(fetched_urls, ["https://www.ieee-security.org/accepted-papers.html"])
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["source_id"], "ieee_sp")
+        self.assertEqual(papers[0]["title"], "Runtime Hardening for Memory-Safe Agents")
+        self.assertEqual(papers[0]["authors"], ["Alice Example", "Bob Researcher"])
+        self.assertEqual(papers[0]["venue"], "IEEE Symposium on Security and Privacy 2026")
+        self.assertEqual(
+            papers[0]["links"]["landing"],
+            "https://www.ieee-security.org/paper/runtime-hardening",
+        )
+        self.assertEqual(papers[0]["source_records"][0]["venue_profile_id"], "ieee_sp")
+        self.assertEqual(
+            papers[0]["source_records"][0]["source_page"],
+            "https://www.ieee-security.org/accepted-papers.html",
+        )
+
+    def test_configured_official_accepted_pages_use_generic_source_policy(self) -> None:
+        papers = collect_configured_official_accepted_pages(
+            [
+                {
+                    "source_id": "ieee_sp",
+                    "venue": "IEEE Symposium on Security and Privacy 2026",
+                    "year": 2026,
+                    "page_url": "https://www.ieee-security.org/accepted-papers.html",
+                }
+            ],
+            default_year=2026,
+            fetcher=lambda _url: b"""
+            <h2>Composable Sandboxing for Memory Safety</h2>
+            <p>Alice Example and Bob Researcher</p>
+            """,
+        )
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["source_id"], "official_accepted_pages")
+        self.assertEqual(papers[0]["source_records"][0]["configured_source_id"], "ieee_sp")
+        self.assertEqual(papers[0]["source_provenance"]["source_class"], "official_accepted_page")
+        self.assertTrue(papers[0]["source_provenance"]["authoritative_metadata"])
 
     def test_preflight_payload_uses_shared_source_policy_and_readiness(self) -> None:
         payload = build_radar_preflight_payload(

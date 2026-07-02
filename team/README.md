@@ -106,7 +106,7 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates plus stored why/context/matched-interest signal lines when scheduled discovery has papers awaiting review;
-- Literature Radar page with ad hoc `Run Radar`, stored run history, weekly brief view, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Literature Radar page with ad hoc `Run Radar`, stored run history, a first-class Brief nav entry for daily/weekly review, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
 - Radar run cards, Markdown reports, weekly briefs, paper history, and the Latest Papers Radar Queue all share labelled `Signal`, `Why`, `Context`, and `Matched` lines so team members see the same explanation wherever they review a recommendation;
 - radar-imported library papers keep their radar provenance, summary, relevance reason, context link, matched interests, and PDF-access decision, so the main Latest Relevant Papers list shows why the paper was worth importing and whether a legal PDF is available;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
@@ -179,7 +179,8 @@ self-hosted notification scripts.
 latest-run health, structured source policy, `source_readiness`,
 `pipeline_summary`, `oa_enrichment`, and source coverage for the brief window,
 review counts, an active queue preview, and links back to the Radar review
-pages.
+pages. The browser brief renders top recommendation cards with direct
+Add/Watch/Dismiss actions for a quick weekly review pass.
 
 PDF uploads and direct PDF links are stored locally under ignored Team state. The direct PDF link path accepts only URLs ending in `.pdf` that download without redirects, then saves and deduplicates the PDF by SHA-256. DOI, journal, arXiv abstract pages, and other indirect links belong in the Manual Link path with brief info; AI analyzes only that text and does not download a PDF. PDFs classified as non-papers are archived as `rejected_non_paper`.
 

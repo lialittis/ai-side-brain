@@ -30,6 +30,7 @@ from shared.literature_radar import (
     build_venue_coverage_summary,
     cache_recommendation_pdfs,
     collect_arxiv,
+    collect_configured_official_accepted_pages,
     collect_crossref_works,
     collect_dblp_author_publications,
     collect_dblp_venue_publications,
@@ -214,6 +215,7 @@ def run_team_literature_radar(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    official_accepted_pages: list[dict[str, Any]] | None = None,
     source_preset: str | None = None,
     cache_pdfs: bool = False,
     pdf_cache_dir: Path | None = None,
@@ -266,6 +268,7 @@ def run_team_literature_radar(
         openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=selected_usenix_security_cycles,
+        official_accepted_pages=official_accepted_pages,
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=pdf_cache_dir,
         pdf_cache_max_bytes=pdf_cache_max_bytes,
@@ -305,6 +308,7 @@ def run_team_literature_radar(
             openreview_venue_profiles=selected_openreview_venue_profiles,
             openreview_accepted_only=openreview_accepted_only,
             usenix_security_cycles=selected_usenix_security_cycles,
+            official_accepted_pages=official_accepted_pages,
             source_errors=source_errors,
             source_stats=source_stats,
             collection_config=collection_config,
@@ -1024,6 +1028,7 @@ def team_radar_collection_config(
     openreview_venue_profiles: list[str] | None,
     openreview_accepted_only: bool,
     usenix_security_cycles: list[int] | None,
+    official_accepted_pages: list[dict[str, Any]] | None,
     cache_pdfs: bool,
     pdf_cache_dir: Path | None,
     pdf_cache_max_bytes: int,
@@ -1056,6 +1061,7 @@ def team_radar_collection_config(
         ),
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=(usenix_security_cycles or [1]) if "usenix_security" in selected_sources else None,
+        official_accepted_pages=official_accepted_pages if "official_accepted_pages" in selected_sources else None,
         seed_paper_ids=resolved_source_list(
             selected_sources,
             SEMANTIC_SCHOLAR_SEED_SOURCES,
@@ -1257,6 +1263,7 @@ def collect_team_radar_candidates(
     openreview_venue_profiles: list[str] | None = None,
     openreview_accepted_only: bool = True,
     usenix_security_cycles: list[int] | None = None,
+    official_accepted_pages: list[dict[str, Any]] | None = None,
     source_errors: list[dict[str, Any]] | None = None,
     source_stats: list[dict[str, Any]] | None = None,
     collection_config: dict[str, Any] | None = None,
@@ -1483,6 +1490,17 @@ def collect_team_radar_candidates(
             lambda: collect_ndss_accepted_papers(
                 year=selected_conference_year,
                 max_results=max_results,
+            ),
+        )
+    if "official_accepted_pages" in sources:
+        collect_source(
+            "official_accepted_pages",
+            lambda: collect_configured_official_accepted_pages(
+                official_accepted_pages
+                or (collection_config.get("official_accepted_pages") if isinstance(collection_config, dict) else []),
+                default_year=selected_conference_year,
+                max_results=max_results,
+                now=now,
             ),
         )
     if selected_unpaywall_email:

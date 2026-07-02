@@ -31,6 +31,8 @@ from team.research_web import (
     remove_paper,
     remove_paper_tag,
     remove_team_interest,
+    radar_brief_path_from_fields,
+    radar_settings_from_fields,
     import_radar_recommendation_to_library,
     import_radar_paper_to_library,
     make_handler,
@@ -76,6 +78,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Interests", latest)
         self.assertIn("Radar", latest)
         self.assertIn('href="/radar/queue?limit=20">Queue</a>', latest)
+        self.assertIn('href="/radar/brief?days=7&amp;limit=20">Brief</a>', latest)
         self.assertNotIn("Radar Queue", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
@@ -366,6 +369,8 @@ class TeamResearchWebTest(unittest.TestCase):
                 brief_payload["top_recommendations"][0]["links"]["arxiv"],
                 "https://arxiv.org/abs/2601.00051",
             )
+            self.assertEqual(brief_payload["top_recommendations"][0]["imported_item_id"], "")
+            self.assertEqual(brief_payload["top_recommendations"][0]["import_result"], {})
             self.assertEqual(brief_payload["top_recommendations"][0]["triage_hint"]["action"], "import_to_library")
             self.assertEqual(brief_payload["queue"]["papers"][0]["release_date"], "2026-06-27")
             self.assertEqual(brief_payload["activity"], [])
@@ -638,9 +643,18 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('action="/radar/import"', html)
             self.assertIn("https://arxiv.org/abs/2601.00006", html)
 
-            brief_html = render_literature_radar_brief_page(database, days=7, limit=20)
+            brief_html = render_literature_radar_brief_page(
+                database,
+                days=7,
+                limit=20,
+                run_limit=12,
+                notice="Marked radar paper as watch.",
+            )
 
             self.assertIn("Radar Brief", brief_html)
+            self.assertIn('class="nav-item active" href="/radar/brief?days=7&amp;limit=20">Brief</a>', brief_html)
+            self.assertIn("Marked radar paper as watch.", brief_html)
+            self.assertIn('name="run_limit" min="1" max="500" value="12"', brief_html)
             self.assertIn("Brief health:", brief_html)
             self.assertIn("latest: partial", brief_html)
             self.assertIn("Source coverage:", brief_html)
@@ -674,6 +688,24 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("radar-brief-recommendations", brief_html)
             self.assertIn("Triage: Import", brief_html)
             self.assertIn(">arXiv</a>", brief_html)
+            self.assertIn("<strong>Attention:</strong> Worth team attention.", brief_html)
+            self.assertIn("<strong>Interests:</strong> Connects to memory safety.", brief_html)
+            self.assertIn("<strong>Context:</strong> Related to existing context: Baseline Paper.", brief_html)
+            self.assertIn("<strong>Now:</strong> new this run", brief_html)
+            self.assertIn('action="/radar/import"', brief_html)
+            self.assertIn('action="/radar/review"', brief_html)
+            self.assertIn('name="return_to" value="brief"', brief_html)
+            self.assertIn('name="brief_days" value="7"', brief_html)
+            self.assertIn('name="brief_limit" value="20"', brief_html)
+            self.assertIn('name="brief_run_limit" value="12"', brief_html)
+            self.assertIn("Add to Library", brief_html)
+            self.assertEqual(
+                radar_brief_path_from_fields(
+                    {"brief_days": "7", "brief_limit": "20", "brief_run_limit": "12"},
+                    notice="Marked radar paper as watch.",
+                ),
+                "/radar/brief?days=7&limit=20&run_limit=12&notice=Marked+radar+paper+as+watch.",
+            )
             self.assertIn("Team Literature Radar Brief", brief_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", brief_html)
             self.assertIn("Source Errors", brief_html)
@@ -717,6 +749,17 @@ class TeamResearchWebTest(unittest.TestCase):
             imported_html = render_literature_radar_papers_page(database, limit=50)
             self.assertIn(f"Imported: {item_id}", imported_html)
             self.assertIn("In Library", imported_html)
+            imported_brief_html = render_literature_radar_brief_page(
+                database,
+                days=7,
+                limit=20,
+                run_limit=12,
+            )
+            self.assertIn("In Library", imported_brief_html)
+            self.assertIn(
+                f'href="/radar/brief?days=7&amp;limit=20&amp;run_limit=12&amp;notice=In+library%3A+{item_id}"',
+                imported_brief_html,
+            )
             latest_html = render_latest_papers_page(database)
             self.assertIn("<strong>Signal:</strong> A local summary for radar review.", latest_html)
             self.assertIn(">arXiv</a>", latest_html)
@@ -1057,6 +1100,36 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="venue_profiles" placeholder="security, systems" value="security\nprogramming_languages_memory_safety"', html)
             self.assertIn('name="openreview_venue_profiles" placeholder="iclr, ai_ml" value="iclr\nneurips\nicml"', html)
             self.assertIn("preset: Team Security Daily", html)
+
+    def test_literature_radar_web_settings_accept_configured_official_pages(self) -> None:
+        settings = radar_settings_from_fields(
+            {
+                "source_preset": "custom",
+                "max_results": "9",
+                "limit": "4",
+                "summary_provider": "local",
+                "official_accepted_pages": (
+                    "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | "
+                    "https://www.ieee-security.org/accepted-papers.html"
+                ),
+            }
+        )
+
+        self.assertIn("official_accepted_pages", settings["sources"])
+        self.assertEqual(
+            settings["official_accepted_pages"],
+            [
+                {
+                    "source_id": "ieee_sp",
+                    "venue": "IEEE Symposium on Security and Privacy 2026",
+                    "year": 2026,
+                    "page_url": "https://www.ieee-security.org/accepted-papers.html",
+                }
+            ],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            html = render_literature_radar_page(TeamResearchDatabase(Path(temp_dir) / "research.sqlite3"))
+        self.assertIn("Official accepted pages", html)
 
     def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

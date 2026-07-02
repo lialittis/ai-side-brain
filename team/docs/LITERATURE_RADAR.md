@@ -520,9 +520,15 @@ The same stored-run brief is available from the Radar page through `Weekly
 Brief`. The browser brief shows a compact health summary before the Markdown:
 latest-run freshness, source coverage, source readiness, pipeline phase status,
 OA enrichment readiness, review queue counts, source provenance, and PDF access
-for the active queue. It also renders structured top recommendation cards with
-rank, score, review state, triage hint, release date, matched terms, PDF policy,
-and source links so weekly review does not require scanning raw Markdown first.
+for the active queue. Its form controls the history window, recommendation
+count, and number of stored runs to scan. It also renders structured top
+recommendation cards with
+rank, score, review state, triage hint, release date, matched terms, attention
+reasoning, relationship to interests, relationship to existing work, PDF policy,
+source links, and direct Add/Watch/Dismiss actions so weekly review does not
+require scanning raw Markdown first or jumping back to the run detail page.
+Those actions return to the same brief window with a visible confirmation
+notice.
 The matching JSON payload is available
 through `Brief JSON`, so team members can review it without using the CLI while
 local automation can consume the same stored-roll-up contract.
@@ -740,7 +746,15 @@ Current implemented shared collectors:
 Recommended next MVP order:
 
 1. direct accepted-paper page collectors for more venues where stable official
-   pages exist;
+   pages exist; new wrappers can reuse the shared
+   `collect_official_accepted_papers` parser and only need to provide the
+   official URL, source ID, venue name, year, and source context;
+   Team web settings can also use the `Official accepted pages` field for
+   early configuration-driven coverage before a dedicated wrapper exists, with
+   one line per page:
+   `source_id | venue name | year | https://official.example/accepted-papers`;
+   the same line format is available from Team and Personal CLI with
+   `--official-accepted-page`;
 2. more OpenReview workshop presets for recurring safety, alignment,
    interpretability, and adversarial ML workshops when their invitation IDs are
    stable enough to encode;

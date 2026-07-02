@@ -49,6 +49,7 @@ from shared.literature_radar import (
     radar_source_preset,
     radar_source_presets,
     radar_supported_source_ids,
+    parse_official_accepted_page_specs,
     source_provenance_report_text,
 )
 
@@ -105,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--conference-year", type=int)
     run.add_argument("--venue-profile", action="append", default=[])
     run.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    run.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
     run.add_argument("--topic-profile", type=Path, help="JSON topic profile path; defaults to indexes/literature-radar-topic-profile.json")
     run.add_argument("--root-path", type=Path, default=ROOT)
     run.add_argument("--no-report", action="store_true", help="do not write memory/06_Logs report")
@@ -165,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--conference-year", type=int)
     status.add_argument("--venue-profile", action="append", default=[])
     status.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    status.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
     status.add_argument("--topic-profile", type=Path)
     status.add_argument("--no-report", action="store_true")
     status.add_argument("--json", action="store_true")
@@ -202,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
     settings.add_argument("--conference-year", type=int)
     settings.add_argument("--venue-profile", action="append", default=[])
     settings.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    settings.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
     settings.add_argument("--topic-profile", type=Path)
     settings.add_argument("--root-path", type=Path, default=ROOT)
     settings.add_argument("--no-report", action="store_true")
@@ -238,6 +257,7 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
     selected_dblp_venue_profiles = args.venue_profile or None
     selected_openreview_venue_profiles = args.openreview_venue_profile or None
     selected_usenix_cycles = args.usenix_cycle or None
+    official_accepted_pages = parse_official_accepted_page_specs(args.official_accepted_page)
     if preset:
         if selected_dblp_venue_profiles is None:
             selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
@@ -251,6 +271,8 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         selected_sources.append("openreview")
     if args.openreview_venue_profile and "openreview_venues" not in selected_sources:
         selected_sources.append("openreview_venues")
+    if official_accepted_pages and "official_accepted_pages" not in selected_sources:
+        selected_sources.append("official_accepted_pages")
     collection_config = personal_radar_collection_config(
         selected_sources=selected_sources,
         source_preset=(preset or {}).get("id"),
@@ -274,6 +296,7 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=not args.include_openreview_unaccepted,
         usenix_security_cycles=selected_usenix_cycles,
+        official_accepted_pages=official_accepted_pages,
         topic_profile_path=args.topic_profile,
         write_report=not args.no_report,
         cache_pdfs=args.cache_pdfs,
@@ -293,6 +316,7 @@ def build_personal_literature_radar_settings_payload(args: argparse.Namespace) -
         "pdf_cache_max_bytes": args.pdf_cache_max_bytes,
         "conference_year": args.conference_year or "",
         "usenix_security_cycles": selected_usenix_cycles or [],
+        "official_accepted_pages": official_accepted_pages,
         "include_openreview_unaccepted": bool(args.include_openreview_unaccepted),
         "topic_profile_path": str(args.topic_profile) if args.topic_profile else "",
         "write_report": not args.no_report,
@@ -747,6 +771,7 @@ def main(argv: list[str] | None = None) -> int:
             dblp_author_pids=args.dblp_author_pid or None,
             dblp_venue_profiles=args.venue_profile or None,
             usenix_security_cycles=args.usenix_cycle or None,
+            official_accepted_pages=parse_official_accepted_page_specs(args.official_accepted_page) or None,
             source_preset=args.source_preset,
             topic_profile_path=args.topic_profile,
             write_report=not args.no_report,

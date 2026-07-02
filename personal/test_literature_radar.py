@@ -981,6 +981,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "security",
                         "--openreview-venue-profile",
                         "iclr",
+                        "--official-accepted-page",
+                        "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://www.ieee-security.org/accepted.html",
                         "--json",
                     ]
                 )
@@ -1004,6 +1006,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "security",
                         "--openreview-venue-profile",
                         "iclr",
+                        "--official-accepted-page",
+                        "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://www.ieee-security.org/accepted.html",
                     ]
                 )
 
@@ -1013,11 +1017,18 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["kind"], "personal_literature_radar_settings")
         self.assertEqual(
             payload["settings"]["sources"],
-            ["semantic_scholar_recommendations", "openreview", "openalex", "openreview_venues"],
+            [
+                "semantic_scholar_recommendations",
+                "openreview",
+                "openalex",
+                "openreview_venues",
+                "official_accepted_pages",
+            ],
         )
+        self.assertEqual(payload["settings"]["official_accepted_pages"][0]["source_id"], "ieee_sp")
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
-        self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 5)
         self.assertEqual(payload["oa_enrichment"]["status"], "ready")
         self.assertTrue(payload["oa_enrichment"]["configured"])
         self.assertIn("hugging_face_papers", payload["supported_trend_signal_ids"])

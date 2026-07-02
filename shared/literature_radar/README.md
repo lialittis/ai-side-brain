@@ -107,6 +107,11 @@ The DBLP/OpenAlex venue-profile settings summary also includes
 programming-languages/memory-safety, and software-engineering top-venue groups.
 Personal and Team preflight outputs use that to show whether the current
 selectors cover all required top venues before a scheduled run spends API calls.
+Official accepted-paper page collectors share the same parser through
+`collect_official_accepted_papers`; products can also pass a list of configured
+pages to `collect_configured_official_accepted_pages`. Future venue-specific
+wrappers only need to provide a stable official page URL while preserving source
+page, landing link, venue, year, and collector context provenance.
 
 The core also provides product-neutral recommendation summaries. The local
 summary path uses only stored metadata, scoring reasons, and PDF-access policy;

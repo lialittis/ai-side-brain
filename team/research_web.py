@@ -47,6 +47,7 @@ from shared.literature_radar import (
     radar_source_readiness_summary,
     radar_triage_action_options,
     radar_triage_summary,
+    parse_official_accepted_page_specs,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
@@ -266,6 +267,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
             f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
             f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar</a>',
             f'<a class="nav-item {"active" if active == "radar_queue" else ""}" href="/radar/queue?limit=20">Queue</a>',
+            f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Brief</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Interests</a>',
         ]
@@ -863,6 +865,35 @@ def radar_queue_path(*, notice: str = "", limit: int = 20) -> str:
     return f"/radar/queue?{urlencode(params)}"
 
 
+def radar_brief_path(*, notice: str = "", days: int = 7, limit: int = 20, run_limit: int = 50) -> str:
+    params = {
+        "days": max(1, int(days)),
+        "limit": max(1, int(limit)),
+        "run_limit": max(1, int(run_limit)),
+    }
+    if notice:
+        params["notice"] = notice
+    return f"/radar/brief?{urlencode(params)}"
+
+
+def radar_brief_path_from_fields(fields: dict[str, str], *, notice: str = "") -> str:
+    return radar_brief_path(
+        notice=notice,
+        days=clean_positive_int(fields.get("brief_days", ""), default=7, maximum=365),
+        limit=clean_positive_int(fields.get("brief_limit", ""), default=20, maximum=100),
+        run_limit=clean_positive_int(fields.get("brief_run_limit", ""), default=50, maximum=500),
+    )
+
+
+def radar_brief_path_from_window(brief_window: dict[str, int] | None, *, notice: str = "") -> str:
+    return radar_brief_path(
+        notice=notice,
+        days=int((brief_window or {}).get("days") or 7),
+        limit=int((brief_window or {}).get("limit") or 20),
+        run_limit=int((brief_window or {}).get("run_limit") or 50),
+    )
+
+
 def render_literature_radar_page(
     database: TeamResearchDatabase,
     *,
@@ -904,6 +935,7 @@ def render_literature_radar_brief_page(
     days: int = 7,
     limit: int = 20,
     run_limit: int = 50,
+    notice: str = "",
 ) -> str:
     payload = build_team_literature_radar_brief_payload(
         database,
@@ -914,14 +946,15 @@ def render_literature_radar_brief_page(
     body = f"""
     {render_topline("Radar Brief", "Weekly or daily roll-up from stored Literature Radar runs.", "/radar", "Radar")}
     <section class="panel">
-      {render_radar_brief_form(days=days, limit=limit)}
+      {render_notice(notice)}
+      {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit)}
       <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
       {render_radar_brief_summary(payload)}
       {render_radar_brief_top_recommendations(payload)}
       <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
     </section>
     """
-    return page("Radar Brief", body, active="radar")
+    return page("Radar Brief", body, active="radar_brief")
 
 
 def render_literature_radar_queue_page(
@@ -1291,6 +1324,7 @@ def radar_settings_collection_config(settings: dict[str, Any]) -> dict[str, Any]
         openreview_venue_profiles=list(settings.get("openreview_venue_profiles") or []),
         openreview_accepted_only=not bool(settings.get("include_openreview_unaccepted")),
         usenix_security_cycles=list(settings.get("usenix_security_cycles") or []),
+        official_accepted_pages=list(settings.get("official_accepted_pages") or []),
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=pdf_cache_dir,
         pdf_cache_max_bytes=int(settings.get("pdf_cache_max_bytes") or RADAR_DEFAULT_PDF_CACHE_MAX_BYTES),
@@ -1401,7 +1435,7 @@ def render_radar_activity_detail(
     return ""
 
 
-def render_radar_brief_form(*, days: int, limit: int) -> str:
+def render_radar_brief_form(*, days: int, limit: int, run_limit: int) -> str:
     return f"""
     <form class="radar-brief-form" method="get" action="/radar/brief">
       <label>
@@ -1411,6 +1445,10 @@ def render_radar_brief_form(*, days: int, limit: int) -> str:
       <label>
         <span class="muted">Recommendations</span>
         <input type="number" name="limit" min="1" max="100" value="{limit}">
+      </label>
+      <label>
+        <span class="muted">Stored runs</span>
+        <input type="number" name="run_limit" min="1" max="500" value="{run_limit}">
       </label>
       <button class="button primary" type="submit">Build Brief</button>
     </form>
@@ -1550,8 +1588,13 @@ def render_radar_brief_top_recommendations(payload: dict[str, Any]) -> str:
     )
     if not recommendations:
         return ""
+    brief_window = {
+        "days": int(payload.get("days") or 7),
+        "limit": int(payload.get("recommendation_limit") or 20),
+        "run_limit": int(payload.get("run_limit") or 50),
+    }
     items = "\n".join(
-        render_radar_brief_top_recommendation(recommendation)
+        render_radar_brief_top_recommendation(recommendation, brief_window=brief_window)
         for recommendation in recommendations[: int(payload.get("recommendation_limit") or 20)]
         if isinstance(recommendation, dict)
     )
@@ -1565,7 +1608,24 @@ def render_radar_brief_top_recommendations(payload: dict[str, Any]) -> str:
     """
 
 
-def render_radar_brief_top_recommendation(record: dict[str, Any]) -> str:
+def render_radar_brief_hidden_inputs(brief_window: dict[str, int] | None) -> str:
+    if not brief_window:
+        return ""
+    return "".join(
+        f'<input type="hidden" name="brief_{key}" value="{html_escape(value)}">'
+        for key, value in (
+            ("days", brief_window.get("days") or 7),
+            ("limit", brief_window.get("limit") or 20),
+            ("run_limit", brief_window.get("run_limit") or 50),
+        )
+    )
+
+
+def render_radar_brief_top_recommendation(
+    record: dict[str, Any],
+    *,
+    brief_window: dict[str, int] | None = None,
+) -> str:
     title = str(record.get("title") or "Untitled paper")
     rank = int(record.get("rank") or 0)
     score = int(float(record.get("score") or 0))
@@ -1595,12 +1655,29 @@ def render_radar_brief_top_recommendation(record: dict[str, Any]) -> str:
     pdf_policy = str(record.get("pdf_policy") or "")
     summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
     attention = record.get("attention_summary") if isinstance(record.get("attention_summary"), dict) else {}
+    context = record.get("context") if isinstance(record.get("context"), dict) else {}
     summary_text = normalize_inline_text(
         summary.get("short_summary")
         or attention.get("why_attention")
         or ""
     )
     summary_html = f'<p class="radar-reasons">{html_escape(summary_text)}</p>' if summary_text else ""
+    imported_item_id = str(record.get("imported_item_id") or "")
+    controls = (
+        render_radar_import_control(
+            record,
+            imported_item_id,
+            return_to="brief",
+            brief_window=brief_window,
+        )
+        + render_radar_review_controls(
+            record.get("dedupe_key") or "",
+            run_id=record.get("run_id") or "",
+            return_to="brief",
+            review=review,
+            brief_window=brief_window,
+        )
+    )
     return f"""
     <article class="radar-queue-item">
       <div class="radar-queue-title">{rank}. {html_escape(title)}</div>
@@ -1614,9 +1691,12 @@ def render_radar_brief_top_recommendation(record: dict[str, Any]) -> str:
         {matched_tags}
       </div>
       {summary_html}
+      {render_radar_attention_summary(record)}
+      {render_radar_context(context)}
       <div class="radar-links">
         {render_radar_links(record)}
         {f'<span class="pill">{html_escape(pdf_policy)}</span>' if pdf_policy else ''}
+        {controls}
       </div>
     </article>
     """
@@ -1757,6 +1837,10 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
       <label>
         <span class="muted">Venue profiles</span>
         <input name="venue_profiles" placeholder="security, systems" value="{html_escape(radar_list_form_value(settings, 'venue_profiles'))}">
+      </label>
+      <label>
+        <span class="muted">Official accepted pages</span>
+        <textarea name="official_accepted_pages" placeholder="ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://...">{html_escape(radar_official_pages_form_value(settings))}</textarea>
       </label>
       <label class="radar-option-line">
         <input type="checkbox" name="save_defaults" value="1">
@@ -2004,6 +2088,13 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
         normalized["conference_year"] = clean_optional_year(settings.get("conference_year"))
     if "usenix_security_cycles" in settings:
         normalized["usenix_security_cycles"] = clean_usenix_cycles(settings.get("usenix_security_cycles"))
+    if "official_accepted_pages" in settings:
+        value = settings.get("official_accepted_pages")
+        normalized["official_accepted_pages"] = (
+            [dict(item) for item in value if isinstance(item, dict)]
+            if isinstance(value, list)
+            else parse_official_accepted_page_lines(str(value or ""))
+        )
     if "include_openreview_unaccepted" in settings:
         normalized["include_openreview_unaccepted"] = truthy_setting(settings.get("include_openreview_unaccepted"))
     for key in RADAR_LIST_SETTING_KEYS:
@@ -2018,6 +2109,25 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
 
 def radar_list_form_value(settings: dict[str, Any], key: str) -> str:
     return "\n".join(str(value) for value in settings.get(key) or [])
+
+
+def radar_official_pages_form_value(settings: dict[str, Any]) -> str:
+    lines = []
+    for page in settings.get("official_accepted_pages") or []:
+        if not isinstance(page, dict):
+            continue
+        lines.append(
+            " | ".join(
+                str(part)
+                for part in (
+                    page.get("source_id") or page.get("id") or "",
+                    page.get("venue") or "",
+                    page.get("year") or "",
+                    page.get("page_url") or page.get("url") or "",
+                )
+            )
+        )
+    return "\n".join(lines)
 
 
 def clean_source_preset_id(value: Any) -> str:
@@ -2554,6 +2664,7 @@ def render_radar_review_controls(
     review: dict[str, Any],
     review_filter: str = "all",
     include_watch_reason: bool = False,
+    brief_window: dict[str, int] | None = None,
 ) -> str:
     if not dedupe_key:
         return ""
@@ -2566,6 +2677,7 @@ def render_radar_review_controls(
         return_to,
         review_filter,
         include_reason=include_watch_reason,
+        brief_window=brief_window,
     )
     dismiss_button = (
         ""
@@ -2578,10 +2690,19 @@ def render_radar_review_controls(
             return_to,
             review_filter,
             include_reason=include_watch_reason,
+            brief_window=brief_window,
         )
     )
     clear_button = (
-        render_radar_review_button(dedupe_key, "unreviewed", "Clear", run_id, return_to, review_filter)
+        render_radar_review_button(
+            dedupe_key,
+            "unreviewed",
+            "Clear",
+            run_id,
+            return_to,
+            review_filter,
+            brief_window=brief_window,
+        )
         if status in {"watch", "dismissed"}
         else ""
     )
@@ -2596,6 +2717,7 @@ def render_radar_review_button(
     return_to: str,
     review_filter: str = "all",
     include_reason: bool = False,
+    brief_window: dict[str, int] | None = None,
 ) -> str:
     reason_placeholder = "Why dismiss this?" if status == "dismissed" else "Why watch this?"
     reason_input = (
@@ -2610,6 +2732,7 @@ def render_radar_review_button(
       <input type="hidden" name="run_id" value="{html_escape(run_id)}">
       <input type="hidden" name="return_to" value="{html_escape(return_to)}">
       <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
+      {render_radar_brief_hidden_inputs(brief_window)}
       {reason_input}
       <button class="mini-button" type="submit">{html_escape(label)}</button>
     </form>
@@ -2743,13 +2866,24 @@ def radar_record_link_map(record: dict[str, Any]) -> dict[str, str]:
     return merged
 
 
-def render_radar_import_control(record: dict[str, Any], imported_item_id: str | None) -> str:
+def render_radar_import_control(
+    record: dict[str, Any],
+    imported_item_id: str | None,
+    *,
+    return_to: str = "run",
+    brief_window: dict[str, int] | None = None,
+) -> str:
     if imported_item_id:
+        if return_to == "brief":
+            href = radar_brief_path_from_window(brief_window, notice=f"In library: {imported_item_id}")
+            return f'<a class="button" href="{html_escape(href)}">In Library</a>'
         return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
     return f"""
     <form class="inline-form" method="post" action="/radar/import">
       <input type="hidden" name="run_id" value="{html_escape(record.get("run_id") or "")}">
       <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
+      <input type="hidden" name="return_to" value="{html_escape(return_to)}">
+      {render_radar_brief_hidden_inputs(brief_window)}
       <button class="mini-button primary" type="submit">Add to Library</button>
     </form>
     """
@@ -4029,6 +4163,7 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         conference_year=settings["conference_year"] or None,
         dblp_venue_profiles=settings["venue_profiles"],
         usenix_security_cycles=settings["usenix_security_cycles"] or None,
+        official_accepted_pages=settings["official_accepted_pages"] or None,
         source_preset=settings["source_preset"],
         cache_pdfs=settings["cache_pdfs"],
         pdf_cache_dir=Path(settings["pdf_cache_dir"]) if settings.get("pdf_cache_dir") else None,
@@ -4064,6 +4199,7 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "openreview_invitations": split_form_list(fields.get("openreview_invitations", "")),
         "openreview_venue_profiles": split_form_list(fields.get("openreview_venue_profiles", "")),
         "venue_profiles": split_form_list(fields.get("venue_profiles", "")),
+        "official_accepted_pages": parse_official_accepted_page_lines(fields.get("official_accepted_pages", "")),
     }
     settings = apply_team_radar_source_preset(settings, settings.get("source_preset"))
     ensure_radar_sources_for_settings(settings)
@@ -4086,6 +4222,8 @@ def ensure_radar_sources_for_settings(settings: dict[str, Any]) -> None:
         selected_sources.append("openreview_venues")
     if settings["venue_profiles"] and "dblp_venues" not in selected_sources and "openalex_venues" not in selected_sources:
         selected_sources.append("dblp_venues")
+    if settings.get("official_accepted_pages") and "official_accepted_pages" not in selected_sources:
+        selected_sources.append("official_accepted_pages")
 
 
 def selected_radar_sources(fields: dict[str, str]) -> list[str]:
@@ -4165,6 +4303,10 @@ def split_form_list(value: str) -> list[str]:
         for part in re.split(r"[\n, ]+", value or "")
         if part.strip()
     ]
+
+
+def parse_official_accepted_page_lines(value: str) -> list[dict[str, Any]]:
+    return parse_official_accepted_page_specs([value])
 
 
 def required_field(fields: dict[str, str], name: str) -> str:
@@ -4315,6 +4457,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                         run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                        notice=notice,
                     )
                 )
             elif parsed.path == "/radar/brief.json":
@@ -4373,7 +4516,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/radar/import":
                 item_id = import_radar_recommendation_to_library(self.database, fields)
                 run_id = fields.get("run_id") or ""
-                self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(f'Added {item_id} to the library.')}")
+                notice = f"Added {item_id} to the library."
+                if fields.get("return_to") == "brief":
+                    self.redirect(radar_brief_path_from_fields(fields, notice=notice))
+                else:
+                    self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(notice)}")
             elif parsed.path == "/radar/papers/import":
                 item_id = import_radar_paper_to_library(self.database, fields)
                 notice = f"Added {item_id} to the library."
@@ -4402,6 +4549,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             review_filter=result.get("review_filter") or "all",
                         )
                     )
+                elif result.get("return_to") == "brief":
+                    self.redirect(radar_brief_path_from_fields(fields, notice=f"Marked radar paper as {status}."))
                 else:
                     run_id = result.get("run_id") or ""
                     suffix = f"?run={quote(run_id, safe='')}" if run_id else ""

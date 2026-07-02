@@ -272,6 +272,15 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "primary_role": "security_venue_accepted_papers",
         "mvp_collector": True,
     },
+    {
+        "id": "official_accepted_pages",
+        "name": "Configured official accepted-paper pages",
+        "access": "official_accepted_papers_page",
+        "source_class": "official_accepted_page",
+        "authoritative_metadata": True,
+        "primary_role": "configured_top_venue_accepted_papers",
+        "mvp_collector": True,
+    },
 ]
 
 RADAR_SOURCE_PRESETS: list[dict[str, Any]] = [
@@ -330,6 +339,7 @@ RADAR_SOURCE_REQUIRED_CONFIG: dict[str, list[tuple[str, str]]] = {
     "semantic_scholar_recommendations": [("seed_paper_ids", "Semantic Scholar positive seed paper ID")],
     "openalex_authors": [("openalex_author_ids", "OpenAlex author ID")],
     "openreview": [("openreview_invitations", "OpenReview invitation ID")],
+    "official_accepted_pages": [("official_accepted_pages", "official accepted-paper page")],
 }
 RADAR_SOURCE_RECOMMENDED_CONFIG: dict[str, list[tuple[str, str]]] = {
     "semantic_scholar": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
@@ -570,6 +580,7 @@ RADAR_SOURCE_LABELS: dict[str, str] = {
     "openreview_venues": "OpenReview Venues",
     "usenix_security": "USENIX Security",
     "ndss": "NDSS",
+    "official_accepted_pages": "Official Accepted Pages",
 }
 RADAR_REVIEW_FILTERS = ("all", "unreviewed", "watch", "dismissed")
 RADAR_ACTIVE_REVIEW_STATUSES = ("unreviewed", "watch")
@@ -4884,6 +4895,8 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
         "source_provenance": source_provenance,
         "source_provenance_text": source_provenance_report_text(source_provenance),
         "link": radar_brief_recommendation_link(recommendation),
+        "imported_item_id": recommendation.get("imported_item_id") or nested.get("imported_item_id") or "",
+        "import_result": recommendation.get("import_result") or nested.get("import_result") or {},
     }
 
 
