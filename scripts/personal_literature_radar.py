@@ -39,6 +39,7 @@ from shared.literature_radar import (
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
+    format_radar_triage_summary,
     openreview_venue_profile_selection_summary,
     radar_dblp_venue_profile_selection_summary,
     radar_history_review_status,
@@ -129,12 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--root-path", type=Path, default=ROOT)
     queue.add_argument("--limit", type=int, default=3)
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
+    queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     queue.add_argument("--json", action="store_true")
 
     status = subparsers.add_parser("status", help="show personal radar settings and latest queue health")
     status.add_argument("--root-path", type=Path, default=ROOT)
     status.add_argument("--queue-limit", type=int, default=20)
     status.add_argument("--freshness-max-age-hours", type=int, default=36)
+    status.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     status.add_argument("--source-preset", choices=[preset["id"] for preset in radar_source_presets()])
     status.add_argument("--source", action="append", choices=radar_supported_source_ids())
     status.add_argument("--max-results", type=int, default=25)
@@ -330,6 +333,7 @@ def build_personal_literature_radar_status_payload(args: argparse.Namespace) -> 
         args.root_path,
         limit=queue_limit,
         freshness_max_age_hours=args.freshness_max_age_hours,
+        triage_action=args.triage_action,
     )
     return {
         "success": True,
@@ -407,9 +411,11 @@ def print_status(result: dict[str, Any]) -> None:
             queue.get("papers") or [],
             review_counts=queue.get("review_counts") or {},
             review=str(queue.get("review") or ""),
+            triage_action=str(queue.get("triage_action") or ""),
             latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
             access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
             provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
+            triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
         )
 
 
@@ -513,6 +519,12 @@ def print_paper_history(
             f"review={record.get('review_status') or 'unreviewed'} | "
             f"latest={record.get('latest_seen_at')}{release_text}{latest_signal} | action={action} | {record.get('title')}"
         )
+        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+        if triage:
+            print(
+                f"  Triage: {triage.get('label') or triage.get('action') or 'Review'}"
+                f" - {triage.get('reason') or 'No triage reason recorded.'}"
+            )
         provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
         if provenance:
             print(f"  Source provenance: {source_provenance_report_text(provenance)}")
@@ -530,9 +542,11 @@ def print_personal_queue(
     *,
     review_counts: dict[str, int],
     review: str,
+    triage_action: str = "",
     latest_run: dict[str, Any] | None = None,
     access_summary: dict[str, Any] | None = None,
     provenance_summary: dict[str, Any] | None = None,
+    triage_summary: dict[str, Any] | None = None,
 ) -> None:
     print("Personal Literature Radar Queue")
     print(
@@ -597,10 +611,14 @@ def print_personal_queue(
         print(format_personal_queue_access_summary(access_summary))
     if provenance_summary:
         print(format_radar_source_provenance_summary(provenance_summary))
+    if triage_summary:
+        print(format_radar_triage_summary(triage_summary))
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
     print(f"Priority filter: {review}")
+    if triage_action:
+        print(f"Triage filter: {triage_action}")
     print_paper_history(records, review=review)
 
 
@@ -781,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
             args.root_path,
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
+            triage_action=args.triage_action,
         )
         if args.json:
             print_json(queue)
@@ -789,9 +808,11 @@ def main(argv: list[str] | None = None) -> int:
                 queue.get("papers") or [],
                 review_counts=queue.get("review_counts") or {},
                 review=str(queue.get("review") or ""),
+                triage_action=str(queue.get("triage_action") or ""),
                 latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
                 access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
                 provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
+                triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
             )
         return 0
 

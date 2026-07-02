@@ -186,6 +186,8 @@ class TeamResearchWebTest(unittest.TestCase):
                 discovered_at=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
             )
             recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["scoring"]["score"] = 90
+            recommendation["scoring"]["label"] = "highly_relevant"
             recommendation["summary"] = {
                 "short_summary": "A queued paper exposed through the JSON route.",
                 "relationship_to_interests": "Matches system security and memory safety.",
@@ -226,6 +228,11 @@ class TeamResearchWebTest(unittest.TestCase):
                     queue_payload = json.loads(response.read().decode("utf-8"))
                     queue_content_type = response.headers.get("Content-Type")
                     queue_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/queue.json?limit=1&triage_action=import",
+                    timeout=5,
+                ) as response:
+                    filtered_queue_payload = json.loads(response.read().decode("utf-8"))
                 with urlopen(
                     f"http://127.0.0.1:{port}/radar/queue?limit=1",
                     timeout=5,
@@ -274,6 +281,13 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
             self.assertEqual(queue_payload["access_summary"]["downloadable"], 1)
             self.assertEqual(queue_payload["access_summary"]["kinds"], {"arxiv_pdf": 1})
+            self.assertEqual(queue_payload["triage_summary"]["total"], 1)
+            self.assertEqual(queue_payload["triage_summary"]["top_action"], "import_to_library")
+            self.assertEqual(queue_payload["triage_action_options"][0]["label"], "Import")
+            self.assertEqual(queue_payload["triage_action_options"][0]["count"], 1)
+            self.assertEqual(filtered_queue_payload["triage_action"], "import_to_library")
+            self.assertEqual(filtered_queue_payload["links"]["json"], "/radar/queue.json?limit=1&triage_action=import_to_library")
+            self.assertEqual(filtered_queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(queue_payload["latest_run"]["id"], run["id"])
             self.assertEqual(queue_payload["latest_run"]["status"], "succeeded")
             self.assertEqual(queue_payload["latest_run"]["freshness"]["max_age_hours"], 12)
@@ -284,6 +298,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
             self.assertEqual(queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(queue_payload["papers"][0]["release_date"], "2026-06-27")
+            self.assertEqual(queue_payload["papers"][0]["triage_hint"]["action"], "import_to_library")
+            self.assertEqual(queue_payload["papers"][0]["triage_hint"]["label"], "Import")
             self.assertIn(
                 "Signal: A queued paper exposed through the JSON route.",
                 queue_payload["papers"][0]["signal_lines"],
@@ -298,6 +314,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Route Verified Radar Queue Paper", queue_html)
             self.assertIn("Pipeline: 10/10", queue_html)
             self.assertIn("OA: not applicable", queue_html)
+            self.assertIn("top: import_to_library", queue_html)
+            self.assertIn("triage_action=import_to_library", queue_html)
+            self.assertIn("Triage lanes:", queue_html)
+            self.assertIn(">Import 1</a>", queue_html)
+            self.assertIn("Triage: Import", queue_html)
+            self.assertIn("legally downloadable PDF", queue_html)
             self.assertIn('href="/radar/queue.json?limit=1">Queue JSON</a>', queue_html)
             self.assertIn('class="nav-item active" href="/radar/queue?limit=20">Queue</a>', queue_html)
             self.assertIn('name="reason" placeholder="Why watch this?"', queue_html)
@@ -315,6 +337,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["queue"]["review"], "unreviewed")
             self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
+            self.assertEqual(brief_payload["queue"]["triage_summary"]["top_action"], "import_to_library")
             self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
             self.assertEqual(brief_payload["queue"]["papers"][0]["release_date"], "2026-06-27")
             self.assertEqual(brief_payload["activity"], [])
@@ -496,6 +519,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Weekly Brief", html)
             self.assertIn("/radar/papers?limit=50", html)
             self.assertIn("Paper History", html)
+            self.assertIn("/radar/status.json?limit=20", html)
+            self.assertIn("Status JSON", html)
             self.assertIn("Radar Profile", html)
             self.assertIn("sources: arXiv, DBLP, Semantic Scholar +4 more", html)
             self.assertIn("max/source: 20", html)

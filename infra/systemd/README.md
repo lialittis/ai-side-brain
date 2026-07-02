@@ -120,7 +120,9 @@ policy/readiness. Set
 `RADAR_WRITE_SETTINGS=0` or
 `PERSONAL_RADAR_WRITE_SETTINGS=0` to skip settings snapshots; set
 `RADAR_WRITE_QUEUE=0` or `PERSONAL_RADAR_WRITE_QUEUE=0` to disable queue files;
-set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size.
+set `RADAR_QUEUE_LIMIT` or `PERSONAL_RADAR_QUEUE_LIMIT` to change queue size,
+and set `RADAR_QUEUE_TRIAGE_ACTION` or `PERSONAL_RADAR_QUEUE_TRIAGE_ACTION`
+to write one triage bucket such as `import`, `skim`, `compare`, or `watch`.
 Scheduled scripts also refresh stable `*-latest.*` copies for dashboards,
 aliases, or notification jobs. Set `RADAR_WRITE_LATEST=0` or
 `PERSONAL_RADAR_WRITE_LATEST=0` to keep only timestamped history.

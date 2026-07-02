@@ -29,6 +29,7 @@ from shared.literature_radar import (
     build_radar_review_queue,
     format_radar_context_summary,
     format_radar_source_provenance_summary,
+    normalize_radar_triage_action,
     openreview_venue_profile_selection_summary,
     paper_release_date,
     radar_dblp_venue_profile_selection_summary,
@@ -44,6 +45,7 @@ from shared.literature_radar import (
     radar_source_option_metadata,
     radar_source_options,
     radar_source_readiness_summary,
+    radar_triage_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
 from team.literature_radar import (
@@ -57,6 +59,7 @@ from team.literature_radar import (
     import_radar_recommendation,
     run_team_literature_radar,
     team_radar_collection_config,
+    team_radar_queue_link,
     team_radar_scoring_profile,
     team_radar_source_presets,
 )
@@ -923,16 +926,24 @@ def render_literature_radar_queue_page(
     database: TeamResearchDatabase,
     *,
     limit: int = 20,
+    triage_action: str = "",
     notice: str = "",
 ) -> str:
     selected_limit = max(1, int(limit))
-    payload = build_team_literature_radar_queue_payload(database, limit=selected_limit)
+    selected_triage_action = clean_triage_action(triage_action)
+    payload = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        triage_action=selected_triage_action,
+    )
     records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     selected_review = str(payload.get("review") or "all")
     latest_runs = database.list_literature_radar_runs(limit=1)
     latest_run = latest_runs[0] if latest_runs else None
     access_summary = payload.get("access_summary") if isinstance(payload.get("access_summary"), dict) else {}
+    triage_summary = payload.get("triage_summary") if isinstance(payload.get("triage_summary"), dict) else {}
+    triage_options = payload.get("triage_action_options") if isinstance(payload.get("triage_action_options"), list) else []
     body = f"""
     {render_topline("Radar Queue", "Daily review queue for stored Literature Radar candidates.", "/radar", "Run Radar")}
     {render_notice(notice)}
@@ -951,6 +962,9 @@ def render_literature_radar_queue_page(
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=50)}
       {render_radar_queue_access_summary_from_payload(access_summary)}
+      {render_radar_queue_triage_summary(triage_summary, limit=selected_limit)}
+      {render_radar_queue_triage_options(triage_options, limit=selected_limit)}
+      {render_radar_queue_filter_status(selected_triage_action, selected_limit)}
       {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="queue")}
       {render_empty_radar_queue(records, review_counts)}
     </section>
@@ -1156,8 +1170,10 @@ def build_literature_radar_status_payload(
     now: Any | None = None,
     freshness_max_age_hours: int = 36,
     use_saved_defaults: bool = True,
+    triage_action: str = "",
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
+    selected_triage_action = clean_triage_action(triage_action)
     settings_payload = build_literature_radar_settings_payload(
         database,
         settings=None if use_saved_defaults else default_radar_form_settings(),
@@ -1167,6 +1183,7 @@ def build_literature_radar_status_payload(
         limit=selected_limit,
         now=now,
         freshness_max_age_hours=freshness_max_age_hours,
+        triage_action=selected_triage_action,
     )
     return {
         "success": True,
@@ -1178,9 +1195,9 @@ def build_literature_radar_status_payload(
         "links": {
             "html": "/radar",
             "settings_json": "/radar/settings.json",
-            "queue_html": f"/radar/queue?limit={selected_limit}",
-            "queue_json": f"/radar/queue.json?limit={selected_limit}",
-            "status_json": f"/radar/status.json?limit={selected_limit}",
+            "queue_html": team_radar_queue_link("/radar/queue", selected_limit, selected_triage_action),
+            "queue_json": team_radar_queue_link("/radar/queue.json", selected_limit, selected_triage_action),
+            "status_json": team_radar_queue_link("/radar/status.json", selected_limit, selected_triage_action),
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
     }
@@ -1288,6 +1305,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
       <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
+      <a class="button" href="/radar/status.json?limit=20">Status JSON</a>
       <a class="button" href="/radar/activity.json?days=7&amp;limit=50">Activity JSON</a>
       <a class="button" href="/radar/settings.json">Settings JSON</a>
     </div>
@@ -1409,6 +1427,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
     access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
+    triage_summary = queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else {}
     activity = payload.get("activity") if isinstance(payload.get("activity"), list) else []
     latest_status = str(latest_run.get("status") or "unknown") if latest_run else "none"
     freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
@@ -1508,6 +1527,12 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">downloadable: {int(access_summary.get("downloadable") or 0)}</span>
         <span class="tag">metadata/link only: {int(access_summary.get("metadata_or_link_only") or 0)}</span>
         <span class="tag">cached: {int(access_summary.get("downloaded") or 0)}</span>
+      </div>
+      <div class="tags">
+        <span class="muted">Triage:</span>
+        <span class="tag">total: {int(triage_summary.get("total") or 0)}</span>
+        <span class="tag">top: {html_escape(str(triage_summary.get("top_action") or "none"))}</span>
+        <span class="tag">actions: {html_escape(format_status_counts_for_web(triage_summary.get("actions")))}</span>
       </div>
     </div>
     """
@@ -2730,6 +2755,7 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
       {render_radar_queue_access_summary(priority_records)}
+      {render_radar_queue_triage_summary(radar_triage_summary(priority_records), limit=20)}
       {render_latest_radar_queue_preview(priority_records, review_filter=selected_review, return_to="latest")}
     </section>
     """
@@ -2927,6 +2953,78 @@ def render_radar_queue_access_summary_from_payload(summary: dict[str, Any]) -> s
     """
 
 
+def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 20) -> str:
+    if int(summary.get("total") or 0) == 0:
+        return ""
+    actions = summary.get("actions") if isinstance(summary.get("actions"), dict) else {}
+    action_links = " ".join(
+        f'<a class="tag" href="/radar/queue?limit={max(1, int(limit))}&amp;triage_action={html_escape(str(action))}">'
+        f'{html_escape(str(action).replace("_", " "))}: {int(count)}</a>'
+        for action, count in sorted(actions.items())
+        if int(count or 0) > 0
+    )
+    severity = summary.get("severities") if isinstance(summary.get("severities"), dict) else {}
+    severity_text = ", ".join(
+        f"{key}: {int(count)}"
+        for key, count in sorted(severity.items())
+        if int(count or 0) > 0
+    )
+    return f"""
+    <div class="tags">
+      <span class="muted">Triage:</span>
+      <span class="pill">top: {html_escape(str(summary.get('top_action') or 'none'))}</span>
+      {action_links}
+      {f'<span class="tag">{html_escape(severity_text)}</span>' if severity_text else ''}
+    </div>
+    """
+
+
+def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20) -> str:
+    if not options:
+        return ""
+    chips = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        action = str(option.get("action") or "").strip()
+        label = str(option.get("label") or action).strip()
+        if not action or not label:
+            continue
+        count = int(option.get("count") or 0)
+        css = "tag active" if option.get("selected") else "tag"
+        title = html_escape(str(option.get("description") or ""))
+        chips.append(
+            f'<a class="{css}" href="/radar/queue?limit={max(1, int(limit))}&amp;triage_action={html_escape(action)}"'
+            f' title="{title}">{html_escape(label)} {count}</a>'
+        )
+    if not chips:
+        return ""
+    return f"""
+    <div class="tags">
+      <span class="muted">Triage lanes:</span>
+      {''.join(chips)}
+    </div>
+    """
+
+
+def render_radar_queue_filter_status(triage_action: str, limit: int) -> str:
+    selected = clean_triage_action(triage_action)
+    if not selected:
+        return ""
+    clear_link = f"/radar/queue?limit={max(1, int(limit))}"
+    return f"""
+    <div class="tags">
+      <span class="muted">Active filter:</span>
+      <span class="pill">triage: {html_escape(selected)}</span>
+      <a class="tag" href="{html_escape(clear_link)}">clear</a>
+    </div>
+    """
+
+
+def clean_triage_action(value: Any) -> str:
+    return normalize_radar_triage_action(value)
+
+
 def render_empty_radar_queue(records: list[dict[str, Any]], review_counts: dict[str, Any]) -> str:
     if records:
         return ""
@@ -2988,6 +3086,7 @@ def render_latest_radar_queue_item(
         {render_radar_source_provenance_pill(paper.get("source_provenance") or {})}
         {source_tags}
       </div>
+      {render_radar_triage_hint(record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {})}
       {render_radar_review_reason(review)}
       {render_radar_attention_summary(latest)}
       {render_radar_signal_lines(latest, include_attention=not bool(latest.get("attention_summary")))}
@@ -2997,6 +3096,24 @@ def render_latest_radar_queue_item(
         {review_controls}
       </div>
     </article>
+    """
+
+
+def render_radar_triage_hint(triage: dict[str, Any]) -> str:
+    if not triage:
+        return ""
+    label = normalize_inline_text(triage.get("label") or triage.get("action") or "Review")
+    reason = normalize_inline_text(triage.get("reason") or "")
+    if not label and not reason:
+        return ""
+    severity = str(triage.get("severity") or "normal")
+    css = "good" if severity == "good" else "warn" if severity in {"warning", "error"} else ""
+    reason_html = f'<span class="muted">{html_escape(reason)}</span>' if reason else ""
+    return f"""
+    <div class="tags radar-triage-hint">
+      <span class="pill {css}">Triage: {html_escape(label)}</span>
+      {reason_html}
+    </div>
     """
 
 
@@ -4042,6 +4159,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                     render_literature_radar_queue_page(
                         self.database,
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        triage_action=query.get("triage_action", [""])[0],
                         notice=notice,
                     )
                 )
@@ -4055,6 +4173,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             default=36,
                             maximum=24 * 30,
                         ),
+                        triage_action=clean_triage_action(query.get("triage_action", [""])[0]),
                     )
                 )
             elif parsed.path == "/radar/settings.json":
@@ -4069,6 +4188,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             default=36,
                             maximum=24 * 30,
                         ),
+                        triage_action=clean_triage_action(query.get("triage_action", [""])[0]),
                     )
                 )
             elif parsed.path == "/radar/brief":

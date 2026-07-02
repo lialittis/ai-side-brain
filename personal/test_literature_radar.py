@@ -657,6 +657,26 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_result["provenance_summary"]["authoritative"], 1)
             self.assertEqual(queue_result["provenance_summary"]["source_ids"], {"arxiv": 1})
+            self.assertEqual(queue_result["triage_summary"]["total"], 1)
+            self.assertIn(queue_result["triage_summary"]["top_action"], queue_result["triage_summary"]["actions"])
+            self.assertEqual(queue_result["triage_action_options"][0]["action"], "import_to_library")
+            self.assertIn("import", queue_result["triage_action_options"][0]["aliases"])
+            filtered_queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(filtered_queue_stdout):
+                filtered_queue_code = personal_literature_radar.main(
+                    [
+                        "queue",
+                        "--root-path",
+                        str(root),
+                        "--triage-action",
+                        "import" if queue_result["triage_summary"]["top_action"] == "import_to_library" else queue_result["triage_summary"]["top_action"],
+                        "--json",
+                    ]
+                )
+            self.assertEqual(filtered_queue_code, 0)
+            filtered_queue = json.loads(filtered_queue_stdout.getvalue())
+            self.assertEqual(filtered_queue["triage_action"], queue_result["triage_summary"]["top_action"])
+            self.assertEqual(filtered_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
             self.assertIn("freshness", queue_result["latest_run"])
             self.assertEqual(queue_result["latest_run"]["freshness"]["max_age_hours"], 72)
@@ -686,6 +706,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("literature-radar-runs.json", queue_result["paths"]["run_index"])
             self.assertEqual(queue_result["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertEqual(queue_result["papers"][0]["release_date"], "2026-06-25")
+            self.assertIn("triage_hint", queue_result["papers"][0])
+            self.assertIn("action", queue_result["papers"][0]["triage_hint"])
             self.assertIn("attention_summary", queue_result["papers"][0])
             self.assertIn("why_attention", queue_result["papers"][0]["attention_summary"])
             self.assertIn("Why:", "\n".join(queue_result["papers"][0]["signal_lines"]))
@@ -718,7 +740,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("kinds=arxiv_pdf=1", queue_text)
             self.assertIn("Source provenance: | total=1 | authoritative=1", queue_text)
             self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", queue_text)
+            self.assertIn("top=", queue_text)
             self.assertIn("action=queue_for_human_triage", queue_text)
+            self.assertIn("Triage:", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)

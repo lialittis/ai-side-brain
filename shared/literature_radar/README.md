@@ -124,10 +124,19 @@ The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
 unimported candidates are sorted by latest recommendation score. Queue records
-include persisted signal lines, promote the latest `attention_summary`, and
-expose normalized `release_date` directly on the queued paper record for
-dashboard and automation consumers. Personal and Team surfaces use this same
-queue logic.
+include persisted signal lines, promote the latest `attention_summary`, expose
+normalized `release_date`, and add a shared `triage_hint` that turns score,
+review state, PDF policy, and context into a reviewer-facing next step. Queue
+payloads also include `triage_summary` so scheduled snapshots can count import,
+skim, compare, dismiss, and follow-up work without opening every record.
+Adapters can pass `triage_action` to focus the active queue on one of those
+next-step buckets while keeping the same review-state priority rules. Friendly
+aliases such as `import`, `skim`, `compare`, or `watch` normalize to the stored
+action IDs.
+Queue payloads expose `triage_action_options` with labels, aliases,
+descriptions, selected state, and active counts so products can build filter
+controls without duplicating these lane definitions.
+Personal and Team surfaces use this same queue logic.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain
 uses this to rank Radar candidates with its editable weighted interests.

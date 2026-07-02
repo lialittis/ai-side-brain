@@ -55,6 +55,11 @@ http://127.0.0.1:8790/radar/settings.json
 http://127.0.0.1:8790/radar/status.json
 ```
 
+The Radar page links `Status JSON` directly. That combined payload is the
+operator-friendly health check: it includes saved source settings, pre-run
+readiness, latest queue state, and latest-run health without collecting sources,
+downloading PDFs, or calling AI.
+
 The page is review-first:
 
 1. scheduled or CLI radar runs collect and score metadata;
@@ -136,7 +141,8 @@ lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
 answer to "why should the team read this?" consistent across ad hoc runs, daily
 queue review, and weekly briefs. The queue also shows paper links, PDF
 policy/access-kind status, stored review notes, the stored recommended action,
-plus watch, dismiss, and add-to-library actions that return to the daily page.
+the shared triage hint, plus watch, dismiss, and add-to-library actions that
+return to the daily page.
 For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
 Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
@@ -153,9 +159,10 @@ The same active queue is available as local JSON at `/radar/queue.json?limit=20`
 for self-hosted scripts, dashboards, or future notifications. That endpoint only
 reads stored Radar state; it does not collect sources, download PDFs, or call AI.
 The payload includes `review_counts`, active-queue `access_summary`,
-`provenance_summary`,
+`provenance_summary`, `triage_summary`,
 `latest_run` health, freshness, and source stats, the active paper records,
-persisted signal lines, and links back to the HTML review surfaces.
+persisted signal lines, `triage_hint` reviewer guidance, and links back to the
+HTML review surfaces.
 Completed runs also store a recommendation-level `provenance_summary`, exposed
 again under `latest_run.provenance_summary` for dashboards and health checks.
 Stored daily or weekly briefs are also available as local JSON at
@@ -440,7 +447,12 @@ shape with review counts, latest-run health/freshness/source stats, compact
 source coverage status, `source_policy` authoritative/trend-signal counts, a
 `health_action` next step, persisted signal lines, top-level
 `attention_summary` records for queued papers, active-queue PDF access summary,
-paper records, and links back to the HTML review surfaces.
+paper records, self-describing `triage_action_options`, and links back to the
+HTML review surfaces.
+Use `--triage-action import` or `/radar/queue?triage_action=import` to filter
+the active queue to a specific reviewer next-step bucket; friendly aliases such
+as `import`, `skim`, `compare`, and `watch` normalize to the stored action IDs.
+The same parameter works on `/radar/queue.json`.
 `/radar/activity.json?days=7&limit=50` and
 `python team/research_cli.py radar-activity --json` return the same recent
 watch, dismiss, clear, add-to-library, comment, relevance-edit, and
@@ -539,7 +551,8 @@ enrichment readiness, `access_summary`, `provenance_summary`, plus per-paper
 `literature-radar-settings-latest.json`, `literature-radar-settings-latest.txt`,
 and `literature-radar-queue-latest.*` files are refreshed when latest-copy
 output is enabled. Use `RADAR_QUEUE_LIMIT` to change how many active queue
-papers are included.
+papers are included, and `RADAR_QUEUE_TRIAGE_ACTION=import` to write only one
+triage bucket to scheduled queue snapshots.
 The run script and brief script also write text and JSON
 `literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
 snapshots use the same activity payload as `radar-activity --json` and show
@@ -607,12 +620,16 @@ It reads `.env` first and supports these optional variables:
   `team/logs`.
 - `RADAR_STATUS_QUEUE_LIMIT`: active queue size for status snapshots; defaults
   to `RADAR_QUEUE_LIMIT` or `20`.
+- `RADAR_STATUS_QUEUE_TRIAGE_ACTION`: active queue triage-action filter for
+  status snapshots; defaults to `RADAR_QUEUE_TRIAGE_ACTION` when set.
 - `RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS`: freshness threshold for status queue
   health; defaults to `RADAR_FRESHNESS_MAX_AGE_HOURS` or `36`.
 - `RADAR_STATUS_USE_SAVED_DEFAULTS=0`: make the status settings preflight ignore
   saved `/radar` defaults.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
+- `RADAR_QUEUE_TRIAGE_ACTION`: optional scheduled queue triage-action filter,
+  using aliases such as `import`, `skim`, `compare`, or `watch`.
 - `RADAR_ACTIVITY_DAYS`: activity history window; default `7`.
 - `RADAR_ACTIVITY_LIMIT`: maximum activity events in scheduled snapshots;
   default `50`.

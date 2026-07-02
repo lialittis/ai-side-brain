@@ -147,11 +147,13 @@ preview with PDF access summary, recent activity, index paths, and the generated
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes, and
+`PERSONAL_RADAR_QUEUE_TRIAGE_ACTION=import` to write only one triage bucket.
 `PERSONAL_RADAR_ACTIVITY_DAYS` / `PERSONAL_RADAR_ACTIVITY_LIMIT` to change the
 activity snapshot window and size. Use
 `PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
 threshold for queue and brief snapshots. The status script also supports
 `PERSONAL_RADAR_STATUS_OUTPUT_DIR`, `PERSONAL_RADAR_STATUS_QUEUE_LIMIT`, and
+`PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION`, and
 `PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status-only snapshots. Use
 `PERSONAL_RADAR_WRITE_SETTINGS=0`
 to skip preflight snapshots, and `PERSONAL_RADAR_WRITE_ACTIVITY=0` to skip
@@ -201,11 +203,20 @@ queue by latest recommendation score, and excludes dismissed or already-moved
 papers from the priority list. The text queue includes the PDF access summary
 release date, and stored signal lines for why each paper is relevant, how it
 relates to existing context, and which interests matched; the JSON queue
-includes the same lines under `signal_lines` and normalized `release_date`
-directly on queued paper records. The JSON queue also includes `access_summary`, which counts downloadable,
+includes the same lines under `signal_lines`, normalized `release_date`, and a
+shared `triage_hint` with the suggested reviewer next step directly on queued
+paper records. The JSON queue also includes `access_summary`, which counts downloadable,
 cached, metadata/link-only, and access-kind buckets for the active queue, plus
 `provenance_summary`, which counts authoritative/secondary source provenance,
-source classes, source IDs, and records with source/PDF URLs. Completed run
+source classes, source IDs, and records with source/PDF URLs, and
+`triage_summary`, which counts the active reviewer next-step categories.
+The same JSON includes `triage_action_options` with labels, aliases, selected
+state, and counts for local dashboards or shell aliases.
+Use `queue --triage-action import` to focus the active queue on one reviewer
+next-step bucket while keeping the same review-state priority rules. Friendly
+aliases such as `import`, `skim`, `compare`, and `watch` normalize to stored
+action IDs.
+Completed run
 records also store the recommendation-level provenance summary, and
 `latest_run.provenance_summary` exposes it for daily health checks. Both
 text and JSON queue output include latest-run health/freshness, source-error

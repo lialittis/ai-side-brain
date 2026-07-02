@@ -59,6 +59,8 @@ from shared.literature_radar import (
     radar_pdf_access_summary,
     radar_pipeline_trace_summary,
     radar_source_provenance_summary,
+    radar_triage_action_options,
+    radar_triage_summary,
     radar_latest_signal_lines,
     paper_source_provenance,
     paper_release_date,
@@ -459,6 +461,7 @@ def build_team_literature_radar_queue_payload(
     limit: int = 3,
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
+    triage_action: str = "",
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     counts = database.literature_radar_paper_review_counts()
@@ -468,15 +471,20 @@ def build_team_literature_radar_queue_payload(
         database.list_literature_radar_papers(limit=None),
         limit=selected_limit,
         review_counts=counts,
+        triage_action=triage_action,
     )
     queue_papers = queue.get("papers") or []
+    triage_summary = radar_triage_summary(queue_papers)
     return {
         "success": True,
         "kind": "team_literature_radar_queue",
         "review": queue.get("review") or "",
+        "triage_action": queue.get("triage_action") or "",
         "review_counts": queue.get("review_counts") or counts,
         "access_summary": radar_pdf_access_summary(queue_papers),
         "provenance_summary": radar_source_provenance_summary(queue_papers),
+        "triage_summary": triage_summary,
+        "triage_action_options": radar_triage_action_options(queue.get("triage_action") or "", triage_summary),
         "limit": selected_limit,
         "latest_run": team_literature_radar_run_summary(
             latest_run,
@@ -487,12 +495,19 @@ def build_team_literature_radar_queue_payload(
         "links": {
             "latest_papers": "/",
             "radar": "/radar",
-            "html": f"/radar/queue?limit={selected_limit}",
-            "json": f"/radar/queue.json?limit={selected_limit}",
+            "html": team_radar_queue_link("/radar/queue", selected_limit, queue.get("triage_action") or ""),
+            "json": team_radar_queue_link("/radar/queue.json", selected_limit, queue.get("triage_action") or ""),
             "radar_papers": f"/radar/papers?limit={selected_limit}",
             "weekly_brief": "/radar/brief?days=7&limit=20",
         },
     }
+
+
+def team_radar_queue_link(path: str, limit: int, triage_action: str = "") -> str:
+    suffix = f"?limit={max(1, int(limit))}"
+    if triage_action:
+        suffix += f"&triage_action={triage_action}"
+    return path + suffix
 
 
 def build_team_literature_radar_brief_payload(
@@ -583,6 +598,7 @@ def build_team_literature_radar_brief_payload(
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
             "provenance_summary": radar_source_provenance_summary(queue_papers),
+            "triage_summary": radar_triage_summary(queue_papers),
             "papers": queue_papers,
         },
         "activity": activity,

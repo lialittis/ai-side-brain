@@ -44,6 +44,7 @@ from shared.literature_radar import (
     format_radar_source_stats,
     merge_duplicate_papers,
     mvp_source_ids,
+    normalize_radar_triage_action,
     paper_release_date,
     paper_source_provenance,
     pdf_access_report_text,
@@ -76,6 +77,8 @@ from shared.literature_radar import (
     radar_source_options,
     radar_supported_source_ids,
     radar_text_discussion_terms,
+    radar_triage_action_options,
+    radar_triage_summary,
     radar_trend_signal_options,
     openreview_venue_profile_selection_summary,
     recommend_papers,
@@ -673,20 +676,23 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             {
                 "title": "Watched High Score",
                 "review_status": "watch",
+                "review_reason": "Track for the allocator project.",
                 "latest_seen_at": "2026-07-01T12:00:00+00:00",
                 "latest_recommendation": {"score": 100, "review": {"status": "unreviewed"}},
             },
             {
                 "title": "Unreviewed Low Score",
                 "latest_seen_at": "2026-07-01T13:00:00+00:00",
-                "latest_recommendation": {"score": 10},
+                "latest_recommendation": {"score": 10, "label": "low_relevance"},
             },
             {
                 "title": "Unreviewed High Score",
                 "paper": {"release_date": "2026-06-26"},
                 "latest_seen_at": "2026-07-01T11:00:00+00:00",
+                "pdf_access": {"access_kind": "arxiv_pdf", "can_download": True},
                 "latest_recommendation": {
                     "score": 90,
+                    "label": "highly_relevant",
                     "summary": {"short_summary": "High priority radar candidate."},
                     "why_relevant": "Matches memory safety.",
                     "matched_positive_keywords": ["memory safety"],
@@ -734,14 +740,47 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             queue["papers"][0]["attention_summary"]["why_attention"],
             "Prioritize for memory-safety review.",
         )
+        self.assertEqual(queue["papers"][0]["triage_hint"]["action"], "import_to_library")
+        self.assertEqual(queue["papers"][0]["triage_hint"]["label"], "Import")
+        self.assertIn("legally downloadable PDF", queue["papers"][0]["triage_hint"]["reason"])
+        self.assertEqual(
+            radar_triage_summary(queue["papers"]),
+            {
+                "total": 2,
+                "actions": {"import_to_library": 1, "dismiss_or_watch": 1},
+                "labels": {"Dismiss or watch": 1, "Import": 1},
+                "severities": {"good": 1, "low": 1},
+                "top_action": "dismiss_or_watch",
+            },
+        )
+        import_queue = build_radar_review_queue(records, limit=3, triage_action="import_to_library")
+        self.assertEqual(import_queue["review"], "unreviewed")
+        self.assertEqual(import_queue["triage_action"], "import_to_library")
+        self.assertEqual([record["title"] for record in import_queue["papers"]], ["Unreviewed High Score"])
+        friendly_import_queue = build_radar_review_queue(records, limit=3, triage_action="Import")
+        self.assertEqual(friendly_import_queue["triage_action"], "import_to_library")
+        self.assertEqual([record["title"] for record in friendly_import_queue["papers"]], ["Unreviewed High Score"])
+        self.assertEqual(normalize_radar_triage_action("add to library"), "import_to_library")
+        self.assertEqual(normalize_radar_triage_action("skim"), "skim_metadata")
+        options = radar_triage_action_options("import", radar_triage_summary(queue["papers"]))
+        self.assertEqual(options[0]["action"], "import_to_library")
+        self.assertTrue(options[0]["selected"])
+        self.assertEqual(options[0]["count"], 1)
+        self.assertEqual(options[0]["aliases"][0], "import")
+        empty_queue = build_radar_review_queue(records, limit=3, triage_action="compare_with_existing_work")
+        self.assertEqual(empty_queue["triage_action"], "compare_with_existing_work")
+        self.assertEqual(empty_queue["papers"], [])
         self.assertEqual(queue["papers"][0]["release_date"], "2026-06-26")
         self.assertNotIn("signal_lines", records[2])
         self.assertNotIn("attention_summary", records[2])
         self.assertNotIn("release_date", records[2])
+        self.assertNotIn("triage_hint", records[2])
 
         watch_queue = build_radar_review_queue([records[0], records[3]], limit=3)
         self.assertEqual(watch_queue["review"], "watch")
         self.assertEqual([record["title"] for record in watch_queue["papers"]], ["Watched High Score"])
+        self.assertEqual(watch_queue["papers"][0]["triage_hint"]["action"], "follow_up_watch")
+        self.assertIn("allocator project", watch_queue["papers"][0]["triage_hint"]["reason"])
         self.assertEqual(radar_review_counts(records)["dismissed"], 1)
 
     def test_summarizes_pdf_access_for_radar_history_records(self) -> None:

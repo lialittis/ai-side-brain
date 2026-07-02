@@ -29,6 +29,76 @@ RADAR_PIPELINE_PHASES = [
     "recommendation_report",
 ]
 
+RADAR_TRIAGE_ACTION_ALIASES = {
+    "already_imported": "already_imported",
+    "import": "import_to_library",
+    "import_to_library": "import_to_library",
+    "library": "import_to_library",
+    "add_to_library": "import_to_library",
+    "review_import": "review_then_import",
+    "review_then_import": "review_then_import",
+    "compare": "compare_with_existing_work",
+    "compare_with_existing_work": "compare_with_existing_work",
+    "existing_work": "compare_with_existing_work",
+    "skim": "skim_metadata",
+    "skim_metadata": "skim_metadata",
+    "metadata": "skim_metadata",
+    "dismiss": "dismiss_or_watch",
+    "dismiss_or_watch": "dismiss_or_watch",
+    "watch": "follow_up_watch",
+    "follow_up": "follow_up_watch",
+    "follow_up_watch": "follow_up_watch",
+    "human_review": "human_triage",
+    "human_triage": "human_triage",
+    "triage": "human_triage",
+    "keep_dismissed": "keep_dismissed",
+}
+
+RADAR_TRIAGE_ACTION_OPTIONS = [
+    {
+        "action": "import_to_library",
+        "label": "Import",
+        "aliases": ["import", "library", "add to library"],
+        "description": "High-relevance candidates ready for library import.",
+    },
+    {
+        "action": "review_then_import",
+        "label": "Review import",
+        "aliases": ["review import"],
+        "description": "High-relevance candidates needing metadata or PDF-policy review before import.",
+    },
+    {
+        "action": "compare_with_existing_work",
+        "label": "Compare",
+        "aliases": ["compare", "existing work"],
+        "description": "Candidates linked to existing work that should be compared before action.",
+    },
+    {
+        "action": "skim_metadata",
+        "label": "Skim",
+        "aliases": ["skim", "metadata"],
+        "description": "Possibly relevant candidates worth a quick abstract and provenance skim.",
+    },
+    {
+        "action": "follow_up_watch",
+        "label": "Follow up",
+        "aliases": ["watch", "follow up"],
+        "description": "Watched candidates that need follow-up.",
+    },
+    {
+        "action": "dismiss_or_watch",
+        "label": "Dismiss or watch",
+        "aliases": ["dismiss"],
+        "description": "Low-relevance candidates to dismiss unless strategically useful.",
+    },
+    {
+        "action": "human_triage",
+        "label": "Triage",
+        "aliases": ["triage", "human review"],
+        "description": "Ambiguous candidates requiring human judgement.",
+    },
+]
+
 SOURCE_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "arxiv",
@@ -4816,6 +4886,85 @@ def radar_pdf_access_summary(records: list[dict[str, Any]] | dict[str, dict[str,
     return summary
 
 
+def radar_triage_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    summary: dict[str, Any] = {
+        "total": 0,
+        "actions": {},
+        "labels": {},
+        "severities": {},
+        "top_action": "",
+    }
+    for record in values:
+        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+        if not triage:
+            triage = radar_review_triage_hint(record)
+        action = str(triage.get("action") or "").strip()
+        if not action:
+            continue
+        label = str(triage.get("label") or action).strip() or action
+        severity = str(triage.get("severity") or "normal").strip() or "normal"
+        summary["total"] += 1
+        summary["actions"][action] = int(summary["actions"].get(action, 0)) + 1
+        summary["labels"][label] = int(summary["labels"].get(label, 0)) + 1
+        summary["severities"][severity] = int(summary["severities"].get(severity, 0)) + 1
+    summary["actions"] = dict(sorted(summary["actions"].items()))
+    summary["labels"] = dict(sorted(summary["labels"].items()))
+    summary["severities"] = dict(sorted(summary["severities"].items()))
+    if summary["actions"]:
+        summary["top_action"] = sorted(
+            summary["actions"].items(),
+            key=lambda item: (-int(item[1]), str(item[0])),
+        )[0][0]
+    return summary
+
+
+def normalize_radar_triage_action(value: Any) -> str:
+    selected = normalize_selector(value)
+    return RADAR_TRIAGE_ACTION_ALIASES.get(selected, selected)
+
+
+def radar_triage_action_options(
+    selected: str = "",
+    summary: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    selected_action = normalize_radar_triage_action(selected)
+    action_counts = summary.get("actions") if isinstance(summary, dict) and isinstance(summary.get("actions"), dict) else {}
+    return [
+        {
+            **option,
+            "selected": option["action"] == selected_action,
+            "count": int(action_counts.get(option["action"]) or 0),
+        }
+        for option in RADAR_TRIAGE_ACTION_OPTIONS
+    ]
+
+
+def format_radar_triage_summary(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    action_text = ", ".join(
+        f"{action}={int(count)}"
+        for action, count in sorted((summary.get("actions") or {}).items())
+        if int(count or 0) > 0
+    )
+    severity_text = ", ".join(
+        f"{severity}={int(count)}"
+        for severity, count in sorted((summary.get("severities") or {}).items())
+        if int(count or 0) > 0
+    )
+    parts = [
+        "Triage:",
+        f"total={int(summary.get('total') or 0)}",
+        f"top={summary.get('top_action') or 'none'}",
+    ]
+    if action_text:
+        parts.append(f"actions={action_text}")
+    if severity_text:
+        parts.append(f"severity={severity_text}")
+    return " | ".join(parts)
+
+
 def radar_source_provenance_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
     values = list(records.values()) if isinstance(records, dict) else list(records)
     summary: dict[str, Any] = {
@@ -4913,10 +5062,12 @@ def build_radar_review_queue(
     *,
     limit: int = 3,
     review_counts: dict[str, int] | None = None,
+    triage_action: str = "",
 ) -> dict[str, Any]:
     values = list(records.values()) if isinstance(records, dict) else list(records)
     counts = review_counts or radar_review_counts(values)
     selected_review = radar_queue_priority_review_status(values)
+    selected_triage_action = normalize_radar_triage_action(triage_action)
     active_records = [
         record
         for record in values
@@ -4924,12 +5075,19 @@ def build_radar_review_queue(
         and radar_history_review_status(record) == selected_review
         and not radar_history_is_imported(record)
     ]
+    if selected_triage_action:
+        active_records = [
+            record
+            for record in active_records
+            if radar_review_triage_hint(record).get("action") == selected_triage_action
+        ]
     queued_papers = [
         radar_history_record_with_signal_lines(record)
         for record in sorted(active_records, key=radar_history_priority_key, reverse=True)[: max(0, int(limit))]
     ]
     return {
         "review": selected_review,
+        "triage_action": selected_triage_action,
         "review_counts": counts,
         "papers": queued_papers,
     }
@@ -4938,6 +5096,7 @@ def build_radar_review_queue(
 def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(record)
     enriched["signal_lines"] = radar_latest_signal_lines(record)
+    enriched["triage_hint"] = radar_review_triage_hint(record)
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
     release_date = paper_release_date(paper)
     if release_date:
@@ -4947,6 +5106,55 @@ def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, 
     if attention:
         enriched["attention_summary"] = dict(attention)
     return enriched
+
+
+def radar_review_triage_hint(record: dict[str, Any]) -> dict[str, Any]:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    review_status = radar_history_review_status(record)
+    pdf_access = record.get("pdf_access") if isinstance(record.get("pdf_access"), dict) else {}
+    if not pdf_access and isinstance(latest.get("pdf_access"), dict):
+        pdf_access = latest["pdf_access"]
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    related_items = context.get("related_items") if isinstance(context.get("related_items"), list) else []
+    scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    try:
+        score = float(latest.get("score") if latest.get("score") is not None else scoring.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    label = normalize_spaces(latest.get("label") or scoring.get("label") or "needs_review").lower()
+    machine_action = normalize_spaces(latest.get("recommended_action") or "human_review") or "human_review"
+    title = normalize_spaces(record.get("title") or paper.get("title") or "this paper")
+    review_reason = normalize_spaces(record.get("review_reason") or "")
+    if not review_reason and isinstance(record.get("review"), dict):
+        review_reason = normalize_spaces(record["review"].get("reason") or "")
+
+    def hint(action: str, label_text: str, reason: str, severity: str = "normal") -> dict[str, Any]:
+        return {
+            "action": action,
+            "label": label_text,
+            "reason": truncate_text(normalize_spaces(reason), 280),
+            "severity": severity,
+            "machine_action": machine_action,
+        }
+
+    if radar_history_is_imported(record):
+        return hint("already_imported", "Already in library", "This candidate has already been imported.", "good")
+    if review_status == "dismissed":
+        return hint("keep_dismissed", "Keep dismissed", review_reason or "A reviewer dismissed this candidate.", "low")
+    if review_status == "watch":
+        return hint("follow_up_watch", "Follow up", review_reason or "A reviewer marked this candidate for follow-up.")
+    if label == "highly_relevant" or score >= 75:
+        if pdf_access.get("can_download"):
+            return hint("import_to_library", "Import", f"{title} is high relevance and has a legally downloadable PDF.", "good")
+        return hint("review_then_import", "Review import", f"{title} is high relevance; check metadata and PDF policy before import.", "good")
+    if related_items:
+        return hint("compare_with_existing_work", "Compare", f"Linked to {len(related_items)} existing context item(s); review the relationship before import.")
+    if label == "possibly_relevant" or score >= 45:
+        return hint("skim_metadata", "Skim", f"Possibly relevant candidate with score {int(score)}; skim abstract, links, and source provenance.")
+    if label == "low_relevance":
+        return hint("dismiss_or_watch", "Dismiss or watch", "Low relevance by current scoring; dismiss unless a reviewer sees strategic value.", "low")
+    return hint("human_triage", "Triage", "Metadata is ambiguous, so a reviewer should decide whether to watch, dismiss, or import.")
 
 
 def radar_queue_priority_review_status(records: list[dict[str, Any]]) -> str:

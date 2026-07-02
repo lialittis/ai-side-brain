@@ -24,6 +24,7 @@ from shared.literature_radar import (
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
+    format_radar_triage_summary,
     radar_latest_signal_lines,
     radar_supported_source_ids,
     source_provenance_report_text,
@@ -223,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_db_args(radar_queue)
     radar_queue.add_argument("--limit", type=int, default=3)
     radar_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
+    radar_queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_status = subparsers.add_parser(
@@ -232,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_db_args(radar_status)
     radar_status.add_argument("--limit", type=int, default=20)
     radar_status.add_argument("--freshness-max-age-hours", type=int, default=36)
+    radar_status.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     radar_status.add_argument(
         "--ignore-saved-defaults",
         action="store_true",
@@ -543,6 +546,12 @@ def print_radar_papers(
             f"latest={record.get('latest_seen_at')}{release_text} | sources={', '.join(record.get('source_ids') or [])} | "
             f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
+        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+        if triage:
+            print(
+                f"  Triage: {triage.get('label') or triage.get('action') or 'Review'}"
+                f" - {triage.get('reason') or 'No triage reason recorded.'}"
+            )
         provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
         if provenance:
             print(f"  Source provenance: {source_provenance_report_text(provenance)}")
@@ -622,11 +631,16 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     provenance_summary = result.get("provenance_summary") if isinstance(result.get("provenance_summary"), dict) else {}
     if provenance_summary:
         print(format_radar_source_provenance_summary(provenance_summary))
+    triage_summary = result.get("triage_summary") if isinstance(result.get("triage_summary"), dict) else {}
+    if triage_summary:
+        print(format_radar_triage_summary(triage_summary))
     review = str(result.get("review") or "")
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
     print(f"Priority filter: {review}")
+    if result.get("triage_action"):
+        print(f"Triage filter: {result.get('triage_action')}")
     print_radar_papers(result.get("papers") or [], review=review)
 
 
@@ -1091,6 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
             database,
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
+            triage_action=args.triage_action,
         )
         if args.json:
             print_json(result)
@@ -1104,6 +1119,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             use_saved_defaults=not args.ignore_saved_defaults,
+            triage_action=args.triage_action,
         )
         if args.json:
             print_json(result)

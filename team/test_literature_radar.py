@@ -1472,6 +1472,26 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(queue_result["provenance_summary"]["authoritative"], 1)
             self.assertEqual(queue_result["provenance_summary"]["source_ids"], {"arxiv": 1})
+            self.assertEqual(queue_result["triage_summary"]["total"], 1)
+            self.assertIn(queue_result["triage_summary"]["top_action"], queue_result["triage_summary"]["actions"])
+            self.assertEqual(queue_result["triage_action_options"][0]["action"], "import_to_library")
+            self.assertIn("import", queue_result["triage_action_options"][0]["aliases"])
+            filtered_queue_stdout = io.StringIO()
+            with contextlib.redirect_stdout(filtered_queue_stdout):
+                filtered_queue_code = research_cli.main(
+                    [
+                        "radar-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--triage-action",
+                        "import" if queue_result["triage_summary"]["top_action"] == "import_to_library" else queue_result["triage_summary"]["top_action"],
+                        "--json",
+                    ]
+                )
+            self.assertEqual(filtered_queue_code, 0)
+            filtered_queue = json.loads(filtered_queue_stdout.getvalue())
+            self.assertEqual(filtered_queue["triage_action"], queue_result["triage_summary"]["top_action"])
+            self.assertEqual(filtered_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             self.assertEqual(queue_result["latest_run"]["id"], result["run_id"])
             self.assertEqual(queue_result["latest_run"]["status"], "succeeded")
             self.assertIn("freshness", queue_result["latest_run"])
@@ -1535,7 +1555,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Source provenance: | total=1 | authoritative=1", queue_text)
             self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", queue_text)
             self.assertIn("released=2026-06-24", queue_text)
+            self.assertIn("top=", queue_text)
             self.assertIn("action=read_and_summarize_open_access_pdf", queue_text)
+            self.assertIn("Triage:", queue_text)
             self.assertIn("Why:", queue_text)
             self.assertIn("Context:", queue_text)
             self.assertIn("Matched:", queue_text)
