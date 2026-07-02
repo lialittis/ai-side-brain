@@ -55,6 +55,7 @@ python scripts/personal_literature_radar.py settings
 python scripts/personal_literature_radar.py settings --json
 python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py queue
+python scripts/personal_literature_radar.py inbox-queue --limit 20 --min-score 35
 python scripts/personal_literature_radar.py status --json
 python scripts/personal_literature_radar.py activity --days 7
 python scripts/personal_literature_radar.py activity --days 7 --json
@@ -106,11 +107,18 @@ The intended daily Personal Radar loop is:
    setup work rather than paper-review work.
 3. Run or enable `scripts/run_personal_literature_radar_cycle.sh`. It collects
    candidates, writes stable latest snapshots, and builds the stored brief from
-   local run history.
+   local run history. If `PERSONAL_RADAR_CYCLE_INBOX_QUEUE=1`, it also promotes
+   the active queue into `memory/00_Inbox/` after collection and before the
+   brief, writing `personal-literature-radar-inbox-queue-latest.*` snapshots.
 4. Use `python scripts/personal_literature_radar.py queue` for the active daily
    review list, or `python scripts/personal_literature_radar.py brief --days 7`
    for a weekly-style roll-up.
-5. If the queue is empty or stale, inspect
+5. Promote papers you actually want to work on with
+   `python scripts/personal_literature_radar.py inbox-queue --limit 20 --min-score 35`.
+   This writes Markdown notes to `memory/00_Inbox/` and marks those Radar
+   records as moved, but still avoids editing long-term project or decision
+   notes.
+6. If the queue is empty or stale, inspect
    `personal-literature-radar-status-latest.txt` or
    `personal-literature-radar-status-latest.json` first. The status payload
    separates source readiness, latest-run freshness, source errors, OA/PDF
@@ -250,6 +258,16 @@ next-step bucket while keeping the same review-state priority rules. Friendly
 aliases such as `import`, `skim`, `compare`, and `watch` normalize to stored
 action IDs. The text queue/status output prints those triage lanes too, so
 scheduled snapshots remain usable without inspecting JSON.
+Use `inbox-queue --limit 20 --min-score 35` after review to promote the visible
+active queue into `memory/00_Inbox/`. The generated inbox note includes the
+Radar signal lines, source links, identifiers, legal PDF-access decision, and
+abstract. Promoted records keep their `imported_item_id` as the inbox path, so
+future active queues skip them while history and briefs still retain provenance.
+For fully automated personal intake, set `PERSONAL_RADAR_CYCLE_INBOX_QUEUE=1`
+and tune `PERSONAL_RADAR_INBOX_QUEUE_MIN_SCORE`,
+`PERSONAL_RADAR_INBOX_QUEUE_LIMIT`, `PERSONAL_RADAR_INBOX_QUEUE_TRIAGE_ACTION`,
+and `PERSONAL_RADAR_INBOX_QUEUE_ACTOR`. This remains an inbox-only workflow; it
+does not edit long-term project or decision notes.
 Completed run
 records also store the recommendation-level provenance summary, and
 `latest_run.provenance_summary` exposes it for daily health checks. Both

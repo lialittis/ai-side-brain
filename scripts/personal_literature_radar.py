@@ -23,6 +23,7 @@ from personal.literature_radar import (
     ensure_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
     personal_radar_collection_config,
+    promote_personal_literature_radar_queue_to_inbox,
     personal_radar_scoring_profile,
     read_personal_radar_index,
     read_personal_radar_paper_history,
@@ -141,6 +142,17 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     queue.add_argument("--json", action="store_true")
+
+    inbox_queue = subparsers.add_parser(
+        "inbox-queue",
+        help="promote active personal radar queue papers into memory/00_Inbox",
+    )
+    inbox_queue.add_argument("--root-path", type=Path, default=ROOT)
+    inbox_queue.add_argument("--limit", type=int, default=20)
+    inbox_queue.add_argument("--triage-action", default="", help="only promote queued papers with this triage action")
+    inbox_queue.add_argument("--min-score", type=int, default=35, help="minimum score required before promotion")
+    inbox_queue.add_argument("--actor", default="personal")
+    inbox_queue.add_argument("--json", action="store_true")
 
     status = subparsers.add_parser("status", help="show personal radar settings and latest queue health")
     status.add_argument("--root-path", type=Path, default=ROOT)
@@ -655,6 +667,27 @@ def print_personal_queue(
     print_paper_history(records, review=review)
 
 
+def print_inbox_queue_result(result: dict[str, Any]) -> None:
+    print(
+        "Personal Literature Radar inbox promotion: "
+        f"promoted={int(result.get('promoted_count') or 0)} "
+        f"queued={int(result.get('queued_count') or 0)} "
+        f"min_score={int(result.get('min_score') or 0)}"
+    )
+    if result.get("triage_action"):
+        print(f"Triage filter: {result['triage_action']}")
+    skipped = []
+    if int(result.get("skipped_low_score") or 0):
+        skipped.append(f"low_score={int(result.get('skipped_low_score') or 0)}")
+    if int(result.get("skipped_existing") or 0):
+        skipped.append(f"existing={int(result.get('skipped_existing') or 0)}")
+    if skipped:
+        print("Skipped: " + ", ".join(skipped))
+    for record in result.get("promoted") if isinstance(result.get("promoted"), list) else []:
+        if isinstance(record, dict):
+            print(f"- {record.get('status') or 'inboxed'} | {record.get('inbox_path') or 'unknown path'}")
+
+
 def format_personal_queue_latest_run(run: dict[str, Any]) -> str:
     freshness = run.get("freshness") if isinstance(run.get("freshness"), dict) else {}
     parts = [
@@ -849,6 +882,20 @@ def main(argv: list[str] | None = None) -> int:
                 triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
                 triage_options=queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else None,
             )
+        return 0
+
+    if args.command == "inbox-queue":
+        result = promote_personal_literature_radar_queue_to_inbox(
+            args.root_path,
+            limit=args.limit,
+            triage_action=args.triage_action,
+            min_score=args.min_score,
+            actor=args.actor,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print_inbox_queue_result(result)
         return 0
 
     if args.command == "activity":

@@ -1707,6 +1707,123 @@ def import_radar_recommendation(
     }
 
 
+def import_radar_paper_record(
+    database: TeamResearchDatabase,
+    dedupe_key: str,
+    *,
+    project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
+    actor: str = "team-member",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    paper_record = database.get_literature_radar_paper(dedupe_key)
+    if paper_record is None:
+        raise ValueError("Unknown radar paper.")
+    if paper_record.get("imported_item_id"):
+        return {
+            "item_id": str(paper_record["imported_item_id"]),
+            "status": "existing",
+            "dedupe_key": dedupe_key,
+        }
+    paper = paper_record.get("paper") if isinstance(paper_record.get("paper"), dict) else {}
+    if not paper:
+        raise ValueError("Radar paper has no stored metadata.")
+    scoring = build_team_radar_scorer(database.list_team_interest_keywords())(paper)
+    latest = (
+        paper_record.get("latest_recommendation")
+        if isinstance(paper_record.get("latest_recommendation"), dict)
+        else {}
+    )
+    recommendation = {
+        "paper": paper,
+        "scoring": scoring,
+        "pdf_access": paper_record.get("pdf_access") or assess_pdf_access(paper),
+        "why_relevant": latest.get("why_relevant") or " ".join(scoring.get("reasons") or []),
+        "recommended_action": "import_from_radar_paper_history",
+        "novelty": latest.get("novelty") or {},
+        "context": latest.get("context") or {},
+        "summary": latest.get("summary") or {},
+        "signal_lines": latest.get("signal_lines") or [],
+    }
+    import_result = import_radar_recommendation(
+        database,
+        recommendation,
+        project_id=project_id,
+        actor=actor,
+        now=now,
+    )
+    import_result["dedupe_key"] = dedupe_key
+    database.mark_literature_radar_paper_imported(
+        dedupe_key,
+        import_result,
+        actor=actor,
+        now=now,
+    )
+    return import_result
+
+
+def import_literature_radar_queue(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 20,
+    triage_action: str = "",
+    min_score: int = 35,
+    project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
+    actor: str = "team-member",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit))
+    selected_min_score = min(100, max(0, int(min_score)))
+    queue = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        triage_action=triage_action,
+        now=now,
+    )
+    imported: list[dict[str, Any]] = []
+    skipped_low_score = 0
+    skipped_existing = 0
+    queue_records = queue.get("papers") if isinstance(queue.get("papers"), list) else []
+    for record in queue_records:
+        dedupe_key = str(record.get("dedupe_key") or "").strip()
+        if not dedupe_key:
+            continue
+        if record.get("imported_item_id"):
+            skipped_existing += 1
+            continue
+        latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+        try:
+            score = int(float(latest.get("score") or 0))
+        except (TypeError, ValueError):
+            score = 0
+        if score < selected_min_score:
+            skipped_low_score += 1
+            continue
+        imported.append(
+            import_radar_paper_record(
+                database,
+                dedupe_key,
+                project_id=project_id,
+                actor=actor,
+                now=now,
+            )
+        )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_queue_import",
+        "limit": selected_limit,
+        "triage_action": str(queue.get("triage_action") or ""),
+        "min_score": selected_min_score,
+        "queued_count": len(queue_records),
+        "imported_count": len(imported),
+        "imported_item_ids": [str(record.get("item_id") or "") for record in imported if record.get("item_id")],
+        "imported": imported,
+        "skipped_low_score": skipped_low_score,
+        "skipped_existing": skipped_existing,
+        "review": queue.get("review") or "",
+        "review_counts": queue.get("review_counts") or {},
+    }
+
+
 def find_existing_radar_item(database: TeamResearchDatabase, paper: dict[str, Any]) -> dict[str, Any] | None:
     identifiers = paper.get("identifiers") or {}
     for key in ("doi", "arxiv_id", "semantic_scholar_id", "openalex_id"):

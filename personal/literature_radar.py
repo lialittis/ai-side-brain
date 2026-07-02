@@ -1,15 +1,16 @@
 """Personal Side-Brain adapter for Shared Literature Radar.
 
 The personal adapter is intentionally review-first: it writes recommendation
-reports and an index of radar runs, but it does not mutate long-term memory
-resources or project records. Accepted papers should be moved into private
-memory manually or by a later explicit review workflow.
+reports and an index of radar runs, and only promotes papers into the personal
+inbox when explicitly requested. It does not mutate long-term memory resources
+or project records.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -112,6 +113,7 @@ PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
 PERSONAL_RADAR_PAPER_HISTORY_NAME = "literature-radar-papers.json"
 PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
 PERSONAL_RADAR_PDF_CACHE_DIR = Path("memory") / "06_Logs" / "literature-radar-pdfs"
+PERSONAL_RADAR_INBOX_DIR = Path("memory") / "00_Inbox"
 PERSONAL_RADAR_SOURCE_CONTACT_ENV = "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL"
 RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 PERSONAL_RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
@@ -598,6 +600,20 @@ def personal_literature_radar_activity_digest(
 
 
 def personal_literature_radar_activity_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    imported_at = str(record.get("imported_at") or "").strip()
+    if imported_at:
+        return {
+            "action": "personal_radar_paper_inboxed",
+            "action_label": "Promoted to inbox",
+            "status": "inboxed",
+            "actor": str(record.get("imported_by") or "personal"),
+            "created_at": imported_at,
+            "dedupe_key": str(record.get("dedupe_key") or ""),
+            "title": str(record.get("title") or record.get("dedupe_key") or "Radar item"),
+            "reason": str((record.get("import_result") or {}).get("inbox_path") or "").strip()
+            if isinstance(record.get("import_result"), dict)
+            else "",
+        }
     reviewed_at = str(record.get("reviewed_at") or "").strip()
     if not reviewed_at:
         return None
@@ -1587,6 +1603,201 @@ def mark_personal_radar_paper_review(
     return record
 
 
+def promote_personal_radar_paper_to_inbox(
+    root: Path,
+    dedupe_key: str,
+    *,
+    actor: str = "personal",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    histories = read_personal_radar_paper_history(root)
+    selected_key = str(dedupe_key or "").strip()
+    if not selected_key or selected_key not in histories:
+        raise KeyError(f"Unknown personal radar paper: {dedupe_key}")
+    selected_now = now or datetime.now(timezone.utc)
+    timestamp = iso_timestamp(selected_now)
+    record = dict(histories[selected_key])
+    existing_path = str(record.get("imported_item_id") or "").strip()
+    if existing_path:
+        return {
+            "status": "existing",
+            "dedupe_key": selected_key,
+            "inbox_path": existing_path,
+            "item_id": existing_path,
+        }
+    inbox_path = write_personal_radar_inbox_note(root, record, now=selected_now)
+    relative_path = str(inbox_path.relative_to(root)) if inbox_path.is_relative_to(root) else str(inbox_path)
+    import_result = {
+        "status": "inboxed",
+        "dedupe_key": selected_key,
+        "inbox_path": relative_path,
+        "item_id": relative_path,
+        "actor": str(actor or "personal").strip() or "personal",
+        "imported_at": timestamp,
+    }
+    record["imported_item_id"] = relative_path
+    record["import_result"] = import_result
+    record["imported_at"] = timestamp
+    record["imported_by"] = import_result["actor"]
+    latest = record.get("latest_recommendation")
+    if isinstance(latest, dict):
+        latest["imported_item_id"] = relative_path
+        latest["import_result"] = import_result
+        record["latest_recommendation"] = latest
+    histories[selected_key] = record
+    write_personal_radar_paper_history(root, histories)
+    update_personal_radar_index_import(root, selected_key, import_result, updated_at=timestamp)
+    return import_result
+
+
+def promote_personal_literature_radar_queue_to_inbox(
+    root: Path,
+    *,
+    limit: int = 20,
+    triage_action: str = "",
+    min_score: int = 35,
+    actor: str = "personal",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit))
+    selected_min_score = min(100, max(0, int(min_score)))
+    queue = build_personal_literature_radar_queue_payload(
+        root,
+        limit=selected_limit,
+        triage_action=triage_action,
+        now=now,
+    )
+    promoted: list[dict[str, Any]] = []
+    skipped_low_score = 0
+    skipped_existing = 0
+    queue_records = queue.get("papers") if isinstance(queue.get("papers"), list) else []
+    for record in queue_records:
+        dedupe_key = str(record.get("dedupe_key") or "").strip()
+        if not dedupe_key:
+            continue
+        if record.get("imported_item_id"):
+            skipped_existing += 1
+            continue
+        latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+        try:
+            score = int(float(latest.get("score") or 0))
+        except (TypeError, ValueError):
+            score = 0
+        if score < selected_min_score:
+            skipped_low_score += 1
+            continue
+        promoted.append(
+            promote_personal_radar_paper_to_inbox(
+                root,
+                dedupe_key,
+                actor=actor,
+                now=now,
+            )
+        )
+    return {
+        "success": True,
+        "kind": "personal_literature_radar_queue_inbox",
+        "limit": selected_limit,
+        "triage_action": str(queue.get("triage_action") or ""),
+        "min_score": selected_min_score,
+        "queued_count": len(queue_records),
+        "promoted_count": len(promoted),
+        "promoted": promoted,
+        "inbox_paths": [str(record.get("inbox_path") or "") for record in promoted if record.get("inbox_path")],
+        "skipped_low_score": skipped_low_score,
+        "skipped_existing": skipped_existing,
+        "review": queue.get("review") or "",
+        "review_counts": queue.get("review_counts") or {},
+    }
+
+
+def write_personal_radar_inbox_note(root: Path, record: dict[str, Any], *, now: datetime) -> Path:
+    inbox_dir = root / PERSONAL_RADAR_INBOX_DIR
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    title = str(record.get("title") or record.get("dedupe_key") or "Literature Radar Paper").strip()
+    path = inbox_dir / f"{now.strftime('%Y-%m-%d')}-literature-radar-{personal_radar_slug(title)}.md"
+    if path.exists():
+        path = inbox_dir / f"{now.strftime('%Y-%m-%d')}-literature-radar-{personal_radar_slug(title)}-{now.strftime('%H%M%S')}.md"
+    path.write_text(personal_radar_inbox_note_markdown(record, now=now), encoding="utf-8")
+    return path
+
+
+def personal_radar_slug(value: str, *, max_length: int = 64) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return (slug[:max_length].strip("-") or "paper")
+
+
+def personal_radar_inbox_note_markdown(record: dict[str, Any], *, now: datetime) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    pdf_access = record.get("pdf_access") if isinstance(record.get("pdf_access"), dict) else {}
+    identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
+    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
+    lines = [
+        f"# {record.get('title') or paper.get('title') or 'Literature Radar Paper'}",
+        "",
+        "Source: Personal Literature Radar",
+        f"Captured: {iso_timestamp(now)}",
+        f"Dedupe key: `{record.get('dedupe_key') or ''}`",
+        f"Released: {record.get('release_date') or paper_release_date(paper) or 'unknown'}",
+        f"Score: {latest.get('score', '')}/100",
+        f"Label: {latest.get('label') or 'needs_review'}",
+        "",
+        "## Why It Needs Attention",
+        "",
+    ]
+    signal_lines = radar_latest_signal_lines(latest)
+    if signal_lines:
+        lines.extend(f"- {line}" for line in signal_lines)
+    elif latest.get("why_relevant"):
+        lines.append(f"- Why: {latest['why_relevant']}")
+    else:
+        lines.append("- Needs manual review.")
+    lines.extend(["", "## Links", ""])
+    for label, url in personal_radar_note_links(links).items():
+        lines.append(f"- {label}: {url}")
+    if identifiers:
+        lines.extend(["", "## Identifiers", ""])
+        for key, value in sorted(identifiers.items()):
+            lines.append(f"- {key}: {value}")
+    if pdf_access:
+        lines.extend(
+            [
+                "",
+                "## PDF Access",
+                "",
+                f"- Can download: {'yes' if pdf_access.get('can_download') else 'no'}",
+                f"- Kind: {pdf_access.get('access_kind') or pdf_access.get('kind') or 'unknown'}",
+                f"- Reason: {pdf_access.get('reason') or pdf_access.get('download_reason') or 'unknown'}",
+            ]
+        )
+        if pdf_access.get("local_path"):
+            lines.append(f"- Local path: {pdf_access['local_path']}")
+    abstract = str(paper.get("abstract") or "").strip()
+    if abstract:
+        lines.extend(["", "## Abstract", "", abstract])
+    lines.extend(["", "## Review Notes", "", "- "])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def personal_radar_note_links(links: dict[str, Any]) -> dict[str, str]:
+    labels = {
+        "landing": "Landing",
+        "arxiv": "arXiv",
+        "doi": "DOI",
+        "publisher": "Publisher",
+        "pdf": "PDF",
+    }
+    rendered: dict[str, str] = {}
+    seen_urls: set[str] = set()
+    for key in ("landing", "arxiv", "doi", "publisher", "pdf"):
+        url = str(links.get(key) or "").strip()
+        if url and url not in seen_urls:
+            rendered[labels[key]] = url
+            seen_urls.add(url)
+    return rendered
+
+
 def normalize_personal_radar_review_status(status: str) -> str:
     selected = str(status or "").strip().lower()
     if selected not in PERSONAL_RADAR_REVIEW_STATUSES:
@@ -1690,6 +1901,28 @@ def update_personal_radar_index_review(
         for recommendation in run.get("recommendations") or []:
             if str(recommendation.get("dedupe_key") or "") == dedupe_key:
                 recommendation["review"] = dict(review)
+                recommendation["updated_at"] = updated_at
+                changed = True
+    if changed:
+        write_personal_radar_index(root, runs)
+    return changed
+
+
+def update_personal_radar_index_import(
+    root: Path,
+    dedupe_key: str,
+    import_result: dict[str, Any],
+    *,
+    updated_at: str,
+) -> bool:
+    runs = read_personal_radar_index(root)
+    changed = False
+    item_id = str(import_result.get("item_id") or import_result.get("inbox_path") or "").strip()
+    for run in runs:
+        for recommendation in run.get("recommendations") or []:
+            if str(recommendation.get("dedupe_key") or "") == dedupe_key:
+                recommendation["imported_item_id"] = item_id
+                recommendation["import_result"] = dict(import_result)
                 recommendation["updated_at"] = updated_at
                 changed = True
     if changed:

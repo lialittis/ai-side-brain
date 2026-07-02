@@ -137,6 +137,12 @@ same for Personal Literature Radar, using `PERSONAL_RADAR_CYCLE_RUN_COLLECTION`
 and `PERSONAL_RADAR_CYCLE_BUILD_BRIEF` as optional phase toggles. The separate
 systemd units above keep collection and weekly brief generation on independent
 schedules.
+Promotion remains opt-in for both cycle scripts. Set
+`RADAR_CYCLE_IMPORT_QUEUE=1` to import the active Team queue into the Team
+library during the cycle, or `PERSONAL_RADAR_CYCLE_INBOX_QUEUE=1` to write the
+active Personal queue into `memory/00_Inbox/`. Use the matching `*_MIN_SCORE`,
+`*_LIMIT`, and `*_TRIAGE_ACTION` variables from `.env.example` to keep automated
+promotion narrow.
 
 PDF caching is off by default. Set `RADAR_CACHE_PDFS=1` with
 `RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs`, or

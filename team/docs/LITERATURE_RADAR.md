@@ -69,15 +69,18 @@ The page is review-first:
 3. the Radar Queue page is the daily team-member review surface. It reads
    stored Radar state, shows the current priority candidates with the same
    attention summary and signal lines as Latest Papers, and lets a user watch
-   or dismiss with an optional note, or add a paper to the library without
-   starting collectors or AI;
+   or dismiss with an optional note, add one paper to the library, or import the
+   visible queue above a chosen score threshold without starting collectors or
+   AI;
 4. the Radar Papers page exposes deduplicated collected-paper history, including
    papers that have not been imported, and can promote a stored paper into the
    Team library;
 5. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
    `dismissed`, uses the review counts to see queue size, and marks Radar
    papers without importing them into the main library;
-6. a team member clicks `Add to Library` only for papers worth tracking;
+6. a team member clicks `Add to Library` for one paper, or `Import ... Candidates`
+   on the Queue page for the visible high-priority lane, only for papers worth
+   tracking;
 7. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls, plus a compact
    Radar insight block with the stored summary, relevance reason, matched
@@ -145,8 +148,11 @@ the shared triage hint, triage lane chips, plus watch, dismiss, and
 add-to-library actions that return to the daily page.
 For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
-Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
-machine-readable contract for scripts and dashboards.
+Its actions return to that queue. The queue-level import form promotes the
+currently visible queue records into Latest Papers, skips candidates below the
+chosen score threshold, and reuses the same per-paper dedupe, provenance, audit,
+and library-entry logic as one-click `Add to Library`. `/radar/queue.json` keeps
+the equivalent machine-readable contract for scripts and dashboards.
 Watch, dismiss, clear, add-to-library, comment, relevance-edit, and
 importance-edit actions are also recorded in the Team `audit_events` table as
 Literature Radar activity. The `/radar` page shows a compact Recent Activity
@@ -379,6 +385,7 @@ python team/research_cli.py radar-history
 python team/research_cli.py radar-status --json
 python team/research_cli.py radar-queue                # active review queue by score
 python team/research_cli.py radar-queue --freshness-max-age-hours 24
+python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
 python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
@@ -440,7 +447,10 @@ papers and papers already imported into the library. Queue JSON records expose
 normalized `release_date` directly for scripts, and the text output includes
 release date, stored signal lines, and an attention summary for why a paper is
 relevant now, how it relates to existing context, and which interests matched. Use
-`radar-settings` to verify saved source readiness before a scheduled run. Use
+`radar-import-queue --limit 20 --min-score 35` to promote the active terminal
+queue into the Team library with the same dedupe, provenance, audit, and
+library-entry behavior as the web Queue import form. Use `radar-settings` to
+verify saved source readiness before a scheduled run. Use
 `radar-papers --review unreviewed`, `--review watch`, or `--review dismissed`
 to focus the terminal output. Use `radar-review DEDUPE_KEY --status watch`,
 `--status dismissed`, or `--status unreviewed` to change a stored paper from
@@ -551,6 +561,12 @@ authors, positive and negative seed papers, venue profiles, summary settings,
 source contact email, and PDF-cache settings
 saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
+Queue import remains off by default. Set `RADAR_CYCLE_IMPORT_QUEUE=1` to have
+the cycle run `radar-import-queue` after collection and before the brief. Use
+`RADAR_IMPORT_QUEUE_MIN_SCORE`, `RADAR_IMPORT_QUEUE_LIMIT`,
+`RADAR_IMPORT_QUEUE_TRIAGE_ACTION`, and `RADAR_IMPORT_QUEUE_ACTOR` to tune that
+opt-in promotion step; timestamped and latest queue-import JSON/text snapshots
+are written under `RADAR_OUTPUT_DIR`.
 
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
@@ -724,6 +740,8 @@ For a server deployment, the intended daily path is:
    collects papers, writes stable `literature-radar-latest.*`,
    `literature-radar-queue-latest.*`, `literature-radar-status-latest.*`, and
    `literature-radar-brief-latest.*` snapshots, then builds the stored brief.
+   If `RADAR_CYCLE_IMPORT_QUEUE=1`, it also writes
+   `literature-radar-queue-import-latest.*` after promoting the active queue.
 4. Team members review `/radar/queue?limit=20` for the active daily queue, or
    open `/radar/brief` for a weekly-style roll-up. From those pages they can
    watch, dismiss, or add papers to the main Team library without reading raw

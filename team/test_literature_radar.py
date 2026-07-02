@@ -1792,6 +1792,99 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 ],
             )
 
+    def test_cli_radar_import_queue_imports_visible_candidates_above_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01011",
+                title="CLI Queue Import for Memory Safety",
+                abstract="Memory safety and system security for agent workflows.",
+                identifiers={"arxiv_id": "2601.01011"},
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.01011",
+                    "pdf": "https://arxiv.org/pdf/2601.01011",
+                },
+                release_date="2026-06-30",
+            )
+            low = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01012",
+                title="CLI Queue Low Score Candidate",
+                abstract="A marginally related systems paper.",
+                identifiers={"arxiv_id": "2601.01012"},
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.01012",
+                    "pdf": "https://arxiv.org/pdf/2601.01012",
+                },
+                release_date="2026-06-29",
+            )
+            recommendations = recommend_papers([high, low], limit=2)
+            for recommendation in recommendations:
+                if recommendation["paper"]["source_paper_id"] == "2601.01011":
+                    recommendation["scoring"]["score"] = 90
+                    recommendation["scoring"]["label"] = "highly_relevant"
+                else:
+                    recommendation["scoring"]["score"] = 20
+                    recommendation["scoring"]["label"] = "needs_review"
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[high, low],
+                recommendations=recommendations,
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = research_cli.main(
+                    [
+                        "radar-import-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--limit",
+                        "2",
+                        "--min-score",
+                        "35",
+                        "--actor",
+                        "alice",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            result = json.loads(stdout.getvalue())
+            self.assertTrue(result["success"])
+            self.assertEqual(result["kind"], "team_literature_radar_queue_import")
+            self.assertEqual(result["imported_count"], 1)
+            self.assertEqual(result["skipped_low_score"], 1)
+            latest = database.list_latest_relevant_papers()
+            self.assertEqual(len(latest), 1)
+            self.assertEqual(latest[0]["item"]["title"], "CLI Queue Import for Memory Safety")
+            self.assertEqual(latest[0]["item"]["radar"]["dedupe_key"], high["dedupe_key"])
+            self.assertEqual(database.get_literature_radar_paper(high["dedupe_key"])["imported_item_id"], latest[0]["item"]["id"])
+            self.assertFalse(database.get_literature_radar_paper(low["dedupe_key"]).get("imported_item_id"))
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = research_cli.main(
+                    [
+                        "radar-import-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--limit",
+                        "2",
+                    ]
+                )
+            self.assertEqual(text_code, 0)
+            self.assertIn("Radar queue import:", text_stdout.getvalue())
+            self.assertIn("imported=0", text_stdout.getvalue())
+
     def test_cli_radar_queue_text_reports_failed_empty_latest_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "research.sqlite3"

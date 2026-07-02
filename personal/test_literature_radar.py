@@ -19,9 +19,10 @@ from personal.literature_radar import (
     read_personal_radar_topic_profile,
     mark_personal_radar_paper_review,
     run_personal_literature_radar,
+    write_personal_radar_paper_history,
 )
 from scripts import personal_literature_radar
-from shared.literature_radar import create_radar_paper
+from shared.literature_radar import create_radar_paper, recommend_papers
 
 
 class FakeSummaryClient:
@@ -922,6 +923,106 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Triage:", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Personal Activity", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
+
+    def test_personal_radar_inbox_queue_promotes_visible_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.02001",
+                title="Personal Inbox Queue for Memory Safety",
+                abstract="Memory safety and system security for personal research review.",
+                identifiers={"arxiv_id": "2601.02001"},
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.02001",
+                    "pdf": "https://arxiv.org/pdf/2601.02001",
+                },
+                release_date="2026-06-30",
+            )
+            low = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.02002",
+                title="Personal Inbox Low Score Candidate",
+                abstract="A marginally related systems paper.",
+                identifiers={"arxiv_id": "2601.02002"},
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.02002",
+                    "pdf": "https://arxiv.org/pdf/2601.02002",
+                },
+                release_date="2026-06-29",
+            )
+            with mock.patch("personal.literature_radar.collect_arxiv", return_value=[high, low]):
+                run_personal_literature_radar(
+                    root_path=root,
+                    sources=["arxiv"],
+                    recommendation_limit=2,
+                    write_report=False,
+                    now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                )
+            history = read_personal_radar_paper_history(root)
+            for record in history.values():
+                latest = record["latest_recommendation"]
+                if record["dedupe_key"] == high["dedupe_key"]:
+                    latest["score"] = 90
+                    latest["label"] = "highly_relevant"
+                else:
+                    latest["score"] = 20
+                    latest["label"] = "needs_review"
+                record["latest_recommendation"] = latest
+            write_personal_radar_paper_history(root, history)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = personal_literature_radar.main(
+                    [
+                        "inbox-queue",
+                        "--root-path",
+                        str(root),
+                        "--limit",
+                        "2",
+                        "--min-score",
+                        "35",
+                        "--actor",
+                        "alice",
+                        "--json",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            result = json.loads(stdout.getvalue())
+            self.assertTrue(result["success"])
+            self.assertEqual(result["kind"], "personal_literature_radar_queue_inbox")
+            self.assertEqual(result["promoted_count"], 1)
+            self.assertEqual(result["skipped_low_score"], 1)
+            inbox_path = root / result["inbox_paths"][0]
+            self.assertTrue(inbox_path.exists())
+            inbox_text = inbox_path.read_text(encoding="utf-8")
+            self.assertIn("# Personal Inbox Queue for Memory Safety", inbox_text)
+            self.assertIn("Source: Personal Literature Radar", inbox_text)
+            self.assertIn("https://arxiv.org/abs/2601.02001", inbox_text)
+            updated = read_personal_radar_paper_history(root)
+            self.assertEqual(updated[high["dedupe_key"]]["imported_item_id"], result["inbox_paths"][0])
+            self.assertEqual(updated[high["dedupe_key"]]["imported_by"], "alice")
+            self.assertFalse(updated[low["dedupe_key"]].get("imported_item_id"))
+
+            queue_after = build_personal_literature_radar_queue_payload(root, limit=2)
+            self.assertEqual([paper["dedupe_key"] for paper in queue_after["papers"]], [low["dedupe_key"]])
+            activity = build_personal_literature_radar_activity_payload(
+                root,
+                days=7,
+                now=datetime(2026, 7, 2, tzinfo=timezone.utc),
+            )
+            self.assertEqual(activity["activity"][0]["action"], "personal_radar_paper_inboxed")
+            self.assertEqual(activity["activity"][0]["actor"], "alice")
+
+            text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(text_stdout):
+                text_code = personal_literature_radar.main(
+                    ["inbox-queue", "--root-path", str(root), "--limit", "2"]
+                )
+            self.assertEqual(text_code, 0)
+            self.assertIn("Personal Literature Radar inbox promotion:", text_stdout.getvalue())
+            self.assertIn("promoted=0", text_stdout.getvalue())
 
     def test_personal_literature_radar_cli_passes_source_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

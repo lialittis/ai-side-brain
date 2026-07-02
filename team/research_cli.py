@@ -40,6 +40,7 @@ from team.literature_radar import (
     build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
+    import_literature_radar_queue,
     run_team_literature_radar,
     team_radar_source_presets,
 )
@@ -235,6 +236,18 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_import_queue = subparsers.add_parser(
+        "radar-import-queue",
+        help="import active Literature Radar queue papers into the Team library",
+    )
+    add_db_args(radar_import_queue)
+    radar_import_queue.add_argument("--limit", type=int, default=20)
+    radar_import_queue.add_argument("--triage-action", default="", help="only import queued papers with this triage action")
+    radar_import_queue.add_argument("--min-score", type=int, default=35, help="minimum score required before import")
+    radar_import_queue.add_argument("--project", default="team-library", help="team library project id for imported papers")
+    radar_import_queue.add_argument("--actor", default="team-member")
+    radar_import_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_status = subparsers.add_parser(
         "radar-status",
@@ -577,6 +590,33 @@ def print_radar_papers(
             print(f"  Review reason: {review_reason}")
         for line in radar_latest_signal_lines(latest):
             print(f"  {line}")
+
+
+def print_radar_queue_import(result: dict[str, Any]) -> None:
+    print(
+        "Radar queue import: "
+        f"imported={int(result.get('imported_count') or 0)} "
+        f"queued={int(result.get('queued_count') or 0)} "
+        f"min_score={int(result.get('min_score') or 0)}"
+    )
+    if result.get("triage_action"):
+        print(f"Triage filter: {result['triage_action']}")
+    skipped = []
+    if int(result.get("skipped_low_score") or 0):
+        skipped.append(f"low_score={int(result.get('skipped_low_score') or 0)}")
+    if int(result.get("skipped_existing") or 0):
+        skipped.append(f"existing={int(result.get('skipped_existing') or 0)}")
+    if skipped:
+        print("Skipped: " + ", ".join(skipped))
+    imported = result.get("imported") if isinstance(result.get("imported"), list) else []
+    for record in imported:
+        if not isinstance(record, dict):
+            continue
+        print(
+            f"- {record.get('status') or 'imported'} | "
+            f"{record.get('item_id') or 'unknown item'} | "
+            f"{record.get('dedupe_key') or 'unknown dedupe key'}"
+        )
 
 
 def print_radar_queue(result: dict[str, Any]) -> None:
@@ -1145,6 +1185,21 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_radar_queue(result)
+        return 0
+
+    if args.command == "radar-import-queue":
+        result = import_literature_radar_queue(
+            database,
+            limit=args.limit,
+            triage_action=args.triage_action,
+            min_score=args.min_score,
+            project_id=args.project,
+            actor=args.actor,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_queue_import(result)
         return 0
 
     if args.command == "radar-status":

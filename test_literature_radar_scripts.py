@@ -388,6 +388,50 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-", ".json"))
             self.assertTrue(any_timestamped_file(brief_dir, "literature-radar-brief-", ".json"))
 
+    def test_team_cycle_can_import_queue_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            copy_script_workspace(
+                workspace,
+                [
+                    "team/scripts/run_literature_radar.sh",
+                    "team/scripts/build_literature_radar_brief.sh",
+                    "team/scripts/run_literature_radar_cycle.sh",
+                ],
+            )
+            fake_python = write_fake_python(workspace)
+            output_dir = workspace / "team-output"
+            brief_dir = workspace / "team-brief"
+
+            run_script(
+                workspace / "team/scripts/run_literature_radar_cycle.sh",
+                cwd=workspace,
+                env={
+                    "PYTHON_BIN": str(fake_python),
+                    "RADAR_OUTPUT_DIR": str(output_dir),
+                    "RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
+                    "RADAR_CYCLE_IMPORT_QUEUE": "1",
+                    "RADAR_IMPORT_QUEUE_LIMIT": "7",
+                    "RADAR_IMPORT_QUEUE_MIN_SCORE": "65",
+                    "RADAR_IMPORT_QUEUE_TRIAGE_ACTION": "import",
+                    "RADAR_IMPORT_QUEUE_ACTOR": "cron",
+                    "RADAR_WRITE_LATEST": "1",
+                },
+            )
+
+            latest_import = read_json(output_dir / "literature-radar-queue-import-latest.json")
+            self.assertEqual(latest_import["command"], "radar-import-queue")
+            self.assertIn("--limit", latest_import["args"])
+            self.assertIn("7", latest_import["args"])
+            self.assertIn("--min-score", latest_import["args"])
+            self.assertIn("65", latest_import["args"])
+            self.assertIn("--triage-action", latest_import["args"])
+            self.assertIn("import", latest_import["args"])
+            self.assertIn("--actor", latest_import["args"])
+            self.assertIn("cron", latest_import["args"])
+            self.assertTrue(any_timestamped_file(output_dir, "literature-radar-queue-import-", ".json"))
+            self.assertTrue((output_dir / "literature-radar-queue-import-latest.txt").exists())
+
     def test_personal_cycle_refreshes_latest_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspace"
@@ -420,6 +464,11 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "PERSONAL_RADAR_QUEUE_TRIAGE_ACTION": "watch",
+                    "PERSONAL_RADAR_CYCLE_INBOX_QUEUE": "1",
+                    "PERSONAL_RADAR_INBOX_QUEUE_LIMIT": "9",
+                    "PERSONAL_RADAR_INBOX_QUEUE_MIN_SCORE": "70",
+                    "PERSONAL_RADAR_INBOX_QUEUE_TRIAGE_ACTION": "import",
+                    "PERSONAL_RADAR_INBOX_QUEUE_ACTOR": "cron",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -460,6 +509,17 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 "status text status",
                 (output_dir / "personal-literature-radar-status-latest.txt").read_text(),
             )
+            latest_personal_inbox = read_json(output_dir / "personal-literature-radar-inbox-queue-latest.json")
+            self.assertEqual(latest_personal_inbox["command"], "inbox-queue")
+            self.assertIn("--limit", latest_personal_inbox["args"])
+            self.assertIn("9", latest_personal_inbox["args"])
+            self.assertIn("--min-score", latest_personal_inbox["args"])
+            self.assertIn("70", latest_personal_inbox["args"])
+            self.assertIn("--triage-action", latest_personal_inbox["args"])
+            self.assertIn("import", latest_personal_inbox["args"])
+            self.assertIn("--actor", latest_personal_inbox["args"])
+            self.assertIn("cron", latest_personal_inbox["args"])
+            self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-inbox-queue-", ".json"))
             self.assertEqual(
                 read_json(brief_dir / "personal-literature-radar-brief-latest.json")["command"],
                 "brief",

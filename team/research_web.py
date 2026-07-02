@@ -24,7 +24,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.literature_radar import (
-    assess_pdf_access,
     build_radar_preflight_payload,
     build_radar_review_queue,
     format_radar_context_summary,
@@ -57,7 +56,8 @@ from team.literature_radar import (
     build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
-    build_team_radar_scorer,
+    import_literature_radar_queue,
+    import_radar_paper_record,
     import_radar_recommendation,
     run_team_literature_radar,
     team_radar_collection_config,
@@ -858,8 +858,11 @@ def radar_papers_path(*, notice: str = "", review_filter: str = "all") -> str:
     return "/radar/papers" + (f"?{urlencode(params)}" if params else "")
 
 
-def radar_queue_path(*, notice: str = "", limit: int = 20) -> str:
+def radar_queue_path(*, notice: str = "", limit: int = 20, triage_action: str = "") -> str:
     params = {"limit": max(1, int(limit))}
+    selected_triage_action = clean_triage_action(triage_action)
+    if selected_triage_action:
+        params["triage_action"] = selected_triage_action
     if notice:
         params["notice"] = notice
     return f"/radar/queue?{urlencode(params)}"
@@ -1000,6 +1003,7 @@ def render_literature_radar_queue_page(
       {render_radar_queue_triage_summary(triage_summary, limit=selected_limit)}
       {render_radar_queue_triage_options(triage_options, limit=selected_limit)}
       {render_radar_queue_filter_status(selected_triage_action, selected_limit)}
+      {render_radar_queue_batch_import_control(records, limit=selected_limit, triage_action=selected_triage_action)}
       {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="queue")}
       {render_empty_radar_queue(records, review_counts)}
     </section>
@@ -3263,6 +3267,31 @@ def render_radar_queue_filter_status(triage_action: str, limit: int) -> str:
     """
 
 
+def render_radar_queue_batch_import_control(
+    records: list[dict[str, Any]],
+    *,
+    limit: int,
+    triage_action: str = "",
+) -> str:
+    importable_count = sum(1 for record in records if not str(record.get("imported_item_id") or ""))
+    if importable_count == 0:
+        return ""
+    selected_triage_action = clean_triage_action(triage_action)
+    lane_label = selected_triage_action.replace("_", " ") if selected_triage_action else "visible queue"
+    return f"""
+    <form class="toolbar radar-queue-import" method="post" action="/radar/queue/import">
+      <input type="hidden" name="limit" value="{max(1, int(limit))}">
+      <input type="hidden" name="triage_action" value="{html_escape(selected_triage_action)}">
+      <div class="field compact-field">
+        <label for="radar_queue_min_score">Min score</label>
+        <input id="radar_queue_min_score" type="number" min="0" max="100" name="min_score" value="35">
+      </div>
+      <button class="primary" type="submit">Import {importable_count} Candidate{'' if importable_count == 1 else 's'}</button>
+      <span class="muted">Adds papers from the {html_escape(lane_label)} to the team library.</span>
+    </form>
+    """
+
+
 def clean_triage_action(value: Any) -> str:
     return normalize_radar_triage_action(value)
 
@@ -4079,43 +4108,22 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
 
 def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     dedupe_key = required_field(fields, "dedupe_key")
-    paper_record = database.get_literature_radar_paper(dedupe_key)
-    if paper_record is None:
-        raise ValueError("Unknown radar paper.")
-    if paper_record.get("imported_item_id"):
-        return str(paper_record["imported_item_id"])
-    paper = paper_record.get("paper") if isinstance(paper_record.get("paper"), dict) else {}
-    if not paper:
-        raise ValueError("Radar paper has no stored metadata.")
-    scoring = build_team_radar_scorer(database.list_team_interest_keywords())(paper)
-    latest = (
-        paper_record.get("latest_recommendation")
-        if isinstance(paper_record.get("latest_recommendation"), dict)
-        else {}
-    )
-    recommendation = {
-        "paper": paper,
-        "scoring": scoring,
-        "pdf_access": paper_record.get("pdf_access") or assess_pdf_access(paper),
-        "why_relevant": latest.get("why_relevant") or " ".join(scoring.get("reasons") or []),
-        "recommended_action": "import_from_radar_paper_history",
-        "novelty": latest.get("novelty") or {},
-        "context": latest.get("context") or {},
-        "summary": latest.get("summary") or {},
-        "signal_lines": latest.get("signal_lines") or [],
-    }
-    import_result = import_radar_recommendation(
+    import_result = import_radar_paper_record(
         database,
-        recommendation,
-        actor=fields.get("actor") or "team-member",
-    )
-    import_result["dedupe_key"] = dedupe_key
-    database.mark_literature_radar_paper_imported(
         dedupe_key,
-        import_result,
         actor=fields.get("actor") or "team-member",
     )
     return str(import_result["item_id"])
+
+
+def import_radar_queue_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    return import_literature_radar_queue(
+        database,
+        limit=clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
+        triage_action=clean_triage_action(fields.get("triage_action", "")),
+        min_score=clean_score_threshold(fields.get("min_score", ""), default=35),
+        actor=fields.get("actor") or "team-member",
+    )
 
 
 def review_radar_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, str]:
@@ -4330,6 +4338,17 @@ def clean_relevance_score(value: str) -> float:
         raise ValueError("Relevance score must be a number.") from error
 
 
+def clean_score_threshold(value: str, *, default: int = 35) -> int:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError as error:
+        raise ValueError("Score threshold must be a number from 0 to 100.") from error
+    return min(100, max(0, parsed))
+
+
 def clean_importance(value: str) -> int:
     try:
         return min(5, max(0, int(value)))
@@ -4535,6 +4554,20 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             review_filter=fields.get("review_filter") or "all",
                         )
                     )
+            elif parsed.path == "/radar/queue/import":
+                result = import_radar_queue_to_library(self.database, fields)
+                imported_count = int(result.get("imported_count") or 0)
+                skipped_low_score = int(result.get("skipped_low_score") or 0)
+                notice = f"Imported {imported_count} Radar candidate{'' if imported_count == 1 else 's'}."
+                if skipped_low_score:
+                    notice += f" Skipped {skipped_low_score} below score {int(result.get('min_score') or 0)}."
+                self.redirect(
+                    radar_queue_path(
+                        notice=notice,
+                        limit=int(result.get("limit") or 20),
+                        triage_action=str(result.get("triage_action") or ""),
+                    )
+                )
             elif parsed.path == "/radar/review":
                 result = review_radar_paper(self.database, fields)
                 status = result["status"]

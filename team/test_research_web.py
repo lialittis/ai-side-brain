@@ -35,6 +35,7 @@ from team.research_web import (
     radar_settings_from_fields,
     import_radar_recommendation_to_library,
     import_radar_paper_to_library,
+    import_radar_queue_to_library,
     make_handler,
     review_radar_paper,
     run_literature_radar_from_web,
@@ -337,6 +338,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("triage_action=import_to_library", queue_html)
             self.assertIn("Triage lanes:", queue_html)
             self.assertIn(">Import 1</a>", queue_html)
+            self.assertIn('action="/radar/queue/import"', queue_html)
+            self.assertIn(">Import 1 Candidate</button>", queue_html)
+            self.assertIn('name="min_score" value="35"', queue_html)
             self.assertIn("Triage: Import", queue_html)
             self.assertIn("https://arxiv.org/abs/2601.00051", queue_html)
             self.assertIn("legally downloadable PDF", queue_html)
@@ -836,6 +840,77 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(kwargs["openreview_venue_profiles"], ["iclr", "ai_ml"])
         self.assertEqual(kwargs["dblp_venue_profiles"], ["security", "systems"])
         self.assertIsNone(database.get_team_setting(RADAR_SETTINGS_KEY))
+
+    def test_import_radar_queue_to_library_imports_visible_candidates_above_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            database.initialize()
+            high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01001",
+                title="High Score Queue Import for Memory Safety",
+                abstract="Memory safety and system security for agent workflows.",
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.01001",
+                    "pdf": "https://arxiv.org/pdf/2601.01001",
+                },
+                identifiers={"arxiv_id": "2601.01001"},
+                release_date="2026-06-30",
+            )
+            low = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01002",
+                title="Low Score Queue Import Candidate",
+                abstract="A marginally related systems paper.",
+                links={
+                    "arxiv": "https://arxiv.org/abs/2601.01002",
+                    "pdf": "https://arxiv.org/pdf/2601.01002",
+                },
+                identifiers={"arxiv_id": "2601.01002"},
+                release_date="2026-06-29",
+            )
+            recommendations = recommend_papers([high, low], limit=2)
+            for recommendation in recommendations:
+                if recommendation["paper"]["source_paper_id"] == "2601.01001":
+                    recommendation["scoring"]["score"] = 90
+                    recommendation["scoring"]["label"] = "highly_relevant"
+                else:
+                    recommendation["scoring"]["score"] = 20
+                    recommendation["scoring"]["label"] = "needs_review"
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[high, low],
+                recommendations=recommendations,
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+
+            result = import_radar_queue_to_library(
+                database,
+                {
+                    "limit": "2",
+                    "min_score": "35",
+                    "actor": "alice",
+                },
+            )
+
+            self.assertEqual(result["imported_count"], 1)
+            self.assertEqual(result["skipped_low_score"], 1)
+            latest = database.list_latest_relevant_papers()
+            self.assertEqual(len(latest), 1)
+            self.assertEqual(latest[0]["item"]["title"], "High Score Queue Import for Memory Safety")
+            self.assertEqual(latest[0]["item"]["radar"]["dedupe_key"], high["dedupe_key"])
+            stored_high = database.get_literature_radar_paper(high["dedupe_key"])
+            stored_low = database.get_literature_radar_paper(low["dedupe_key"])
+            self.assertEqual(stored_high["imported_item_id"], latest[0]["item"]["id"])
+            self.assertFalse(stored_low.get("imported_item_id"))
+            imported_html = render_literature_radar_queue_page(database, limit=2)
+            self.assertNotIn("High Score Queue Import for Memory Safety", imported_html)
+            self.assertIn("Low Score Queue Import Candidate", imported_html)
 
     def test_literature_radar_web_run_can_save_and_render_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -94,6 +94,7 @@ python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-di
 python team/research_cli.py radar-status --json
 python team/research_cli.py radar-history
 python team/research_cli.py radar-queue
+python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
 python team/research_cli.py radar-brief --days 7
@@ -106,7 +107,7 @@ python team/research_cli.py brief --project dynamic-radiative-cooling
 Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates plus stored why/context/matched-interest signal lines when scheduled discovery has papers awaiting review;
-- Literature Radar page with ad hoc `Run Radar`, stored run history, a first-class Brief nav entry for daily/weekly review, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, and one-click import into Latest Relevant Papers;
+- Literature Radar page with ad hoc `Run Radar`, stored run history, a first-class Brief nav entry for daily/weekly review, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, one-click import into Latest Relevant Papers, and queue-level import for visible high-score candidates;
 - Radar run cards, Markdown reports, weekly briefs, paper history, and the Latest Papers Radar Queue all share labelled `Signal`, `Why`, `Context`, and `Matched` lines so team members see the same explanation wherever they review a recommendation;
 - radar-imported library papers keep their radar provenance, summary, relevance reason, context link, matched interests, and PDF-access decision, so the main Latest Relevant Papers list shows why the paper was worth importing and whether a legal PDF is available;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
@@ -135,7 +136,10 @@ inspect deduplicated collected-paper history and add stored papers to the librar
 main Latest Relevant Papers page also shows a compact Radar Queue with
 unreviewed, watch, and dismissed counts plus the top priority candidates, so
 daily users can review scheduled Radar output without remembering a separate URL. Scan the latest
-recommendations and import only the papers the team wants to track in the main library. Radar ranking follows the editable Team Interests weights from
+recommendations and import only the papers the team wants to track in the main library. The
+dedicated Queue page can also import the visible queue above a selected score
+threshold while preserving the same dedupe and provenance metadata as
+one-paper imports. Radar ranking follows the editable Team Interests weights from
 `/interests`, so those sliders control both recommendation priority and imported
 paper relevance. The queue also shows latest-run health and source-error counts
 when a scheduled run exists, even if no papers were stored. The Radar form can save source choices, tracked authors, seed
@@ -165,7 +169,11 @@ settings are configured.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI and prints latest-run
 health, pipeline phase status, source readiness, and Unpaywall OA enrichment
-readiness before the priority papers. Scheduled collection writes matching text and JSON queue
+readiness before the priority papers. Use
+`python team/research_cli.py radar-import-queue --limit 20 --min-score 35` to
+promote the active terminal queue into Latest Relevant Papers with the same
+dedupe and provenance behavior as the web Queue import form. Scheduled
+collection writes matching text and JSON queue
 snapshots under `team/logs/` by default. Scheduled scripts also
 refresh stable `literature-radar-latest.*`,
 `literature-radar-queue-latest.*`, and `literature-radar-brief-latest.*` files
