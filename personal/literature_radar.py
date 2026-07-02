@@ -29,6 +29,7 @@ from shared.literature_radar import (
     append_radar_context_summary_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
+    build_radar_brief_recommendation_records,
     build_radar_collection_config,
     build_radar_history_brief,
     build_recommendation_report,
@@ -460,12 +461,20 @@ def build_personal_literature_radar_brief_payload(
         days=selected_days,
         recommendation_limit=selected_limit,
     )
+    top_recommendations = build_radar_brief_recommendation_records(
+        runs,
+        generated_at=selected_now,
+        days=selected_days,
+        recommendation_limit=selected_limit,
+    )
+    top_triage_summary = radar_triage_summary(top_recommendations)
     activity = personal_literature_radar_activity_digest(
         root,
         since=selected_now - timedelta(days=selected_days),
         limit=20,
     )
     brief = append_personal_literature_radar_activity_to_brief(brief, activity)
+    triage_summary = radar_triage_summary(queue_papers)
     return {
         "success": True,
         "kind": "personal_literature_radar_brief",
@@ -474,6 +483,10 @@ def build_personal_literature_radar_brief_payload(
         "run_limit": selected_run_limit,
         "run_count": len(runs),
         "review_counts": review_counts,
+        "triage_plan": {
+            "summary": top_triage_summary,
+            "triage_action_options": radar_triage_action_options("", top_triage_summary),
+        },
         "source_coverage": radar_history_source_coverage_summary(
             runs,
             generated_at=selected_now,
@@ -513,7 +526,8 @@ def build_personal_literature_radar_brief_payload(
             "review": queue.get("review") or "",
             "access_summary": radar_pdf_access_summary(queue_papers),
             "provenance_summary": radar_source_provenance_summary(queue_papers),
-            "triage_summary": radar_triage_summary(queue_papers),
+            "triage_summary": triage_summary,
+            "triage_action_options": radar_triage_action_options("", triage_summary),
             "papers": queue_papers,
         },
         "latest_run": personal_literature_radar_run_summary(
@@ -522,6 +536,7 @@ def build_personal_literature_radar_brief_payload(
             freshness_max_age_hours=freshness_max_age_hours,
         ),
         "activity": activity,
+        "top_recommendations": top_recommendations,
         "brief": brief,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),

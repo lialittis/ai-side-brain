@@ -741,6 +741,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Source provenance: | total=1 | authoritative=1", queue_text)
             self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", queue_text)
             self.assertIn("top=", queue_text)
+            self.assertIn("Triage lanes:", queue_text)
+            self.assertIn("filters=import->import_to_library", queue_text)
             self.assertIn("action=queue_for_human_triage", queue_text)
             self.assertIn("Triage:", queue_text)
             self.assertIn("Why:", queue_text)
@@ -887,6 +889,17 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["provenance_summary"]["source_ids"], {"arxiv": 1})
             self.assertEqual(brief["context_summary"]["run_count"], 1)
             self.assertEqual(brief["context_summary"]["context_item_count"], 0)
+            self.assertEqual(brief["triage_plan"]["summary"]["top_action"], "follow_up_watch")
+            active_option = next(
+                option
+                for option in brief["triage_plan"]["triage_action_options"]
+                if option["action"] == brief["triage_plan"]["summary"]["top_action"]
+            )
+            self.assertEqual(active_option["count"], 1)
+            self.assertEqual(brief["top_recommendations"][0]["title"], "Agentic Security for Memory Safety")
+            self.assertEqual(brief["top_recommendations"][0]["triage_hint"]["action"], "follow_up_watch")
+            self.assertEqual(brief["top_recommendations"][0]["review"]["status"], "watch")
+            self.assertIn("download allowed", brief["top_recommendations"][0]["pdf_policy"])
             self.assertEqual(brief["activity"][0]["action_label"], "Marked watch")
             self.assertIn("literature-radar-runs.json", brief["paths"]["run_index"])
             self.assertIn("literature-radar-papers.json", brief["paths"]["paper_history"])
@@ -899,6 +912,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("statuses=not_applicable=1", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Context Linking", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Triage Plan", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Triage:", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Personal Activity", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
 

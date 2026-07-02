@@ -23,6 +23,7 @@ from shared.literature_radar import (
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_recommendation_report,
+    build_radar_brief_recommendation_records,
     build_radar_pipeline_trace,
     build_radar_preflight_payload,
     build_radar_history_brief,
@@ -42,6 +43,7 @@ from shared.literature_radar import (
     format_radar_source_provenance_summary,
     format_radar_source_coverage,
     format_radar_source_stats,
+    format_radar_triage_options,
     merge_duplicate_papers,
     mvp_source_ids,
     normalize_radar_triage_action,
@@ -767,6 +769,10 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertTrue(options[0]["selected"])
         self.assertEqual(options[0]["count"], 1)
         self.assertEqual(options[0]["aliases"][0], "import")
+        option_text = format_radar_triage_options(options)
+        self.assertIn("Triage lanes:", option_text)
+        self.assertIn("Import=1", option_text)
+        self.assertIn("import->import_to_library", option_text)
         empty_queue = build_radar_review_queue(records, limit=3, triage_action="compare_with_existing_work")
         self.assertEqual(empty_queue["triage_action"], "compare_with_existing_work")
         self.assertEqual(empty_queue["papers"], [])
@@ -1805,11 +1811,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             source_id="arxiv",
             source_paper_id="2601.00032",
             title="Weekly Watch Radar",
-            abstract="Agentic security paper that should stay on the team's watch list.",
+            authors=["Ada Lovelace", "Grace Hopper"],
+            abstract="Agentic security paper with memory safety and system security links for the team's watch list.",
+            year=2026,
+            venue="arXiv",
             identifiers={"arxiv_id": "2601.00032"},
             links={"arxiv": "https://arxiv.org/abs/2601.00032"},
             release_date="2026-06-30",
         )
+        watch_paper["tags"] = ["agentic security", "memory safety", "system security"]
         watch_recommendation = recommend_papers(
             [watch_paper],
             now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
@@ -1828,9 +1838,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "short_summary": "Weekly watch summary for agentic security.",
             "relationship_to_interests": "Strong weekly match for agentic security.",
         }
-        brief = build_radar_history_brief(
-            [
-                {
+        run_records = [
+            {
                     "id": "run_recent",
                     "status": "partial",
                     "sources": ["arxiv", "dblp", "openreview", "hugging_face_papers"],
@@ -1902,8 +1911,16 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                     "recommendation_count": 10,
                     "recommendations": [],
                 },
-            ],
+            ]
+        brief = build_radar_history_brief(
+            run_records,
             title="Test Radar Brief",
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+            recommendation_limit=5,
+        )
+        structured = build_radar_brief_recommendation_records(
+            run_records,
             generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
             days=7,
             recommendation_limit=5,
@@ -1948,9 +1965,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`acm_ccs` ACM CCS (security, 2026): 2 candidate(s), 1 recommended", brief)
         self.assertIn("DBLP unavailable", brief)
         self.assertLess(brief.index("Weekly Watch Radar"), brief.index("Weekly Memory Safety Radar"))
+        self.assertIn("Triage Plan", brief)
+        self.assertIn("total=2", brief)
+        self.assertIn("Follow up: 1 recommendation(s) (action: `follow_up_watch`)", brief)
+        self.assertIn("Keep dismissed: 1 recommendation(s) (action: `keep_dismissed`)", brief)
         self.assertIn("Weekly Memory Safety Radar", brief)
         self.assertIn("Review: watch", brief)
         self.assertIn("Review: dismissed", brief)
+        self.assertIn("Triage: Follow up", brief)
+        self.assertIn("Triage: Keep dismissed", brief)
         self.assertIn("Released: 2026-06-30", brief)
         self.assertIn("Released: 2026-06-29", brief)
         self.assertIn("reason: outside current sprint", brief)
@@ -1961,7 +1984,24 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("Matched: memory safety", brief)
         self.assertIn("PDF policy: download allowed", brief)
         self.assertIn("Source provenance: source=arxiv; class=primary_metadata; metadata=authoritative", brief)
+        self.assertIn("Link: https://arxiv.org/abs/2601.00032", brief)
         self.assertNotIn("run_old", brief)
+        self.assertEqual([record["title"] for record in structured], ["Weekly Watch Radar", "Weekly Memory Safety Radar"])
+        self.assertEqual(structured[0]["rank"], 1)
+        self.assertEqual(structured[0]["run_id"], "run_recent")
+        self.assertEqual(structured[0]["authors"], ["Ada Lovelace", "Grace Hopper"])
+        self.assertEqual(structured[0]["year"], 2026)
+        self.assertEqual(structured[0]["venue"], "arXiv")
+        self.assertEqual(structured[0]["source_ids"], ["arxiv"])
+        self.assertIn("agentic security", structured[0]["tags"])
+        self.assertIn("memory safety", structured[0]["matched_terms"])
+        self.assertEqual(structured[0]["triage_hint"]["action"], "follow_up_watch")
+        self.assertEqual(structured[0]["link"], "https://arxiv.org/abs/2601.00032")
+        self.assertIn("Signal: Weekly watch summary for agentic security.", structured[0]["signal_lines"])
+        self.assertEqual(structured[0]["pdf_access"]["access_kind"], "arxiv_pdf")
+        self.assertIn("download allowed", structured[0]["pdf_policy"])
+        self.assertEqual(structured[0]["source_provenance"]["source_id"], "arxiv")
+        self.assertEqual(structured[1]["review"]["status"], "dismissed")
 
         provenance_summary = radar_history_source_provenance_summary(
             [
@@ -1979,6 +2019,38 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(provenance_summary["run_count"], 1)
         self.assertEqual(provenance_summary["authoritative"], 2)
         self.assertEqual(provenance_summary["source_ids"], {"arxiv": 2})
+
+    def test_brief_recommendation_records_keep_nested_pdf_access(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00077",
+            title="Nested Brief PDF Access for Memory Safety",
+            abstract="Memory safety and system security.",
+            identifiers={"arxiv_id": "2601.00077"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00077"},
+            discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        )
+        recommendation = recommend_papers([paper], limit=1, now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc))[0]
+        nested_record = {
+            "title": recommendation["paper"]["title"],
+            "recommendation": recommendation,
+        }
+        structured = build_radar_brief_recommendation_records(
+            [
+                {
+                    "id": "run_nested",
+                    "status": "succeeded",
+                    "started_at": "2026-07-01T09:00:00+00:00",
+                    "recommendations": [nested_record],
+                }
+            ],
+            generated_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+            days=7,
+            recommendation_limit=1,
+        )
+        self.assertEqual(structured[0]["pdf_access"]["access_kind"], "arxiv_pdf")
+        self.assertEqual(structured[0]["link"], "https://arxiv.org/abs/2601.00077")
+        self.assertIn("download allowed", structured[0]["pdf_policy"])
 
 
 if __name__ == "__main__":

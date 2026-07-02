@@ -39,6 +39,7 @@ from shared.literature_radar import (
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
+    format_radar_triage_options,
     format_radar_triage_summary,
     openreview_venue_profile_selection_summary,
     radar_dblp_venue_profile_selection_summary,
@@ -416,6 +417,7 @@ def print_status(result: dict[str, Any]) -> None:
             access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
             provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
             triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
+            triage_options=queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else None,
         )
 
 
@@ -547,6 +549,7 @@ def print_personal_queue(
     access_summary: dict[str, Any] | None = None,
     provenance_summary: dict[str, Any] | None = None,
     triage_summary: dict[str, Any] | None = None,
+    triage_options: list[dict[str, Any]] | None = None,
 ) -> None:
     print("Personal Literature Radar Queue")
     print(
@@ -613,6 +616,8 @@ def print_personal_queue(
         print(format_radar_source_provenance_summary(provenance_summary))
     if triage_summary:
         print(format_radar_triage_summary(triage_summary))
+    if triage_options:
+        print(format_radar_triage_options(triage_options))
     if not review:
         print("No active unreviewed or watched Radar papers.")
         return
@@ -813,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
                 access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
                 provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
                 triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
+                triage_options=queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else None,
             )
         return 0
 

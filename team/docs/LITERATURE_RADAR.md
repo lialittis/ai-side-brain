@@ -141,8 +141,8 @@ lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
 answer to "why should the team read this?" consistent across ad hoc runs, daily
 queue review, and weekly briefs. The queue also shows paper links, PDF
 policy/access-kind status, stored review notes, the stored recommended action,
-the shared triage hint, plus watch, dismiss, and add-to-library actions that
-return to the daily page.
+the shared triage hint, triage lane chips, plus watch, dismiss, and
+add-to-library actions that return to the daily page.
 For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
 Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
@@ -173,9 +173,9 @@ health and freshness, limits, run count, review counts, the active queue preview
 with PDF access summary, structured `source_readiness`, `pipeline_summary`,
 `oa_enrichment`, aggregate `provenance_summary`, recent team Radar activity from
 the audit log, and links back to the Team Radar pages. The Markdown brief
-includes source readiness, pipeline trace, and OA enrichment readiness sections, and
-also includes a Team Activity section when watch, dismiss, clear, or import
-decisions occurred inside the requested window.
+includes source readiness, pipeline trace, OA enrichment readiness, an overall
+triage plan, per-paper triage next-step lines, and a Team Activity section when
+watch, dismiss, clear, or import decisions occurred inside the requested window.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -452,7 +452,9 @@ HTML review surfaces.
 Use `--triage-action import` or `/radar/queue?triage_action=import` to filter
 the active queue to a specific reviewer next-step bucket; friendly aliases such
 as `import`, `skim`, `compare`, and `watch` normalize to the stored action IDs.
-The same parameter works on `/radar/queue.json`.
+The same parameter works on `/radar/queue.json`. The terminal queue/status
+output also prints the available triage lanes with counts and short filter
+aliases, which keeps scheduled logs actionable for daily team review.
 `/radar/activity.json?days=7&limit=50` and
 `python team/research_cli.py radar-activity --json` return the same recent
 watch, dismiss, clear, add-to-library, comment, relevance-edit, and
@@ -464,8 +466,10 @@ key, optional activity detail or review reason, and imported item ID.
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
 latest-run health/source stats, structured `source_policy` and `source_coverage`
 for every run in the brief window, review counts, active queue preview, the
-Markdown brief, recent team Radar activity, and links back to the HTML brief,
-Radar page, JSON endpoint, and queue JSON.
+Markdown brief, structured `triage_plan` and bibliographic `top_recommendations`, recent team
+Radar activity, and links back to the HTML brief, Radar page, JSON endpoint, and queue JSON. The active queue preview includes
+`triage_action_options`, so dashboards can show the same import, skim, compare,
+and follow-up lanes as the browser queue.
 `/radar/status.json?limit=20` and
 `python team/research_cli.py radar-status --json` combine
 `/radar/settings.json`-style preflight data with `/radar/queue.json`-style

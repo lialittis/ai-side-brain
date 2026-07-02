@@ -3801,6 +3801,9 @@ def build_radar_history_brief(
     if not recommendations:
         lines.extend(["## Top Recommendations", "", "No recommendations were stored in this window.", ""])
         return "\n".join(lines).rstrip() + "\n"
+    triage_plan_lines = radar_brief_triage_plan_lines(recommendations)
+    if triage_plan_lines:
+        lines.extend(["## Triage Plan", "", *triage_plan_lines, ""])
     lines.extend(["## Top Recommendations", ""])
     for index, entry in enumerate(recommendations, start=1):
         recommendation = entry["recommendation"]
@@ -3817,6 +3820,11 @@ def build_radar_history_brief(
             if any(line.startswith("- Context:") for line in signal_lines)
             else [f"- Context: {context_report_text(radar_brief_recommendation_context(recommendation))}"]
         )
+        triage = radar_brief_recommendation_triage_hint(recommendation)
+        triage_line = (
+            f"- Triage: {triage.get('label') or triage.get('action') or 'Review'}"
+            f" - {triage.get('reason') or 'No triage reason recorded.'}"
+        )
         lines.extend(
             [
                 f"### {index}. {title_text}",
@@ -3824,6 +3832,7 @@ def build_radar_history_brief(
                 f"- Relevance: {radar_brief_recommendation_label(recommendation)} "
                 f"({radar_brief_recommendation_score(recommendation)}/100)",
                 f"- Review: {review_report_text(recommendation_review_record(recommendation))}",
+                triage_line,
                 f"- Run: {run.get('id') or 'unknown'} at {run.get('started_at') or 'unknown'}",
                 f"- Released: {radar_brief_recommendation_release_date(recommendation) or 'unknown'}",
                 f"- Novelty: {novelty_report_text(radar_brief_recommendation_novelty(recommendation))}",
@@ -3837,6 +3846,31 @@ def build_radar_history_brief(
             ]
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_radar_brief_recommendation_records(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+    recommendation_limit: int = 20,
+) -> list[dict[str, Any]]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    bundles = [
+        bundle
+        for record in run_records
+        if (bundle := normalize_radar_brief_bundle(record))
+        and radar_brief_run_time(bundle["run"]) is not None
+        and (cutoff is None or radar_brief_run_time(bundle["run"]) >= cutoff)
+    ]
+    bundles.sort(key=lambda bundle: str(bundle["run"].get("started_at") or ""), reverse=True)
+    entries = radar_brief_top_recommendations(bundles, limit=recommendation_limit)
+    return [
+        radar_brief_recommendation_record(entry, rank=index)
+        for index, entry in enumerate(entries, start=1)
+    ]
 
 
 def normalize_radar_brief_bundle(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -4744,6 +4778,112 @@ def radar_brief_top_recommendations(
     return entries[: max(0, int(limit))]
 
 
+def radar_brief_triage_plan_lines(entries: list[dict[str, Any]]) -> list[str]:
+    action_counts: dict[str, int] = {}
+    severity_counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for entry in entries:
+        recommendation = entry.get("recommendation") if isinstance(entry.get("recommendation"), dict) else {}
+        if not recommendation:
+            continue
+        triage = radar_brief_recommendation_triage_hint(recommendation)
+        action = str(triage.get("action") or "").strip()
+        if not action:
+            continue
+        severity = str(triage.get("severity") or "normal").strip() or "normal"
+        label = str(triage.get("label") or action).strip() or action
+        action_counts[action] = int(action_counts.get(action) or 0) + 1
+        severity_counts[severity] = int(severity_counts.get(severity) or 0) + 1
+        labels.setdefault(action, label)
+    if not action_counts:
+        return []
+    summary = {
+        "total": sum(action_counts.values()),
+        "actions": dict(sorted(action_counts.items())),
+        "labels": {},
+        "severities": dict(sorted(severity_counts.items())),
+        "top_action": sorted(action_counts.items(), key=lambda item: (-int(item[1]), str(item[0])))[0][0],
+    }
+    lines = [f"- {format_radar_triage_summary(summary)}"]
+    for action, count in sorted(action_counts.items(), key=lambda item: (-int(item[1]), str(item[0]))):
+        label = labels.get(action, action)
+        lines.append(f"- {label}: {int(count)} recommendation(s) (action: `{action}`)")
+    return lines
+
+
+def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    recommendation = entry.get("recommendation") if isinstance(entry.get("recommendation"), dict) else {}
+    run = entry.get("run") if isinstance(entry.get("run"), dict) else {}
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    selected_paper = paper or nested_paper
+    selected_dedupe_key = (
+        recommendation.get("dedupe_key")
+        or nested.get("dedupe_key")
+        or selected_paper.get("dedupe_key")
+        or (dedupe_key(selected_paper) if selected_paper else "")
+    )
+    pdf_access = radar_brief_recommendation_pdf_access(recommendation)
+    source_provenance = radar_brief_recommendation_source_provenance(recommendation)
+    attention = recommendation.get("attention_summary") if isinstance(recommendation.get("attention_summary"), dict) else {}
+    summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
+    context = radar_brief_recommendation_context(recommendation)
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    source_ids = unique_normalized_terms(
+        [
+            selected_paper.get("source_id") if isinstance(selected_paper, dict) else "",
+            *[
+                source_record.get("source_id")
+                for source_record in (selected_paper.get("source_records") if isinstance(selected_paper, dict) else []) or []
+                if isinstance(source_record, dict)
+            ],
+        ]
+    )
+    tags = unique_normalized_terms(
+        [
+            *((selected_paper.get("tags") if isinstance(selected_paper, dict) else []) or []),
+            *((recommendation.get("tags") if isinstance(recommendation.get("tags"), list) else []) or []),
+            *((nested.get("tags") if isinstance(nested.get("tags"), list) else []) or []),
+        ]
+    )
+    matched_terms = unique_normalized_terms(
+        scoring.get("matched_positive_keywords")
+        or scoring.get("matched_terms")
+        or recommendation.get("matched_positive_keywords")
+        or recommendation.get("matched_terms")
+        or []
+    )
+    return {
+        "rank": max(1, int(rank)),
+        "title": radar_brief_recommendation_title(recommendation),
+        "dedupe_key": selected_dedupe_key,
+        "authors": list(selected_paper.get("authors") or []) if isinstance(selected_paper, dict) else [],
+        "year": selected_paper.get("year") if isinstance(selected_paper, dict) else None,
+        "venue": selected_paper.get("venue") or "" if isinstance(selected_paper, dict) else "",
+        "source_ids": source_ids,
+        "tags": tags,
+        "matched_terms": matched_terms,
+        "run_id": run.get("id") or "",
+        "run_started_at": run.get("started_at") or "",
+        "release_date": radar_brief_recommendation_release_date(recommendation),
+        "score": radar_brief_recommendation_score(recommendation),
+        "label": radar_brief_recommendation_label(recommendation),
+        "review": recommendation_review_record(recommendation),
+        "triage_hint": radar_brief_recommendation_triage_hint(recommendation),
+        "novelty": radar_brief_recommendation_novelty(recommendation),
+        "attention_summary": dict(attention),
+        "summary": dict(summary),
+        "signal_lines": radar_latest_signal_lines(recommendation),
+        "context": context,
+        "pdf_access": pdf_access,
+        "pdf_policy": pdf_access_report_text(pdf_access),
+        "source_provenance": source_provenance,
+        "source_provenance_text": source_provenance_report_text(source_provenance),
+        "link": radar_brief_recommendation_link(recommendation),
+    }
+
+
 def radar_brief_recommendation_review_priority(recommendation: dict[str, Any]) -> int:
     status = recommendation_review_record(recommendation)["status"]
     return {
@@ -4962,6 +5102,31 @@ def format_radar_triage_summary(summary: dict[str, Any]) -> str:
         parts.append(f"actions={action_text}")
     if severity_text:
         parts.append(f"severity={severity_text}")
+    return " | ".join(parts)
+
+
+def format_radar_triage_options(options: list[dict[str, Any]]) -> str:
+    if not options:
+        return ""
+    lane_text = ", ".join(
+        f"{option.get('label') or option.get('action')}={int(option.get('count') or 0)}"
+        for option in options
+        if isinstance(option, dict)
+    )
+    aliases = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_aliases = option.get("aliases") if isinstance(option.get("aliases"), list) else []
+        alias = next((str(value).strip() for value in option_aliases if str(value).strip()), "")
+        action = str(option.get("action") or "").strip()
+        if alias and action:
+            aliases.append(f"{alias}->{action}")
+    parts = ["Triage lanes:"]
+    if lane_text:
+        parts.append(lane_text)
+    if aliases:
+        parts.append("filters=" + ", ".join(aliases))
     return " | ".join(parts)
 
 
@@ -5258,7 +5423,14 @@ def radar_brief_recommendation_context(recommendation: dict[str, Any]) -> dict[s
 
 
 def radar_brief_recommendation_pdf_access(recommendation: dict[str, Any]) -> dict[str, Any]:
-    return recommendation.get("pdf_access") if isinstance(recommendation.get("pdf_access"), dict) else {}
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    for source in (recommendation, nested, paper, nested_paper):
+        pdf_access = source.get("pdf_access") if isinstance(source.get("pdf_access"), dict) else {}
+        if pdf_access:
+            return pdf_access
+    return {}
 
 
 def radar_brief_recommendation_source_provenance(recommendation: dict[str, Any]) -> dict[str, Any]:
@@ -5274,20 +5446,66 @@ def radar_brief_recommendation_source_provenance(recommendation: dict[str, Any])
     return provenance or nested_provenance
 
 
+def radar_brief_recommendation_triage_hint(recommendation: dict[str, Any]) -> dict[str, Any]:
+    nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+    review = recommendation_review_record(recommendation)
+    latest = {
+        **nested,
+        **recommendation,
+        "paper": paper or nested_paper,
+        "pdf_access": radar_brief_recommendation_pdf_access(recommendation),
+        "context": radar_brief_recommendation_context(recommendation),
+    }
+    return radar_review_triage_hint(
+        {
+            "title": radar_brief_recommendation_title(recommendation),
+            "paper": paper or nested_paper,
+            "latest_recommendation": latest,
+            "pdf_access": latest["pdf_access"],
+            "review": review,
+            "review_status": review.get("status"),
+            "review_reason": review.get("reason"),
+            "imported_item_id": recommendation.get("imported_item_id") or nested.get("imported_item_id"),
+            "import_result": recommendation.get("import_result") or nested.get("import_result"),
+        }
+    )
+
+
 def radar_brief_recommendation_link(recommendation: dict[str, Any]) -> str:
     nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
     paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
     nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
     links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
     nested_links = nested_paper.get("links") if isinstance(nested_paper.get("links"), dict) else {}
-    return str(
-        recommendation.get("link")
-        or links.get("landing")
-        or links.get("pdf")
-        or nested_links.get("landing")
-        or nested_links.get("pdf")
-        or ""
-    )
+    provenance = radar_brief_recommendation_source_provenance(recommendation)
+    pdf_access = radar_brief_recommendation_pdf_access(recommendation)
+    for candidate in [
+        recommendation.get("link"),
+        links.get("landing"),
+        links.get("arxiv"),
+        links.get("doi"),
+        links.get("publisher"),
+        links.get("pdf"),
+        nested_links.get("landing"),
+        nested_links.get("arxiv"),
+        nested_links.get("doi"),
+        nested_links.get("publisher"),
+        nested_links.get("pdf"),
+        provenance.get("source_url"),
+        provenance.get("landing_url"),
+        provenance.get("doi_url"),
+        provenance.get("publisher_url"),
+        provenance.get("pdf_url"),
+        pdf_access.get("source_url"),
+        pdf_access.get("pdf_url"),
+        pdf_access.get("local_path"),
+    ]:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def novelty_report_text(novelty: dict[str, Any]) -> str:

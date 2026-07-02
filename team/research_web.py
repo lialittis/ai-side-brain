@@ -45,6 +45,7 @@ from shared.literature_radar import (
     radar_source_option_metadata,
     radar_source_options,
     radar_source_readiness_summary,
+    radar_triage_action_options,
     radar_triage_summary,
 )
 from shared.research import example_topic_profiles, topic_profile_by_id
@@ -1428,6 +1429,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
     access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
     triage_summary = queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else {}
+    triage_options = queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else []
     activity = payload.get("activity") if isinstance(payload.get("activity"), list) else []
     latest_status = str(latest_run.get("status") or "unknown") if latest_run else "none"
     freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
@@ -1534,6 +1536,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">top: {html_escape(str(triage_summary.get("top_action") or "none"))}</span>
         <span class="tag">actions: {html_escape(format_status_counts_for_web(triage_summary.get("actions")))}</span>
       </div>
+      {render_radar_queue_triage_options(triage_options, limit=int(payload.get("recommendation_limit") or 20))}
     </div>
     """
 
@@ -2734,6 +2737,7 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
     )
     selected_review = str(queue["review"] or "all")
     priority_records = list(queue["papers"])
+    triage_summary = radar_triage_summary(priority_records)
     status_line = (
         f"{unreviewed} unreviewed, {watch} watch, {dismissed} dismissed from {total} stored Radar paper"
         f"{'' if total == 1 else 's'}."
@@ -2755,7 +2759,8 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
       {render_radar_queue_access_summary(priority_records)}
-      {render_radar_queue_triage_summary(radar_triage_summary(priority_records), limit=20)}
+      {render_radar_queue_triage_summary(triage_summary, limit=20)}
+      {render_radar_queue_triage_options(radar_triage_action_options("", triage_summary), limit=20)}
       {render_latest_radar_queue_preview(priority_records, review_filter=selected_review, return_to="latest")}
     </section>
     """

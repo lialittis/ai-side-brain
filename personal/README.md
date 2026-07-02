@@ -215,7 +215,8 @@ state, and counts for local dashboards or shell aliases.
 Use `queue --triage-action import` to focus the active queue on one reviewer
 next-step bucket while keeping the same review-state priority rules. Friendly
 aliases such as `import`, `skim`, `compare`, and `watch` normalize to stored
-action IDs.
+action IDs. The text queue/status output prints those triage lanes too, so
+scheduled snapshots remain usable without inspecting JSON.
 Completed run
 records also store the recommendation-level provenance summary, and
 `latest_run.provenance_summary` exposes it for daily health checks. Both
@@ -253,14 +254,15 @@ candidate counts, appends source coverage to reports and briefs, and appends
 source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
-lines, attention summaries, context, recent review activity, source policy,
-OA enrichment readiness, venue coverage, and PDF
+lines, attention summaries, an overall triage plan, per-paper triage next steps,
+context, recent review activity, source policy, OA enrichment readiness, venue coverage, and PDF
 policy for the top stored recommendations. `brief --json` returns the same Markdown plus latest-run
 health/freshness, review counts, active queue preview with PDF access summary,
 source provenance summary, recent activity, structured `context_summary`,
 `source_policy`, `source_readiness`, `pipeline_summary`, `oa_enrichment`, aggregate
 `provenance_summary`, and `source_coverage` for every run in the brief window,
-and paths to the local run index and paper-history files, so local
+active queue `triage_action_options`, structured `triage_plan` and
+`top_recommendations` with flat bibliographic fields, and paths to the local run index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also
 snapshot the topic profile used for scoring, the Personal history/watch context
 pool used for linking, and a phase trace for collection, PDF policy,

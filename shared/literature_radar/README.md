@@ -82,6 +82,10 @@ provider's provenance while the merged paper keeps a compact primary
 The shared queue/brief helpers also build `provenance_summary` so Personal and
 Team dashboards can audit whether active recommendations came from
 authoritative API/accepted-page sources or secondary signals.
+Brief helpers also expose a structured top-recommendation triage plan and
+recommendation records for JSON consumers, carrying run IDs, review state,
+flat bibliographic fields, triage hints, signal lines, PDF policy, source
+provenance, and links without parsing Markdown.
 Completed Personal and Team run records store the same summary for all ranked
 recommendations, so later weekly briefs and latest-run health views remain
 auditable even after the active queue changes. Stored history briefs include a
@@ -120,6 +124,9 @@ source readiness, phase trace used for the run, and OA enrichment readiness for
 legal PDF/license checks. It also carries source policy and venue coverage for
 DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers are surfaced before unreviewed papers, while
 `dismissed` papers fall behind active candidates.
+Briefs include an overall triage plan plus per-paper triage hints from the same
+shared rules as queue records, so a brief can say whether the next action is
+import, review before import, compare, skim, follow up, or keep dismissed.
 The shared core also builds daily review queues from stored paper history:
 unreviewed papers are handled before watched papers, dismissed papers are
 excluded from the priority list, already-imported papers are skipped, and active
@@ -136,6 +143,8 @@ action IDs.
 Queue payloads expose `triage_action_options` with labels, aliases,
 descriptions, selected state, and active counts so products can build filter
 controls without duplicating these lane definitions.
+Text queue/status surfaces can format the same option records as triage lanes,
+so cron logs and terminal review snapshots are usable without opening JSON.
 Personal and Team surfaces use this same queue logic.
 Product adapters can also pass a custom recommendation scorer when their local
 interest model is richer than the default shared topic profile; Team Side-Brain

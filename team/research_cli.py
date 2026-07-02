@@ -24,6 +24,7 @@ from shared.literature_radar import (
     format_radar_source_coverage,
     format_radar_source_readiness,
     format_radar_source_stats,
+    format_radar_triage_options,
     format_radar_triage_summary,
     radar_latest_signal_lines,
     radar_supported_source_ids,
@@ -634,6 +635,9 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     triage_summary = result.get("triage_summary") if isinstance(result.get("triage_summary"), dict) else {}
     if triage_summary:
         print(format_radar_triage_summary(triage_summary))
+    triage_options = result.get("triage_action_options") if isinstance(result.get("triage_action_options"), list) else []
+    if triage_options:
+        print(format_radar_triage_options(triage_options))
     review = str(result.get("review") or "")
     if not review:
         print("No active unreviewed or watched Radar papers.")
