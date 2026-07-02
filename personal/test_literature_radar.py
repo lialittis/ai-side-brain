@@ -662,6 +662,15 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn(queue_result["triage_summary"]["top_action"], queue_result["triage_summary"]["actions"])
             self.assertEqual(queue_result["triage_action_options"][0]["action"], "import_to_library")
             self.assertIn("import", queue_result["triage_action_options"][0]["aliases"])
+            recent_direct_queue = build_personal_literature_radar_queue_payload(
+                root,
+                recent_days=1,
+                now=datetime(2026, 7, 2, 10, 0, tzinfo=timezone.utc),
+            )
+            self.assertEqual(recent_direct_queue["recent_days"], 1)
+            self.assertEqual(recent_direct_queue["filtered_counts"]["active_before_filters"], 1)
+            self.assertEqual(recent_direct_queue["filtered_counts"]["after_recent_filter"], 1)
+            self.assertEqual(recent_direct_queue["papers"][0]["dedupe_key"], papers[0]["dedupe_key"])
             filtered_queue_stdout = io.StringIO()
             with contextlib.redirect_stdout(filtered_queue_stdout):
                 filtered_queue_code = personal_literature_radar.main(
@@ -718,9 +727,13 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("Matched:", "\n".join(queue_result["papers"][0]["signal_lines"]))
             queue_text_stdout = io.StringIO()
             with contextlib.redirect_stdout(queue_text_stdout):
-                queue_text_code = personal_literature_radar.main(["queue", "--root-path", str(root)])
+                queue_text_code = personal_literature_radar.main(
+                    ["queue", "--root-path", str(root), "--recent-days", "7"]
+                )
             self.assertEqual(queue_text_code, 0)
             queue_text = queue_text_stdout.getvalue()
+            self.assertIn("Recent filter: last 7 days", queue_text)
+            self.assertIn("after_recent=1", queue_text)
             self.assertIn("Latest run:", queue_text)
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("source_errors=0", queue_text)
@@ -848,6 +861,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                         "7",
                         "--freshness-max-age-hours",
                         "24",
+                        "--queue-recent-days",
+                        "1",
                         "--output",
                         str(brief_path),
                         "--json",
@@ -864,6 +879,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["run_limit"], 50)
             self.assertEqual(brief["review_counts"], {"all": 1, "dismissed": 0, "unreviewed": 0, "watch": 1})
             self.assertEqual(brief["queue"]["review"], "watch")
+            self.assertEqual(brief["queue"]["recent_days"], 1)
+            self.assertEqual(brief["queue"]["filtered_counts"]["after_recent_filter"], 1)
             self.assertEqual(brief["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief["queue"]["provenance_summary"]["authoritative"], 1)
@@ -965,6 +982,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
                 if record["dedupe_key"] == high["dedupe_key"]:
                     latest["score"] = 90
                     latest["label"] = "highly_relevant"
+                    record["pdf_access"]["downloaded"] = True
+                    record["pdf_access"]["download_reason"] = "downloaded_to_cache"
+                    record["pdf_access"]["local_pdf_path"] = "memory/06_Logs/literature-radar-pdfs/cached.pdf"
                 else:
                     latest["score"] = 20
                     latest["label"] = "needs_review"
@@ -1000,6 +1020,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("# Personal Inbox Queue for Memory Safety", inbox_text)
             self.assertIn("Source: Personal Literature Radar", inbox_text)
             self.assertIn("https://arxiv.org/abs/2601.02001", inbox_text)
+            self.assertIn("- Local path: memory/06_Logs/literature-radar-pdfs/cached.pdf", inbox_text)
             updated = read_personal_radar_paper_history(root)
             self.assertEqual(updated[high["dedupe_key"]]["imported_item_id"], result["inbox_paths"][0])
             self.assertEqual(updated[high["dedupe_key"]]["imported_by"], "alice")
@@ -1018,11 +1039,12 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             text_stdout = io.StringIO()
             with contextlib.redirect_stdout(text_stdout):
                 text_code = personal_literature_radar.main(
-                    ["inbox-queue", "--root-path", str(root), "--limit", "2"]
+                    ["inbox-queue", "--root-path", str(root), "--limit", "2", "--recent-days", "7"]
                 )
             self.assertEqual(text_code, 0)
             self.assertIn("Personal Literature Radar inbox promotion:", text_stdout.getvalue())
             self.assertIn("promoted=0", text_stdout.getvalue())
+            self.assertIn("Recent filter: last 7 days", text_stdout.getvalue())
 
     def test_personal_literature_radar_cli_passes_source_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

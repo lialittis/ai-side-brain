@@ -5359,11 +5359,17 @@ def build_radar_review_queue(
     limit: int = 3,
     review_counts: dict[str, int] | None = None,
     triage_action: str = "",
+    recent_days: int = 0,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     values = list(records.values()) if isinstance(records, dict) else list(records)
     counts = review_counts or radar_review_counts(values)
     selected_review = radar_queue_priority_review_status(values)
     selected_triage_action = normalize_radar_triage_action(triage_action)
+    selected_recent_days = max(0, int(recent_days or 0))
+    selected_now = now or datetime.now(timezone.utc)
+    if selected_now.tzinfo is None:
+        selected_now = selected_now.replace(tzinfo=timezone.utc)
     active_records = [
         record
         for record in values
@@ -5371,11 +5377,20 @@ def build_radar_review_queue(
         and radar_history_review_status(record) == selected_review
         and not radar_history_is_imported(record)
     ]
+    active_count = len(active_records)
     if selected_triage_action:
         active_records = [
             record
             for record in active_records
             if radar_review_triage_hint(record).get("action") == selected_triage_action
+        ]
+    triage_count = len(active_records)
+    if selected_recent_days:
+        cutoff_date = (selected_now - timedelta(days=selected_recent_days)).date().isoformat()
+        active_records = [
+            record
+            for record in active_records
+            if radar_history_record_recent_date(record) >= cutoff_date
         ]
     queued_papers = [
         radar_history_record_with_signal_lines(record)
@@ -5384,9 +5399,33 @@ def build_radar_review_queue(
     return {
         "review": selected_review,
         "triage_action": selected_triage_action,
+        "recent_days": selected_recent_days,
+        "filtered_counts": {
+            "active_before_filters": active_count,
+            "after_triage_filter": triage_count,
+            "after_recent_filter": len(active_records),
+        },
         "review_counts": counts,
         "papers": queued_papers,
     }
+
+
+def radar_history_record_recent_date(record: dict[str, Any]) -> str:
+    dates = []
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    release_date = paper_release_date(paper)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", release_date):
+        dates.append(release_date)
+    for key in ("latest_seen_at", "first_seen_at"):
+        seen_date = normalize_release_date(record.get(key))
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", seen_date):
+            dates.append(seen_date)
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    for key in ("created_at", "recommended_at"):
+        seen_date = normalize_release_date(latest.get(key))
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", seen_date):
+            dates.append(seen_date)
+    return max(dates) if dates else ""
 
 
 def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, Any]:
@@ -5464,6 +5503,7 @@ def radar_record_best_link(record: dict[str, Any]) -> str:
         provenance.get("pdf_url"),
         pdf_access.get("source_url"),
         pdf_access.get("pdf_url"),
+        pdf_access.get("local_pdf_path"),
         pdf_access.get("local_path"),
     ]:
         value = str(candidate or "").strip()

@@ -885,11 +885,14 @@ def radar_papers_path(*, notice: str = "", review_filter: str = "all") -> str:
     return "/radar/papers" + (f"?{urlencode(params)}" if params else "")
 
 
-def radar_queue_path(*, notice: str = "", limit: int = 20, triage_action: str = "") -> str:
+def radar_queue_path(*, notice: str = "", limit: int = 20, triage_action: str = "", recent_days: int = 0) -> str:
     params = {"limit": max(1, int(limit))}
     selected_triage_action = clean_triage_action(triage_action)
     if selected_triage_action:
         params["triage_action"] = selected_triage_action
+    selected_recent_days = max(0, int(recent_days or 0))
+    if selected_recent_days:
+        params["recent_days"] = selected_recent_days
     if notice:
         params["notice"] = notice
     return f"/radar/queue?{urlencode(params)}"
@@ -965,19 +968,22 @@ def render_literature_radar_brief_page(
     days: int = 7,
     limit: int = 20,
     run_limit: int = 50,
+    queue_recent_days: int = 0,
     notice: str = "",
 ) -> str:
+    selected_queue_recent_days = max(0, int(queue_recent_days or 0))
     payload = build_team_literature_radar_brief_payload(
         database,
         days=days,
         limit=limit,
         run_limit=run_limit,
+        queue_recent_days=selected_queue_recent_days,
     )
     body = f"""
     {render_topline("Radar Brief", "Weekly or daily roll-up from stored Literature Radar runs.", "/radar", "Radar")}
     <section class="panel">
       {render_notice(notice)}
-      {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit)}
+      {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit, queue_recent_days=selected_queue_recent_days)}
       <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
       {render_radar_brief_summary(payload)}
       {render_radar_brief_top_recommendations(payload)}
@@ -992,14 +998,17 @@ def render_literature_radar_queue_page(
     *,
     limit: int = 20,
     triage_action: str = "",
+    recent_days: int = 0,
     notice: str = "",
 ) -> str:
     selected_limit = max(1, int(limit))
     selected_triage_action = clean_triage_action(triage_action)
+    selected_recent_days = max(0, int(recent_days or 0))
     payload = build_team_literature_radar_queue_payload(
         database,
         limit=selected_limit,
         triage_action=selected_triage_action,
+        recent_days=selected_recent_days,
     )
     records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
@@ -1027,10 +1036,11 @@ def render_literature_radar_queue_page(
       {render_latest_radar_run_health(latest_run)}
       {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=50)}
       {render_radar_queue_access_summary_from_payload(access_summary)}
-      {render_radar_queue_triage_summary(triage_summary, limit=selected_limit)}
-      {render_radar_queue_triage_options(triage_options, limit=selected_limit)}
-      {render_radar_queue_filter_status(selected_triage_action, selected_limit)}
-      {render_radar_queue_batch_import_control(records, limit=selected_limit, triage_action=selected_triage_action)}
+      {render_radar_queue_recent_options(selected_limit, selected_triage_action, selected_recent_days)}
+      {render_radar_queue_triage_summary(triage_summary, limit=selected_limit, recent_days=selected_recent_days)}
+      {render_radar_queue_triage_options(triage_options, limit=selected_limit, recent_days=selected_recent_days)}
+      {render_radar_queue_filter_status(selected_triage_action, selected_limit, recent_days=selected_recent_days)}
+      {render_radar_queue_batch_import_control(records, limit=selected_limit, triage_action=selected_triage_action, recent_days=selected_recent_days)}
       {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="queue")}
       {render_empty_radar_queue(records, review_counts)}
     </section>
@@ -1301,9 +1311,11 @@ def build_literature_radar_status_payload(
     use_saved_defaults: bool = True,
     settings: dict[str, Any] | None = None,
     triage_action: str = "",
+    recent_days: int = 0,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     selected_triage_action = clean_triage_action(triage_action)
+    selected_recent_days = max(0, int(recent_days or 0))
     selected_settings = settings
     if selected_settings is None and not use_saved_defaults:
         selected_settings = default_radar_form_settings(source_preset="custom")
@@ -1317,6 +1329,7 @@ def build_literature_radar_status_payload(
         now=now,
         freshness_max_age_hours=freshness_max_age_hours,
         triage_action=selected_triage_action,
+        recent_days=selected_recent_days,
     )
     return {
         "success": True,
@@ -1328,9 +1341,24 @@ def build_literature_radar_status_payload(
         "links": {
             "html": "/radar",
             "settings_json": "/radar/settings.json",
-            "queue_html": team_radar_queue_link("/radar/queue", selected_limit, selected_triage_action),
-            "queue_json": team_radar_queue_link("/radar/queue.json", selected_limit, selected_triage_action),
-            "status_json": team_radar_queue_link("/radar/status.json", selected_limit, selected_triage_action),
+            "queue_html": team_radar_queue_link(
+                "/radar/queue",
+                selected_limit,
+                selected_triage_action,
+                recent_days=selected_recent_days,
+            ),
+            "queue_json": team_radar_queue_link(
+                "/radar/queue.json",
+                selected_limit,
+                selected_triage_action,
+                recent_days=selected_recent_days,
+            ),
+            "status_json": team_radar_queue_link(
+                "/radar/status.json",
+                selected_limit,
+                selected_triage_action,
+                recent_days=selected_recent_days,
+            ),
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
     }
@@ -1533,7 +1561,7 @@ def render_radar_activity_detail(
     return ""
 
 
-def render_radar_brief_form(*, days: int, limit: int, run_limit: int) -> str:
+def render_radar_brief_form(*, days: int, limit: int, run_limit: int, queue_recent_days: int = 0) -> str:
     return f"""
     <form class="radar-brief-form" method="get" action="/radar/brief">
       <label>
@@ -1547,6 +1575,10 @@ def render_radar_brief_form(*, days: int, limit: int, run_limit: int) -> str:
       <label>
         <span class="muted">Stored runs</span>
         <input type="number" name="run_limit" min="1" max="500" value="{run_limit}">
+      </label>
+      <label>
+        <span class="muted">Queue recent days</span>
+        <input type="number" name="queue_recent_days" min="0" max="365" value="{max(0, int(queue_recent_days or 0))}">
       </label>
       <button class="button primary" type="submit">Build Brief</button>
     </form>
@@ -3296,12 +3328,34 @@ def render_radar_queue_access_summary_from_payload(summary: dict[str, Any]) -> s
     """
 
 
-def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 20) -> str:
+def render_radar_queue_recent_options(limit: int, triage_action: str = "", recent_days: int = 0) -> str:
+    selected_recent_days = max(0, int(recent_days or 0))
+    options = [(0, "All"), (7, "7 days"), (30, "30 days")]
+    chips = []
+    for days, label in options:
+        css = "tag active" if days == selected_recent_days else "tag"
+        href = team_radar_queue_link(
+            "/radar/queue",
+            max(1, int(limit)),
+            clean_triage_action(triage_action),
+            recent_days=days,
+        )
+        chips.append(f'<a class="{css}" href="{html_escape(href)}">{html_escape(label)}</a>')
+    return f"""
+    <div class="tags">
+      <span class="muted">Recent:</span>
+      {''.join(chips)}
+    </div>
+    """
+
+
+def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 20, recent_days: int = 0) -> str:
     if int(summary.get("total") or 0) == 0:
         return ""
+    selected_recent_days = max(0, int(recent_days or 0))
     actions = summary.get("actions") if isinstance(summary.get("actions"), dict) else {}
     action_links = " ".join(
-        f'<a class="tag" href="/radar/queue?limit={max(1, int(limit))}&amp;triage_action={html_escape(str(action))}">'
+        f'<a class="tag" href="{html_escape(team_radar_queue_link("/radar/queue", max(1, int(limit)), str(action), recent_days=selected_recent_days))}">'
         f'{html_escape(str(action).replace("_", " "))}: {int(count)}</a>'
         for action, count in sorted(actions.items())
         if int(count or 0) > 0
@@ -3322,9 +3376,10 @@ def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 2
     """
 
 
-def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20) -> str:
+def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20, recent_days: int = 0) -> str:
     if not options:
         return ""
+    selected_recent_days = max(0, int(recent_days or 0))
     chips = []
     for option in options:
         if not isinstance(option, dict):
@@ -3336,8 +3391,14 @@ def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20) ->
         count = int(option.get("count") or 0)
         css = "tag active" if option.get("selected") else "tag"
         title = html_escape(str(option.get("description") or ""))
+        href = team_radar_queue_link(
+            "/radar/queue",
+            max(1, int(limit)),
+            action,
+            recent_days=selected_recent_days,
+        )
         chips.append(
-            f'<a class="{css}" href="/radar/queue?limit={max(1, int(limit))}&amp;triage_action={html_escape(action)}"'
+            f'<a class="{css}" href="{html_escape(href)}"'
             f' title="{title}">{html_escape(label)} {count}</a>'
         )
     if not chips:
@@ -3350,15 +3411,21 @@ def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20) ->
     """
 
 
-def render_radar_queue_filter_status(triage_action: str, limit: int) -> str:
+def render_radar_queue_filter_status(triage_action: str, limit: int, *, recent_days: int = 0) -> str:
     selected = clean_triage_action(triage_action)
-    if not selected:
+    selected_recent_days = max(0, int(recent_days or 0))
+    if not selected and not selected_recent_days:
         return ""
     clear_link = f"/radar/queue?limit={max(1, int(limit))}"
+    parts = []
+    if selected:
+        parts.append(f'<span class="pill">triage: {html_escape(selected)}</span>')
+    if selected_recent_days:
+        parts.append(f'<span class="pill">recent: last {selected_recent_days} days</span>')
     return f"""
     <div class="tags">
       <span class="muted">Active filter:</span>
-      <span class="pill">triage: {html_escape(selected)}</span>
+      {''.join(parts)}
       <a class="tag" href="{html_escape(clear_link)}">clear</a>
     </div>
     """
@@ -3369,6 +3436,7 @@ def render_radar_queue_batch_import_control(
     *,
     limit: int,
     triage_action: str = "",
+    recent_days: int = 0,
 ) -> str:
     importable_count = sum(1 for record in records if not str(record.get("imported_item_id") or ""))
     if importable_count == 0:
@@ -3379,6 +3447,7 @@ def render_radar_queue_batch_import_control(
     <form class="toolbar radar-queue-import" method="post" action="/radar/queue/import">
       <input type="hidden" name="limit" value="{max(1, int(limit))}">
       <input type="hidden" name="triage_action" value="{html_escape(selected_triage_action)}">
+      <input type="hidden" name="recent_days" value="{max(0, int(recent_days or 0))}">
       <div class="field compact-field">
         <label for="radar_queue_min_score">Min score</label>
         <input id="radar_queue_min_score" type="number" min="0" max="100" name="min_score" value="35">
@@ -4239,6 +4308,7 @@ def import_radar_queue_to_library(database: TeamResearchDatabase, fields: dict[s
         database,
         limit=clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
         triage_action=clean_triage_action(fields.get("triage_action", "")),
+        recent_days=clean_nonnegative_int(fields.get("recent_days", ""), default=0, maximum=365),
         min_score=clean_score_threshold(fields.get("min_score", ""), default=35),
         actor=fields.get("actor") or "team-member",
     )
@@ -4387,6 +4457,17 @@ def clean_positive_int(value: str, *, default: int, maximum: int) -> int:
     except ValueError as error:
         raise ValueError("Expected a positive number.") from error
     return min(maximum, max(1, parsed))
+
+
+def clean_nonnegative_int(value: str, *, default: int, maximum: int) -> int:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError as error:
+        raise ValueError("Expected a nonnegative number.") from error
+    return min(maximum, max(0, parsed))
 
 
 def clean_optional_year(value: Any) -> int | None:
@@ -4556,6 +4637,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         self.database,
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                         triage_action=query.get("triage_action", [""])[0],
+                        recent_days=clean_nonnegative_int(query.get("recent_days", [""])[0], default=0, maximum=365),
                         notice=notice,
                     )
                 )
@@ -4570,6 +4652,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             maximum=24 * 30,
                         ),
                         triage_action=clean_triage_action(query.get("triage_action", [""])[0]),
+                        recent_days=clean_nonnegative_int(query.get("recent_days", [""])[0], default=0, maximum=365),
                     )
                 )
             elif parsed.path == "/radar/settings.json":
@@ -4585,6 +4668,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             maximum=24 * 30,
                         ),
                         triage_action=clean_triage_action(query.get("triage_action", [""])[0]),
+                        recent_days=clean_nonnegative_int(query.get("recent_days", [""])[0], default=0, maximum=365),
                     )
                 )
             elif parsed.path == "/radar/brief":
@@ -4594,6 +4678,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                         run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                        queue_recent_days=clean_nonnegative_int(
+                            query.get("queue_recent_days", [""])[0],
+                            default=0,
+                            maximum=365,
+                        ),
                         notice=notice,
                     )
                 )
@@ -4604,6 +4693,11 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
                         limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
                         run_limit=clean_positive_int(query.get("run_limit", [""])[0], default=50, maximum=500),
+                        queue_recent_days=clean_nonnegative_int(
+                            query.get("queue_recent_days", [""])[0],
+                            default=0,
+                            maximum=365,
+                        ),
                         freshness_max_age_hours=clean_positive_int(
                             query.get("freshness_max_age_hours", [""])[0],
                             default=36,
@@ -4684,6 +4778,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                         limit=int(result.get("limit") or 20),
                         triage_action=str(result.get("triage_action") or ""),
+                        recent_days=int(result.get("recent_days") or 0),
                     )
                 )
             elif parsed.path == "/radar/review":

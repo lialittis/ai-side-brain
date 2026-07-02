@@ -1446,6 +1446,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                         "7",
                         "--freshness-max-age-hours",
                         "24",
+                        "--queue-recent-days",
+                        "1",
                         "--output",
                         str(brief_path),
                         "--json",
@@ -1695,6 +1697,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["triage_plan"]["summary"]["top_action"], "import_to_library")
             self.assertEqual(brief["triage_plan"]["triage_action_options"][0]["count"], 1)
             self.assertEqual(brief["queue"]["review"], "unreviewed")
+            self.assertEqual(brief["queue"]["recent_days"], 1)
+            self.assertEqual(brief["queue"]["filtered_counts"]["after_recent_filter"], 1)
             self.assertEqual(brief["queue"]["provenance_summary"]["authoritative"], 1)
             self.assertEqual(brief["queue"]["triage_action_options"][0]["action"], "import_to_library")
             self.assertEqual(brief["queue"]["triage_action_options"][0]["count"], 1)
@@ -1731,7 +1735,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["provenance_summary"]["source_ids"], {"arxiv": 1})
             self.assertEqual(brief["context_summary"]["run_count"], 1)
             self.assertEqual(brief["context_summary"]["context_item_count"], 0)
-            self.assertEqual(brief["links"]["json"], "/radar/brief.json?days=7&limit=20&run_limit=50")
+            self.assertEqual(brief["links"]["json"], "/radar/brief.json?days=7&limit=20&run_limit=50&queue_recent_days=1")
+            self.assertEqual(brief["links"]["queue"], "/radar/queue.json?limit=20&recent_days=1")
             self.assertIn("Team Literature Radar Brief", brief["brief"])
             self.assertIn("Context Linking", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Memory Safety for Agentic Security", brief_path.read_text(encoding="utf-8"))
@@ -1772,9 +1777,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 "Older Higher Priority Team Radar Paper",
                 "2601.00039",
                 95,
-                datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc),
             )
-            store_radar_paper(
+            recent_paper = store_radar_paper(
                 "Recent Lower Priority Team Radar Paper",
                 "2601.00040",
                 20,
@@ -1810,6 +1815,55 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     "Recent Lower Priority Team Radar Paper",
                 ],
             )
+            recent_stdout = io.StringIO()
+            with contextlib.redirect_stdout(recent_stdout):
+                recent_code = research_cli.main(
+                    [
+                        "radar-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--recent-days",
+                        "1",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(recent_code, 0)
+            recent_queue = json.loads(recent_stdout.getvalue())
+            self.assertEqual(recent_queue["recent_days"], 1)
+            self.assertEqual(recent_queue["filtered_counts"]["active_before_filters"], 2)
+            self.assertEqual(recent_queue["filtered_counts"]["after_recent_filter"], 1)
+            self.assertEqual(
+                [paper["title"] for paper in recent_queue["papers"]],
+                ["Recent Lower Priority Team Radar Paper"],
+            )
+            self.assertEqual(recent_queue["links"]["json"], "/radar/queue.json?limit=3&recent_days=1")
+            recent_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(recent_text_stdout):
+                recent_text_code = research_cli.main(
+                    ["radar-queue", "--db-path", str(db_path), "--recent-days", "1"]
+                )
+            self.assertEqual(recent_text_code, 0)
+            self.assertIn("Recent filter: last 1 days", recent_text_stdout.getvalue())
+            self.assertIn("after_recent=1", recent_text_stdout.getvalue())
+            import_recent_stdout = io.StringIO()
+            with contextlib.redirect_stdout(import_recent_stdout):
+                import_recent_code = research_cli.main(
+                    [
+                        "radar-import-queue",
+                        "--db-path",
+                        str(db_path),
+                        "--recent-days",
+                        "1",
+                        "--min-score",
+                        "0",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(import_recent_code, 0)
+            import_recent = json.loads(import_recent_stdout.getvalue())
+            self.assertEqual(import_recent["recent_days"], 1)
+            self.assertEqual(import_recent["imported_count"], 1)
+            self.assertEqual(import_recent["imported"][0]["dedupe_key"], recent_paper["dedupe_key"])
 
     def test_cli_radar_import_queue_imports_visible_candidates_above_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -41,6 +41,10 @@ ARGS=(
   "--json"
 )
 
+if [[ -n "${PERSONAL_RADAR_BRIEF_QUEUE_RECENT_DAYS:-${PERSONAL_RADAR_QUEUE_RECENT_DAYS:-}}" ]]; then
+  ARGS+=("--queue-recent-days" "${PERSONAL_RADAR_BRIEF_QUEUE_RECENT_DAYS:-${PERSONAL_RADAR_QUEUE_RECENT_DAYS:-}}")
+fi
+
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 
 if [[ "${PERSONAL_RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then

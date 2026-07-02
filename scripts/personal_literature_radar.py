@@ -143,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--limit", type=int, default=3)
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
+    queue.add_argument("--recent-days", type=int, default=0, help="only show papers released or first seen in the last N days")
     queue.add_argument("--json", action="store_true")
 
     inbox_queue = subparsers.add_parser(
@@ -152,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     inbox_queue.add_argument("--root-path", type=Path, default=ROOT)
     inbox_queue.add_argument("--limit", type=int, default=20)
     inbox_queue.add_argument("--triage-action", default="", help="only promote queued papers with this triage action")
+    inbox_queue.add_argument("--recent-days", type=int, default=0, help="only promote papers released or first seen in the last N days")
     inbox_queue.add_argument("--min-score", type=int, default=35, help="minimum score required before promotion")
     inbox_queue.add_argument("--actor", default="personal")
     inbox_queue.add_argument("--json", action="store_true")
@@ -161,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--queue-limit", type=int, default=20)
     status.add_argument("--freshness-max-age-hours", type=int, default=36)
     status.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
+    status.add_argument("--recent-days", type=int, default=0, help="only show queued papers released or first seen in the last N days")
     status.add_argument("--source-preset", choices=[preset["id"] for preset in radar_source_presets()])
     status.add_argument("--source", action="append", choices=radar_supported_source_ids())
     status.add_argument("--max-results", type=int, default=25)
@@ -255,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--limit", type=int, default=20, help="maximum recommendations in the brief")
     brief.add_argument("--run-limit", type=int, default=50, help="maximum stored runs to inspect")
     brief.add_argument("--freshness-max-age-hours", type=int, default=36)
+    brief.add_argument("--queue-recent-days", type=int, default=0, help="filter the embedded queue preview to papers released or first seen in the last N days")
     brief.add_argument("--output", type=Path, help="write Markdown brief")
     brief.add_argument("--json", action="store_true")
 
@@ -379,6 +383,7 @@ def build_personal_literature_radar_status_payload(args: argparse.Namespace) -> 
         limit=queue_limit,
         freshness_max_age_hours=args.freshness_max_age_hours,
         triage_action=args.triage_action,
+        recent_days=args.recent_days,
     )
     return {
         "success": True,
@@ -468,6 +473,8 @@ def print_status(result: dict[str, Any]) -> None:
             provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
             triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
             triage_options=queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else None,
+            recent_days=int(queue.get("recent_days") or 0),
+            filtered_counts=queue.get("filtered_counts") if isinstance(queue.get("filtered_counts"), dict) else None,
         )
 
 
@@ -600,6 +607,8 @@ def print_personal_queue(
     provenance_summary: dict[str, Any] | None = None,
     triage_summary: dict[str, Any] | None = None,
     triage_options: list[dict[str, Any]] | None = None,
+    recent_days: int = 0,
+    filtered_counts: dict[str, Any] | None = None,
 ) -> None:
     print("Personal Literature Radar Queue")
     print(
@@ -674,6 +683,15 @@ def print_personal_queue(
     print(f"Priority filter: {review}")
     if triage_action:
         print(f"Triage filter: {triage_action}")
+    if int(recent_days or 0):
+        print(f"Recent filter: last {int(recent_days or 0)} days")
+    if filtered_counts:
+        print(
+            "Filtered candidates: "
+            f"active={int(filtered_counts.get('active_before_filters') or 0)} "
+            f"after_triage={int(filtered_counts.get('after_triage_filter') or 0)} "
+            f"after_recent={int(filtered_counts.get('after_recent_filter') or 0)}"
+        )
     print_paper_history(records, review=review)
 
 
@@ -686,6 +704,8 @@ def print_inbox_queue_result(result: dict[str, Any]) -> None:
     )
     if result.get("triage_action"):
         print(f"Triage filter: {result['triage_action']}")
+    if int(result.get("recent_days") or 0):
+        print(f"Recent filter: last {int(result.get('recent_days') or 0)} days")
     skipped = []
     if int(result.get("skipped_low_score") or 0):
         skipped.append(f"low_score={int(result.get('skipped_low_score') or 0)}")
@@ -877,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             triage_action=args.triage_action,
+            recent_days=args.recent_days,
         )
         if args.json:
             print_json(queue)
@@ -891,6 +912,8 @@ def main(argv: list[str] | None = None) -> int:
                 provenance_summary=queue.get("provenance_summary") if isinstance(queue.get("provenance_summary"), dict) else None,
                 triage_summary=queue.get("triage_summary") if isinstance(queue.get("triage_summary"), dict) else None,
                 triage_options=queue.get("triage_action_options") if isinstance(queue.get("triage_action_options"), list) else None,
+                recent_days=int(queue.get("recent_days") or 0),
+                filtered_counts=queue.get("filtered_counts") if isinstance(queue.get("filtered_counts"), dict) else None,
             )
         return 0
 
@@ -899,6 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             args.root_path,
             limit=args.limit,
             triage_action=args.triage_action,
+            recent_days=args.recent_days,
             min_score=args.min_score,
             actor=args.actor,
         )
@@ -957,6 +981,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             run_limit=args.run_limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
+            queue_recent_days=args.queue_recent_days,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

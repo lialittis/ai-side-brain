@@ -153,6 +153,10 @@ Adapters can pass `triage_action` to focus the active queue on one of those
 next-step buckets while keeping the same review-state priority rules. Friendly
 aliases such as `import`, `skim`, `compare`, or `watch` normalize to the stored
 action IDs.
+Adapters can also pass `recent_days` to focus daily review on papers released
+or newly seen within a recent window. The filter is applied after review-state
+and triage filters, and queue payloads report filtered counts so an empty daily
+view is distinguishable from an empty stored history.
 Queue payloads expose `triage_action_options` with labels, aliases,
 descriptions, selected state, and active counts so products can build filter
 controls without duplicating these lane definitions.

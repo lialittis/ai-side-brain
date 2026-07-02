@@ -246,6 +246,10 @@ if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
     QUEUE_ARGS+=("--triage-action" "$RADAR_QUEUE_TRIAGE_ACTION")
     QUEUE_TEXT_ARGS+=("--triage-action" "$RADAR_QUEUE_TRIAGE_ACTION")
   fi
+  if [[ -n "${RADAR_QUEUE_RECENT_DAYS:-}" ]]; then
+    QUEUE_ARGS+=("--recent-days" "$RADAR_QUEUE_RECENT_DAYS")
+    QUEUE_TEXT_ARGS+=("--recent-days" "$RADAR_QUEUE_RECENT_DAYS")
+  fi
   QUEUE_ARGS+=("--freshness-max-age-hours" "${RADAR_FRESHNESS_MAX_AGE_HOURS:-36}")
   QUEUE_TEXT_ARGS+=("--freshness-max-age-hours" "${RADAR_FRESHNESS_MAX_AGE_HOURS:-36}")
   "$PYTHON_BIN" "${QUEUE_ARGS[@]}" > "$QUEUE_JSON_PATH"
@@ -301,6 +305,10 @@ if [[ "${RADAR_WRITE_STATUS:-1}" == "1" ]]; then
   if [[ -n "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}" ]]; then
     STATUS_ARGS+=("--triage-action" "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}")
     STATUS_TEXT_ARGS+=("--triage-action" "${RADAR_STATUS_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}")
+  fi
+  if [[ -n "${RADAR_STATUS_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}" ]]; then
+    STATUS_ARGS+=("--recent-days" "${RADAR_STATUS_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}")
+    STATUS_TEXT_ARGS+=("--recent-days" "${RADAR_STATUS_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}")
   fi
   "$PYTHON_BIN" "${STATUS_ARGS[@]}" --json > "$STATUS_JSON_PATH"
   "$PYTHON_BIN" "${STATUS_TEXT_ARGS[@]}" > "$STATUS_PATH"

@@ -261,7 +261,7 @@ class TeamResearchWebTest(unittest.TestCase):
                     queue_html_content_type = response.headers.get("Content-Type")
                     queue_html_status = response.status
                 with urlopen(
-                    f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5&freshness_max_age_hours=12",
+                    f"http://127.0.0.1:{port}/radar/brief.json?days=7&limit=1&run_limit=5&freshness_max_age_hours=12&queue_recent_days=1",
                     timeout=5,
                 ) as response:
                     brief_payload = json.loads(response.read().decode("utf-8"))
@@ -362,6 +362,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["run_count"], 1)
             self.assertEqual(brief_payload["review_counts"], {"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0})
             self.assertEqual(brief_payload["queue"]["review"], "unreviewed")
+            self.assertEqual(brief_payload["queue"]["recent_days"], 1)
+            self.assertEqual(brief_payload["links"]["json"], "/radar/brief.json?days=7&limit=1&run_limit=5&queue_recent_days=1")
+            self.assertEqual(brief_payload["links"]["queue"], "/radar/queue.json?limit=1&recent_days=1")
             self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief_payload["queue"]["triage_summary"]["top_action"], "import_to_library")
@@ -422,7 +425,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Team Literature Radar Brief", brief_payload["brief"])
             self.assertIn("Route Verified Radar Queue Paper", brief_payload["brief"])
             self.assertEqual(brief_payload["links"]["radar"], "/radar")
-            self.assertEqual(brief_payload["links"]["json"], "/radar/brief.json?days=7&limit=1&run_limit=5")
+            self.assertEqual(
+                brief_payload["links"]["json"],
+                "/radar/brief.json?days=7&limit=1&run_limit=5&queue_recent_days=1",
+            )
             self.assertEqual(activity_status, 200)
             self.assertEqual(activity_content_type, "application/json")
             self.assertTrue(activity_payload["success"])
@@ -554,7 +560,7 @@ class TeamResearchWebTest(unittest.TestCase):
             )
 
             html = render_literature_radar_page(database)
-            queue_html = render_literature_radar_queue_page(database, limit=20)
+            queue_html = render_literature_radar_queue_page(database, limit=20, recent_days=7)
 
             self.assertIn("Literature Radar", html)
             self.assertIn("Scheduled recommendations", html)
@@ -565,6 +571,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Weekly Brief", html)
             self.assertIn("/radar/papers?limit=50", html)
             self.assertIn("Paper History", html)
+            self.assertIn("Recent:", queue_html)
+            self.assertIn('href="/radar/queue?limit=20">All</a>', queue_html)
+            self.assertIn('href="/radar/queue?limit=20&amp;recent_days=7">7 days</a>', queue_html)
+            self.assertIn("recent: last 7 days", queue_html)
+            self.assertIn("/radar/queue.json?limit=20&amp;recent_days=7", queue_html)
             self.assertIn("/radar/status.json?limit=20", html)
             self.assertIn("Status JSON", html)
             self.assertIn("Radar Profile", html)
@@ -655,6 +666,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 days=7,
                 limit=20,
                 run_limit=12,
+                queue_recent_days=7,
                 notice="Marked radar paper as watch.",
             )
 
@@ -662,6 +674,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('class="nav-item active" href="/radar/brief?days=7&amp;limit=20">Brief</a>', brief_html)
             self.assertIn("Marked radar paper as watch.", brief_html)
             self.assertIn('name="run_limit" min="1" max="500" value="12"', brief_html)
+            self.assertIn('name="queue_recent_days" min="0" max="365" value="7"', brief_html)
+            self.assertIn("/radar/brief.json?days=7&amp;limit=20&amp;run_limit=12&amp;queue_recent_days=7", brief_html)
             self.assertIn("Brief health:", brief_html)
             self.assertIn("latest: partial", brief_html)
             self.assertIn("Source coverage:", brief_html)

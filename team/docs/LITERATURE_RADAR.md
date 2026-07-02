@@ -165,6 +165,9 @@ the shared triage hint, triage lane chips, plus watch, dismiss, and
 add-to-library actions that return to the daily page.
 For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
+Use the queue's `Recent` chips, `/radar/queue?recent_days=7`, or
+`radar-queue --recent-days 7` to narrow daily review to papers released or
+newly seen inside a recent window while leaving the stored history intact.
 Its actions return to that queue. The queue-level import form promotes the
 currently visible queue records into Latest Papers, skips candidates below the
 chosen score threshold, and reuses the same per-paper dedupe, provenance, audit,
@@ -410,6 +413,7 @@ python team/research_cli.py radar-history
 python team/research_cli.py radar-status --json
 python team/research_cli.py radar-queue                # active review queue by score
 python team/research_cli.py radar-queue --freshness-max-age-hours 24
+python team/research_cli.py radar-queue --recent-days 7
 python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
@@ -420,6 +424,7 @@ python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
 python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
 python team/research_cli.py radar-brief --days 7 --json
+python team/research_cli.py radar-brief --days 1 --queue-recent-days 1 --json
 ```
 
 ## Stored Run History
@@ -592,9 +597,9 @@ should ignore web-saved defaults and use only explicit environment variables.
 Queue import remains off by default. Set `RADAR_CYCLE_IMPORT_QUEUE=1` to have
 the cycle run `radar-import-queue` after collection and before the brief. Use
 `RADAR_IMPORT_QUEUE_MIN_SCORE`, `RADAR_IMPORT_QUEUE_LIMIT`,
-`RADAR_IMPORT_QUEUE_TRIAGE_ACTION`, and `RADAR_IMPORT_QUEUE_ACTOR` to tune that
-opt-in promotion step; timestamped and latest queue-import JSON/text snapshots
-are written under `RADAR_OUTPUT_DIR`.
+`RADAR_IMPORT_QUEUE_TRIAGE_ACTION`, `RADAR_IMPORT_QUEUE_RECENT_DAYS`, and
+`RADAR_IMPORT_QUEUE_ACTOR` to tune that opt-in promotion step; timestamped and
+latest queue-import JSON/text snapshots are written under `RADAR_OUTPUT_DIR`.
 
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
@@ -621,7 +626,9 @@ Stable
 are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT` to
 change how many active queue papers are included, and
 `RADAR_QUEUE_TRIAGE_ACTION=import` to write only one triage bucket to scheduled
-queue and status snapshots.
+queue and status snapshots. Use `RADAR_QUEUE_RECENT_DAYS=7` to keep scheduled
+queue and status snapshots focused on papers released or newly seen in a recent
+daily window.
 The run script and brief script also write text and JSON
 `literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
 snapshots use the same activity payload as `radar-activity --json` and show
@@ -700,6 +707,8 @@ It reads `.env` first and supports these optional variables:
   to `RADAR_QUEUE_LIMIT` or `20`.
 - `RADAR_STATUS_QUEUE_TRIAGE_ACTION`: active queue triage-action filter for
   status snapshots; defaults to `RADAR_QUEUE_TRIAGE_ACTION` when set.
+- `RADAR_STATUS_QUEUE_RECENT_DAYS`: active queue recent-window filter for status
+  snapshots; defaults to `RADAR_QUEUE_RECENT_DAYS` when set.
 - `RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS`: freshness threshold for status queue
   health; defaults to `RADAR_FRESHNESS_MAX_AGE_HOURS` or `36`.
 - `RADAR_STATUS_USE_SAVED_DEFAULTS=0`: make the status settings preflight ignore
@@ -709,6 +718,11 @@ It reads `.env` first and supports these optional variables:
   snapshot; default `3`.
 - `RADAR_QUEUE_TRIAGE_ACTION`: optional scheduled queue triage-action filter,
   using aliases such as `import`, `skim`, `compare`, or `watch`.
+- `RADAR_QUEUE_RECENT_DAYS`: optional scheduled queue recent-window filter,
+  matching papers by normalized release date or latest seen date.
+- `RADAR_BRIEF_QUEUE_RECENT_DAYS`: optional recent-window filter for the queue
+  preview embedded in scheduled brief JSON; defaults to `RADAR_QUEUE_RECENT_DAYS`
+  when set.
 - `RADAR_ACTIVITY_DAYS`: activity history window; default `7`.
 - `RADAR_ACTIVITY_LIMIT`: maximum activity events in scheduled snapshots;
   default `50`.

@@ -45,6 +45,9 @@ if [[ "${RADAR_CYCLE_IMPORT_QUEUE:-0}" == "1" ]]; then
   if [[ -n "${RADAR_IMPORT_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}" ]]; then
     IMPORT_ARGS+=("--triage-action" "${RADAR_IMPORT_QUEUE_TRIAGE_ACTION:-${RADAR_QUEUE_TRIAGE_ACTION:-}}")
   fi
+  if [[ -n "${RADAR_IMPORT_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}" ]]; then
+    IMPORT_ARGS+=("--recent-days" "${RADAR_IMPORT_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}")
+  fi
   "$PYTHON_BIN" "${IMPORT_ARGS[@]}" --json > "$IMPORT_JSON_PATH"
   "$PYTHON_BIN" "${IMPORT_ARGS[@]}" > "$IMPORT_PATH"
   if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then

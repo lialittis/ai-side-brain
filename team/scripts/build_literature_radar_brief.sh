@@ -42,6 +42,9 @@ ARGS=(
 if [[ -n "${RADAR_DB_PATH:-}" ]]; then
   ARGS+=("--db-path" "$RADAR_DB_PATH")
 fi
+if [[ -n "${RADAR_BRIEF_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}" ]]; then
+  ARGS+=("--queue-recent-days" "${RADAR_BRIEF_QUEUE_RECENT_DAYS:-${RADAR_QUEUE_RECENT_DAYS:-}}")
+fi
 
 "$PYTHON_BIN" "${ARGS[@]}" > "$JSON_PATH"
 

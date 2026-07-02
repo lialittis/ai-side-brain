@@ -467,8 +467,10 @@ def build_team_literature_radar_queue_payload(
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
     triage_action: str = "",
+    recent_days: int = 0,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
+    selected_recent_days = max(0, int(recent_days or 0))
     counts = database.literature_radar_paper_review_counts()
     latest_runs = database.list_literature_radar_runs(limit=1)
     latest_run = latest_runs[0] if latest_runs else None
@@ -477,6 +479,8 @@ def build_team_literature_radar_queue_payload(
         limit=selected_limit,
         review_counts=counts,
         triage_action=triage_action,
+        recent_days=selected_recent_days,
+        now=now,
     )
     queue_papers = queue.get("papers") or []
     triage_summary = radar_triage_summary(queue_papers)
@@ -486,11 +490,13 @@ def build_team_literature_radar_queue_payload(
         "review": queue.get("review") or "",
         "triage_action": queue.get("triage_action") or "",
         "review_counts": queue.get("review_counts") or counts,
+        "filtered_counts": queue.get("filtered_counts") or {},
         "access_summary": radar_pdf_access_summary(queue_papers),
         "provenance_summary": radar_source_provenance_summary(queue_papers),
         "triage_summary": triage_summary,
         "triage_action_options": radar_triage_action_options(queue.get("triage_action") or "", triage_summary),
         "limit": selected_limit,
+        "recent_days": selected_recent_days,
         "latest_run": team_literature_radar_run_summary(
             latest_run,
             now=now,
@@ -500,18 +506,31 @@ def build_team_literature_radar_queue_payload(
         "links": {
             "latest_papers": "/",
             "radar": "/radar",
-            "html": team_radar_queue_link("/radar/queue", selected_limit, queue.get("triage_action") or ""),
-            "json": team_radar_queue_link("/radar/queue.json", selected_limit, queue.get("triage_action") or ""),
+            "html": team_radar_queue_link(
+                "/radar/queue",
+                selected_limit,
+                queue.get("triage_action") or "",
+                recent_days=selected_recent_days,
+            ),
+            "json": team_radar_queue_link(
+                "/radar/queue.json",
+                selected_limit,
+                queue.get("triage_action") or "",
+                recent_days=selected_recent_days,
+            ),
             "radar_papers": f"/radar/papers?limit={selected_limit}",
             "weekly_brief": "/radar/brief?days=7&limit=20",
         },
     }
 
 
-def team_radar_queue_link(path: str, limit: int, triage_action: str = "") -> str:
+def team_radar_queue_link(path: str, limit: int, triage_action: str = "", *, recent_days: int = 0) -> str:
     suffix = f"?limit={max(1, int(limit))}"
     if triage_action:
         suffix += f"&triage_action={triage_action}"
+    selected_recent_days = max(0, int(recent_days or 0))
+    if selected_recent_days:
+        suffix += f"&recent_days={selected_recent_days}"
     return path + suffix
 
 
@@ -523,16 +542,20 @@ def build_team_literature_radar_brief_payload(
     run_limit: int = 50,
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
+    queue_recent_days: int = 0,
 ) -> dict[str, Any]:
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
     selected_run_limit = max(1, int(run_limit))
+    selected_queue_recent_days = max(0, int(queue_recent_days or 0))
     selected_now = now or datetime.now(timezone.utc)
     review_counts = database.literature_radar_paper_review_counts()
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
         limit=selected_limit,
         review_counts=review_counts,
+        recent_days=selected_queue_recent_days,
+        now=selected_now,
     )
     queue_papers = queue.get("papers") or []
     runs = database.list_literature_radar_runs(limit=selected_run_limit)
@@ -564,6 +587,9 @@ def build_team_literature_radar_brief_payload(
     )
     brief = append_team_literature_radar_activity_to_brief(brief, activity)
     triage_summary = radar_triage_summary(queue_papers)
+    brief_query = f"days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}"
+    if selected_queue_recent_days:
+        brief_query += f"&queue_recent_days={selected_queue_recent_days}"
     return {
         "success": True,
         "kind": "team_literature_radar_brief",
@@ -613,6 +639,8 @@ def build_team_literature_radar_brief_payload(
         ),
         "queue": {
             "review": queue.get("review") or "",
+            "recent_days": selected_queue_recent_days,
+            "filtered_counts": queue.get("filtered_counts") or {},
             "access_summary": radar_pdf_access_summary(queue_papers),
             "provenance_summary": radar_source_provenance_summary(queue_papers),
             "triage_summary": triage_summary,
@@ -629,9 +657,13 @@ def build_team_literature_radar_brief_payload(
         "brief": brief,
         "links": {
             "radar": "/radar",
-            "html": f"/radar/brief?days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}",
-            "json": f"/radar/brief.json?days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}",
-            "queue": f"/radar/queue.json?limit={selected_limit}",
+            "html": f"/radar/brief?{brief_query}",
+            "json": f"/radar/brief.json?{brief_query}",
+            "queue": team_radar_queue_link(
+                "/radar/queue.json",
+                selected_limit,
+                recent_days=selected_queue_recent_days,
+            ),
         },
     }
 
@@ -1766,17 +1798,20 @@ def import_literature_radar_queue(
     *,
     limit: int = 20,
     triage_action: str = "",
+    recent_days: int = 0,
     min_score: int = 35,
     project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
     actor: str = "team-member",
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
+    selected_recent_days = max(0, int(recent_days or 0))
     selected_min_score = min(100, max(0, int(min_score)))
     queue = build_team_literature_radar_queue_payload(
         database,
         limit=selected_limit,
         triage_action=triage_action,
+        recent_days=selected_recent_days,
         now=now,
     )
     imported: list[dict[str, Any]] = []
@@ -1812,6 +1847,7 @@ def import_literature_radar_queue(
         "kind": "team_literature_radar_queue_import",
         "limit": selected_limit,
         "triage_action": str(queue.get("triage_action") or ""),
+        "recent_days": selected_recent_days,
         "min_score": selected_min_score,
         "queued_count": len(queue_records),
         "imported_count": len(imported),

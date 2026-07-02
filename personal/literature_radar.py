@@ -404,8 +404,10 @@ def build_personal_literature_radar_queue_payload(
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
     triage_action: str = "",
+    recent_days: int = 0,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
+    selected_recent_days = max(0, int(recent_days or 0))
     records = read_personal_radar_paper_history(root)
     counts = radar_review_counts(records)
     runs = read_personal_radar_index(root)
@@ -415,6 +417,8 @@ def build_personal_literature_radar_queue_payload(
         limit=selected_limit,
         review_counts=counts,
         triage_action=triage_action,
+        recent_days=selected_recent_days,
+        now=now,
     )
     queue_papers = queue.get("papers") or []
     triage_summary = radar_triage_summary(queue_papers)
@@ -423,7 +427,9 @@ def build_personal_literature_radar_queue_payload(
         "kind": "personal_literature_radar_queue",
         "review": queue.get("review") or "",
         "triage_action": queue.get("triage_action") or "",
+        "recent_days": selected_recent_days,
         "review_counts": queue.get("review_counts") or counts,
+        "filtered_counts": queue.get("filtered_counts") or {},
         "access_summary": radar_pdf_access_summary(queue_papers),
         "provenance_summary": radar_source_provenance_summary(queue_papers),
         "triage_summary": triage_summary,
@@ -450,14 +456,22 @@ def build_personal_literature_radar_brief_payload(
     run_limit: int = 50,
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
+    queue_recent_days: int = 0,
 ) -> dict[str, Any]:
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
     selected_run_limit = max(1, int(run_limit))
+    selected_queue_recent_days = max(0, int(queue_recent_days or 0))
     selected_now = now or datetime.now(timezone.utc)
     records = read_personal_radar_paper_history(root)
     review_counts = radar_review_counts(records)
-    queue = build_radar_review_queue(records, limit=selected_limit, review_counts=review_counts)
+    queue = build_radar_review_queue(
+        records,
+        limit=selected_limit,
+        review_counts=review_counts,
+        recent_days=selected_queue_recent_days,
+        now=selected_now,
+    )
     queue_papers = queue.get("papers") or []
     runs = read_personal_radar_index(root)[:selected_run_limit]
     brief = build_radar_history_brief(
@@ -530,6 +544,8 @@ def build_personal_literature_radar_brief_payload(
         ),
         "queue": {
             "review": queue.get("review") or "",
+            "recent_days": selected_queue_recent_days,
+            "filtered_counts": queue.get("filtered_counts") or {},
             "access_summary": radar_pdf_access_summary(queue_papers),
             "provenance_summary": radar_source_provenance_summary(queue_papers),
             "triage_summary": triage_summary,
@@ -1655,16 +1671,19 @@ def promote_personal_literature_radar_queue_to_inbox(
     *,
     limit: int = 20,
     triage_action: str = "",
+    recent_days: int = 0,
     min_score: int = 35,
     actor: str = "personal",
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
+    selected_recent_days = max(0, int(recent_days or 0))
     selected_min_score = min(100, max(0, int(min_score)))
     queue = build_personal_literature_radar_queue_payload(
         root,
         limit=selected_limit,
         triage_action=triage_action,
+        recent_days=selected_recent_days,
         now=now,
     )
     promoted: list[dict[str, Any]] = []
@@ -1699,6 +1718,7 @@ def promote_personal_literature_radar_queue_to_inbox(
         "kind": "personal_literature_radar_queue_inbox",
         "limit": selected_limit,
         "triage_action": str(queue.get("triage_action") or ""),
+        "recent_days": selected_recent_days,
         "min_score": selected_min_score,
         "queued_count": len(queue_records),
         "promoted_count": len(promoted),
@@ -1771,8 +1791,9 @@ def personal_radar_inbox_note_markdown(record: dict[str, Any], *, now: datetime)
                 f"- Reason: {pdf_access.get('reason') or pdf_access.get('download_reason') or 'unknown'}",
             ]
         )
-        if pdf_access.get("local_path"):
-            lines.append(f"- Local path: {pdf_access['local_path']}")
+        local_path = pdf_access.get("local_pdf_path") or pdf_access.get("local_path")
+        if local_path:
+            lines.append(f"- Local path: {local_path}")
     abstract = str(paper.get("abstract") or "").strip()
     if abstract:
         lines.extend(["", "## Abstract", "", abstract])

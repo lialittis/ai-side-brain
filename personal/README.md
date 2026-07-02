@@ -65,6 +65,7 @@ python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch --r
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status dismissed
 python scripts/personal_literature_radar.py brief --days 7 --output memory/06_Logs/personal-literature-radar-weekly.md
 python scripts/personal_literature_radar.py brief --days 7 --json
+python scripts/personal_literature_radar.py brief --days 1 --queue-recent-days 1 --json
 ```
 
 `settings` is a read-only preflight command. It prints selected sources, active
@@ -191,12 +192,18 @@ or generic `OPENREVIEW_INVITATIONS`,
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes, and
 `PERSONAL_RADAR_QUEUE_TRIAGE_ACTION=import` to write only one triage bucket.
+Use `PERSONAL_RADAR_QUEUE_RECENT_DAYS=7` to keep scheduled queue snapshots
+focused on papers released or newly seen inside a recent review window.
+`PERSONAL_RADAR_BRIEF_QUEUE_RECENT_DAYS` applies the same recent-window filter
+to the queue preview embedded in scheduled brief JSON, defaulting to
+`PERSONAL_RADAR_QUEUE_RECENT_DAYS` when set.
 `PERSONAL_RADAR_ACTIVITY_DAYS` / `PERSONAL_RADAR_ACTIVITY_LIMIT` to change the
 activity snapshot window and size. Use
 `PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
 threshold for queue and brief snapshots. The status script also supports
 `PERSONAL_RADAR_STATUS_OUTPUT_DIR`, `PERSONAL_RADAR_STATUS_QUEUE_LIMIT`, and
 `PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION`, and
+`PERSONAL_RADAR_STATUS_QUEUE_RECENT_DAYS`, and
 `PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS` for status snapshots. It uses
 the same `PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES` value for settings/preflight
 snapshots. Use
@@ -273,8 +280,9 @@ future active queues skip them while history and briefs still retain provenance.
 For fully automated personal intake, set `PERSONAL_RADAR_CYCLE_INBOX_QUEUE=1`
 and tune `PERSONAL_RADAR_INBOX_QUEUE_MIN_SCORE`,
 `PERSONAL_RADAR_INBOX_QUEUE_LIMIT`, `PERSONAL_RADAR_INBOX_QUEUE_TRIAGE_ACTION`,
-and `PERSONAL_RADAR_INBOX_QUEUE_ACTOR`. This remains an inbox-only workflow; it
-does not edit long-term project or decision notes.
+`PERSONAL_RADAR_INBOX_QUEUE_RECENT_DAYS`, and
+`PERSONAL_RADAR_INBOX_QUEUE_ACTOR`. This remains an inbox-only workflow; it does
+not edit long-term project or decision notes.
 Completed run
 records also store the recommendation-level provenance summary, and
 `latest_run.provenance_summary` exposes it for daily health checks. Both

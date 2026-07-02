@@ -236,6 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue.add_argument("--limit", type=int, default=3)
     radar_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
+    radar_queue.add_argument("--recent-days", type=int, default=0, help="only show papers released or first seen in the last N days")
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_import_queue = subparsers.add_parser(
@@ -245,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_db_args(radar_import_queue)
     radar_import_queue.add_argument("--limit", type=int, default=20)
     radar_import_queue.add_argument("--triage-action", default="", help="only import queued papers with this triage action")
+    radar_import_queue.add_argument("--recent-days", type=int, default=0, help="only import papers released or first seen in the last N days")
     radar_import_queue.add_argument("--min-score", type=int, default=35, help="minimum score required before import")
     radar_import_queue.add_argument("--project", default="team-library", help="team library project id for imported papers")
     radar_import_queue.add_argument("--actor", default="team-member")
@@ -258,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_status.add_argument("--limit", type=int, default=20)
     radar_status.add_argument("--freshness-max-age-hours", type=int, default=36)
     radar_status.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
+    radar_status.add_argument("--recent-days", type=int, default=0, help="only show queued papers released or first seen in the last N days")
     radar_status.add_argument(
         "--ignore-saved-defaults",
         action="store_true",
@@ -373,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_brief.add_argument("--limit", type=int, default=20, help="maximum recommendations in the brief")
     radar_brief.add_argument("--run-limit", type=int, default=50, help="maximum stored runs to inspect")
     radar_brief.add_argument("--freshness-max-age-hours", type=int, default=36)
+    radar_brief.add_argument("--queue-recent-days", type=int, default=0, help="filter the embedded queue preview to papers released or first seen in the last N days")
     radar_brief.add_argument("--output", type=Path, help="write Markdown brief")
     radar_brief.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -634,6 +638,8 @@ def print_radar_queue_import(result: dict[str, Any]) -> None:
     )
     if result.get("triage_action"):
         print(f"Triage filter: {result['triage_action']}")
+    if int(result.get("recent_days") or 0):
+        print(f"Recent filter: last {int(result.get('recent_days') or 0)} days")
     skipped = []
     if int(result.get("skipped_low_score") or 0):
         skipped.append(f"low_score={int(result.get('skipped_low_score') or 0)}")
@@ -732,6 +738,16 @@ def print_radar_queue(result: dict[str, Any]) -> None:
     print(f"Priority filter: {review}")
     if result.get("triage_action"):
         print(f"Triage filter: {result.get('triage_action')}")
+    if int(result.get("recent_days") or 0):
+        print(f"Recent filter: last {int(result.get('recent_days') or 0)} days")
+    filtered_counts = result.get("filtered_counts") if isinstance(result.get("filtered_counts"), dict) else {}
+    if filtered_counts:
+        print(
+            "Filtered candidates: "
+            f"active={int(filtered_counts.get('active_before_filters') or 0)} "
+            f"after_triage={int(filtered_counts.get('after_triage_filter') or 0)} "
+            f"after_recent={int(filtered_counts.get('after_recent_filter') or 0)}"
+        )
     print_radar_papers(result.get("papers") or [], review=review)
 
 
@@ -1224,6 +1240,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             triage_action=args.triage_action,
+            recent_days=args.recent_days,
         )
         if args.json:
             print_json(result)
@@ -1236,6 +1253,7 @@ def main(argv: list[str] | None = None) -> int:
             database,
             limit=args.limit,
             triage_action=args.triage_action,
+            recent_days=args.recent_days,
             min_score=args.min_score,
             project_id=args.project,
             actor=args.actor,
@@ -1255,6 +1273,7 @@ def main(argv: list[str] | None = None) -> int:
             use_saved_defaults=not args.ignore_saved_defaults,
             settings=radar_settings_from_cli_args(database, args),
             triage_action=args.triage_action,
+            recent_days=args.recent_days,
         )
         if args.json:
             print_json(result)
@@ -1322,6 +1341,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             run_limit=args.run_limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
+            queue_recent_days=args.queue_recent_days,
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

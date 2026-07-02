@@ -66,6 +66,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_STATUS_QUEUE_LIMIT": "17",
                     "RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "48",
                     "RADAR_STATUS_QUEUE_TRIAGE_ACTION": "import",
+                    "RADAR_STATUS_QUEUE_RECENT_DAYS": "7",
                     "RADAR_SOURCE_PRESET": "team_security_daily",
                     "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
@@ -109,11 +110,15 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("48", latest_queue["args"])
             self.assertIn("--triage-action", latest_queue["args"])
             self.assertIn("import", latest_queue["args"])
+            self.assertIn("--recent-days", latest_queue["args"])
+            self.assertIn("7", latest_queue["args"])
             self.assertEqual(latest_status_json["command"], "radar-status")
             self.assertEqual(latest_status_json["args"].count("--db-path"), 1)
             self.assertIn(str(workspace / "team.sqlite3"), latest_status_json["args"])
             self.assertIn("--limit", latest_status_json["args"])
             self.assertIn("17", latest_status_json["args"])
+            self.assertIn("--recent-days", latest_status_json["args"])
+            self.assertIn("7", latest_status_json["args"])
             self.assertIn("--source-preset", latest_status_json["args"])
             self.assertIn("team_security_daily", latest_status_json["args"])
             self.assertIn("--recommendation-limit", latest_status_json["args"])
@@ -233,6 +238,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_STATUS_QUEUE_LIMIT": "11",
                     "PERSONAL_RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS": "72",
                     "PERSONAL_RADAR_STATUS_QUEUE_TRIAGE_ACTION": "skim",
+                    "PERSONAL_RADAR_STATUS_QUEUE_RECENT_DAYS": "5",
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
                     "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "RADAR_SOURCE_CONTACT_EMAIL": "shared-contact@example.org",
@@ -269,6 +275,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("72", latest_queue["args"])
             self.assertIn("--triage-action", latest_queue["args"])
             self.assertIn("skim", latest_queue["args"])
+            self.assertIn("--recent-days", latest_queue["args"])
+            self.assertIn("5", latest_queue["args"])
             self.assertEqual(latest_status_json["command"], "status")
             self.assertIn("--queue-limit", latest_status_json["args"])
             self.assertIn("11", latest_status_json["args"])
@@ -277,6 +285,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 self.assertIn(official_page, latest_status_json["args"])
             self.assertIn("--triage-action", latest_status_json["args"])
             self.assertIn("skim", latest_status_json["args"])
+            self.assertIn("--recent-days", latest_status_json["args"])
+            self.assertIn("5", latest_status_json["args"])
             self.assertIn("status text status", latest_status)
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".txt"))
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-status-", ".json"))
@@ -366,6 +376,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "RADAR_QUEUE_TRIAGE_ACTION": "compare",
+                    "RADAR_QUEUE_RECENT_DAYS": "14",
                     "OPENALEX_MAILTO": "openalex-generic@example.org",
                     "RADAR_CROSSREF_MAILTO": "crossref-team@example.org",
                     "RADAR_UNPAYWALL_EMAIL": "unpaywall-team@example.org",
@@ -378,6 +389,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                 env={
                     "PYTHON_BIN": str(fake_python),
                     "RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
+                    "RADAR_BRIEF_QUEUE_RECENT_DAYS": "9",
                     "RADAR_WRITE_LATEST": "1",
                 },
             )
@@ -421,6 +433,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_team_queue["command"], "radar-queue")
             self.assertIn("--triage-action", latest_team_queue["args"])
             self.assertIn("compare", latest_team_queue["args"])
+            self.assertIn("--recent-days", latest_team_queue["args"])
+            self.assertIn("14", latest_team_queue["args"])
             self.assertIn(
                 "radar-queue text queue",
                 (output_dir / "literature-radar-queue-latest.txt").read_text(),
@@ -429,16 +443,18 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_team_status["command"], "radar-status")
             self.assertIn("--triage-action", latest_team_status["args"])
             self.assertIn("compare", latest_team_status["args"])
+            self.assertIn("--recent-days", latest_team_status["args"])
+            self.assertIn("14", latest_team_status["args"])
             self.assertIn("--limit", latest_team_status["args"])
             self.assertIn("20", latest_team_status["args"])
             self.assertIn(
                 "radar-status text status",
                 (output_dir / "literature-radar-status-latest.txt").read_text(),
             )
-            self.assertEqual(
-                read_json(brief_dir / "literature-radar-brief-latest.json")["command"],
-                "radar-brief",
-            )
+            latest_team_brief = read_json(brief_dir / "literature-radar-brief-latest.json")
+            self.assertEqual(latest_team_brief["command"], "radar-brief")
+            self.assertIn("--queue-recent-days", latest_team_brief["args"])
+            self.assertIn("9", latest_team_brief["args"])
             self.assertIn("radar-brief markdown", (brief_dir / "literature-radar-brief-latest.md").read_text())
             self.assertTrue(any_timestamped_file(output_dir, "literature-radar-", ".json"))
             self.assertTrue(any_timestamped_file(output_dir, "literature-radar-status-", ".json"))
@@ -470,6 +486,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "RADAR_IMPORT_QUEUE_LIMIT": "7",
                     "RADAR_IMPORT_QUEUE_MIN_SCORE": "65",
                     "RADAR_IMPORT_QUEUE_TRIAGE_ACTION": "import",
+                    "RADAR_IMPORT_QUEUE_RECENT_DAYS": "3",
                     "RADAR_IMPORT_QUEUE_ACTOR": "cron",
                     "RADAR_WRITE_LATEST": "1",
                 },
@@ -483,6 +500,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("65", latest_import["args"])
             self.assertIn("--triage-action", latest_import["args"])
             self.assertIn("import", latest_import["args"])
+            self.assertIn("--recent-days", latest_import["args"])
+            self.assertIn("3", latest_import["args"])
             self.assertIn("--actor", latest_import["args"])
             self.assertIn("cron", latest_import["args"])
             self.assertTrue(any_timestamped_file(output_dir, "literature-radar-queue-import-", ".json"))
@@ -516,10 +535,12 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_ROOT": str(workspace),
                     "PERSONAL_RADAR_OUTPUT_DIR": str(output_dir),
                     "PERSONAL_RADAR_BRIEF_OUTPUT_DIR": str(brief_dir),
+                    "PERSONAL_RADAR_BRIEF_QUEUE_RECENT_DAYS": "8",
                     "PERSONAL_RADAR_SOURCE_PRESET": "security_memory_agentic_daily",
                     "OPENREVIEW_INVITATIONS": "SafetyWorkshop.cc/2026/Workshop/-/Submission",
                     "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES": "\n".join(official_pages),
                     "PERSONAL_RADAR_QUEUE_TRIAGE_ACTION": "watch",
+                    "PERSONAL_RADAR_QUEUE_RECENT_DAYS": "21",
                     "RADAR_SOURCE_CONTACT_EMAIL": "shared-contact@example.org",
                     "OPENALEX_MAILTO": "openalex-generic@example.org",
                     "PERSONAL_RADAR_CROSSREF_MAILTO": "crossref-personal@example.org",
@@ -528,6 +549,7 @@ class LiteratureRadarScriptTest(unittest.TestCase):
                     "PERSONAL_RADAR_INBOX_QUEUE_LIMIT": "9",
                     "PERSONAL_RADAR_INBOX_QUEUE_MIN_SCORE": "70",
                     "PERSONAL_RADAR_INBOX_QUEUE_TRIAGE_ACTION": "import",
+                    "PERSONAL_RADAR_INBOX_QUEUE_RECENT_DAYS": "2",
                     "PERSONAL_RADAR_INBOX_QUEUE_ACTOR": "cron",
                     "PERSONAL_RADAR_WRITE_LATEST": "1",
                 },
@@ -571,6 +593,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_personal_queue["command"], "queue")
             self.assertIn("--triage-action", latest_personal_queue["args"])
             self.assertIn("watch", latest_personal_queue["args"])
+            self.assertIn("--recent-days", latest_personal_queue["args"])
+            self.assertIn("21", latest_personal_queue["args"])
             self.assertIn(
                 "queue text queue",
                 (output_dir / "personal-literature-radar-queue-latest.txt").read_text(),
@@ -579,6 +603,8 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertEqual(latest_personal_status["command"], "status")
             self.assertIn("--triage-action", latest_personal_status["args"])
             self.assertIn("watch", latest_personal_status["args"])
+            self.assertIn("--recent-days", latest_personal_status["args"])
+            self.assertIn("21", latest_personal_status["args"])
             self.assertIn("--queue-limit", latest_personal_status["args"])
             self.assertIn("20", latest_personal_status["args"])
             self.assertIn(
@@ -593,13 +619,15 @@ class LiteratureRadarScriptTest(unittest.TestCase):
             self.assertIn("70", latest_personal_inbox["args"])
             self.assertIn("--triage-action", latest_personal_inbox["args"])
             self.assertIn("import", latest_personal_inbox["args"])
+            self.assertIn("--recent-days", latest_personal_inbox["args"])
+            self.assertIn("2", latest_personal_inbox["args"])
             self.assertIn("--actor", latest_personal_inbox["args"])
             self.assertIn("cron", latest_personal_inbox["args"])
             self.assertTrue(any_timestamped_file(output_dir, "personal-literature-radar-inbox-queue-", ".json"))
-            self.assertEqual(
-                read_json(brief_dir / "personal-literature-radar-brief-latest.json")["command"],
-                "brief",
-            )
+            latest_personal_brief = read_json(brief_dir / "personal-literature-radar-brief-latest.json")
+            self.assertEqual(latest_personal_brief["command"], "brief")
+            self.assertIn("--queue-recent-days", latest_personal_brief["args"])
+            self.assertIn("8", latest_personal_brief["args"])
             self.assertIn(
                 "brief markdown",
                 (brief_dir / "personal-literature-radar-brief-latest.md").read_text(),

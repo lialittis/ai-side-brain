@@ -906,6 +906,65 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("allocator project", watch_queue["papers"][0]["triage_hint"]["reason"])
         self.assertEqual(radar_review_counts(records)["dismissed"], 1)
 
+    def test_review_queue_uses_local_pdf_path_as_best_link_when_no_source_link_exists(self) -> None:
+        queue = build_radar_review_queue(
+            [
+                {
+                    "title": "Cached Local PDF Only",
+                    "latest_seen_at": "2026-07-01T12:00:00+00:00",
+                    "pdf_access": {
+                        "access_kind": "local_pdf",
+                        "can_download": True,
+                        "downloaded": True,
+                        "local_pdf_path": "team/data/literature-radar-pdfs/cached.pdf",
+                    },
+                    "latest_recommendation": {"score": 80, "label": "highly_relevant"},
+                }
+            ],
+            limit=1,
+        )
+
+        self.assertEqual(queue["papers"][0]["link"], "team/data/literature-radar-pdfs/cached.pdf")
+
+    def test_review_queue_can_filter_to_recent_release_or_seen_date(self) -> None:
+        records = [
+            {
+                "title": "Recently Released High Score",
+                "paper": {"release_date": "2026-07-01"},
+                "latest_seen_at": "2026-07-01T10:00:00+00:00",
+                "latest_recommendation": {"score": 80, "label": "highly_relevant"},
+            },
+            {
+                "title": "Recently Discovered Older Release",
+                "paper": {"release_date": "2026-05-01"},
+                "latest_seen_at": "2026-07-01T12:00:00+00:00",
+                "latest_recommendation": {"score": 70, "label": "highly_relevant"},
+            },
+            {
+                "title": "Older Candidate",
+                "paper": {"release_date": "2026-05-01"},
+                "latest_seen_at": "2026-05-02T12:00:00+00:00",
+                "latest_recommendation": {"score": 95, "label": "highly_relevant"},
+            },
+        ]
+
+        queue = build_radar_review_queue(
+            records,
+            limit=5,
+            recent_days=7,
+            now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(queue["recent_days"], 7)
+        self.assertEqual(
+            queue["filtered_counts"],
+            {"active_before_filters": 3, "after_triage_filter": 3, "after_recent_filter": 2},
+        )
+        self.assertEqual(
+            [record["title"] for record in queue["papers"]],
+            ["Recently Released High Score", "Recently Discovered Older Release"],
+        )
+
     def test_summarizes_pdf_access_for_radar_history_records(self) -> None:
         records = [
             {"pdf_access": {"access_kind": "arxiv_pdf", "can_download": True, "downloaded": False}},
