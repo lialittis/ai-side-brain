@@ -56,7 +56,9 @@ The shared package currently provides source definitions, default security and
 AI topic interests, deduplication, PDF access policy, deterministic scoring,
 context linking, attention-summary generation, and recommendation report generation. It also includes a
 product-neutral pipeline trace builder so Personal and Team runs can store
-phase-level status for the explicit radar pipeline. The initial arXiv, DBLP,
+phase-level status for the explicit radar pipeline, plus a product-neutral
+context-summary helper so adapters can report which Personal history, Team
+library, watched-paper, or comment-derived context informed a run. The initial arXiv, DBLP,
 Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors use public
 metadata APIs and return product-neutral radar paper records. Semantic Scholar
 also supports seed-paper recommendation expansion through the official
@@ -100,6 +102,12 @@ while still keeping accepted-paper writes manual.
 Both adapters can reuse lightweight review intent, such as watched-paper notes
 or reasons, as local context for later runs without making the shared core own
 product storage or review UI.
+Deduplication uses DOI, arXiv, Semantic Scholar, OpenAlex, corpus, and
+title/year aliases together. This lets a title-only venue-profile record merge
+with DOI-bearing Crossref/OpenAlex/Semantic Scholar metadata when the title and
+year match, preserving both provenance records while upgrading the stored
+dedupe key to the strongest available identifier. Title/year alias merging is
+conservative: records with conflicting strong identifiers stay separate.
 
 ## Primary Sources
 

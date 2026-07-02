@@ -55,6 +55,8 @@ python scripts/personal_literature_radar.py settings
 python scripts/personal_literature_radar.py settings --json
 python scripts/personal_literature_radar.py history
 python scripts/personal_literature_radar.py queue
+python scripts/personal_literature_radar.py activity --days 7
+python scripts/personal_literature_radar.py activity --days 7 --json
 python scripts/personal_literature_radar.py papers
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch
 python scripts/personal_literature_radar.py review DEDUPE_KEY --status watch --reason "track for agent security notes"
@@ -95,16 +97,22 @@ OpenReview venue profile summaries, so you can confirm the relevance and venue
 coverage before scheduled collection starts. It also writes a text and JSON
 `personal-literature-radar-queue-*` snapshot
 for the active daily review queue unless `PERSONAL_RADAR_WRITE_QUEUE=0`. The
+run script also writes text and JSON `personal-literature-radar-activity-*`
+snapshots unless `PERSONAL_RADAR_WRITE_ACTIVITY=0`; those snapshots use the
+same payload as `activity --json` and list recent Personal Radar review changes
+with actor, timestamp, status, title, dedupe key, and review reason. The
 brief script writes a Markdown and JSON roll-up over stored runs
-without collecting again. Scheduled scripts also refresh stable
+without collecting again and writes the same activity snapshots. Scheduled
+scripts also refresh stable
 `personal-literature-radar-latest.json`,
 `personal-literature-radar-settings-latest.json`,
 `personal-literature-radar-queue-latest.*`, and
+`personal-literature-radar-activity-latest.*`, and
 `personal-literature-radar-brief-latest.*` files unless
 `PERSONAL_RADAR_WRITE_LATEST=0`. The JSON brief uses the same stored-read contract as
 the CLI `brief --json`: `kind=personal_literature_radar_brief`, selected
 limits, run count, latest-run health/freshness, review counts, active queue
-preview with PDF access summary, index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
+preview with PDF access summary, recent activity, index paths, and the generated Markdown brief. Useful environment variables include `PERSONAL_RADAR_SOURCES`,
 `PERSONAL_RADAR_SOURCE_PRESET` (`broad_daily`,
 `security_memory_agentic_daily`, or `top_venues`),
 `PERSONAL_RADAR_TOPIC_PROFILE`, `PERSONAL_RADAR_MAX_RESULTS`,
@@ -116,9 +124,12 @@ preview with PDF access summary, index paths, and the generated Markdown brief. 
 `PERSONAL_RADAR_CACHE_PDFS=1`, and
 `PERSONAL_RADAR_PDF_CACHE_DIR`. Use `PERSONAL_RADAR_QUEUE_LIMIT` to change how
 many active queue papers the run script writes, and
+`PERSONAL_RADAR_ACTIVITY_DAYS` / `PERSONAL_RADAR_ACTIVITY_LIMIT` to change the
+activity snapshot window and size. Use
 `PERSONAL_RADAR_FRESHNESS_MAX_AGE_HOURS` to tune the latest-run freshness
 threshold for queue and brief snapshots. Use `PERSONAL_RADAR_WRITE_SETTINGS=0`
-to skip preflight snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
+to skip preflight snapshots, and `PERSONAL_RADAR_WRITE_ACTIVITY=0` to skip
+activity snapshots. Use `PERSONAL_RADAR_WRITE_LATEST=0`
 to keep timestamped history without refreshing stable latest-copy files. PDF caching only applies to ranked
 recommendations with a legal open-access PDF decision; blocked or failed
 downloads are recorded in `pdf_access` instead of failing the run. Brief
@@ -150,7 +161,9 @@ watched-but-not-yet-moved work. Dismissed papers stay in history but are skipped
 by future Personal Radar recommendations and context linking, which keeps
 repeated low-value hits from consuming review slots. Review changes also update
 stored run recommendations so weekly or daily briefs show the current review
-state without requiring another collection run.
+state without requiring another collection run. Use `activity` for a compact
+review-change feed derived from `indexes/literature-radar-papers.json`; it does
+not collect sources, download PDFs, call AI, or write long-term memory.
 Use `queue` for the daily review surface: it prefers unreviewed papers, falls
 back to watched papers when there are no unreviewed items, sorts the active
 queue by latest recommendation score, and excludes dismissed or already-moved
@@ -187,16 +200,21 @@ candidate counts, appends source coverage to reports and briefs, and appends
 source errors to the report.
 Use `brief` to aggregate stored daily runs into a weekly or daily review without
 collecting again; it includes relevance, novelty, review state, stored signal
-lines, attention summaries, context, source policy, venue coverage, and PDF
+lines, attention summaries, context, recent review activity, source policy, venue coverage, and PDF
 policy for the top stored recommendations. `brief --json` returns the same Markdown plus latest-run
 health/freshness, review counts, active queue preview with PDF access summary,
-structured `source_policy` and `source_coverage` for every run in the brief
-window, and paths to the local run index and paper-history files, so local
+recent activity, structured `context_summary`, `source_policy`, and
+`source_coverage` for every run in the brief window, and paths to the local run
+index and paper-history files, so local
 automation can consume stored briefs without parsing terminal text. Stored runs also
-snapshot the topic profile used for scoring and a phase trace for collection, PDF policy,
+snapshot the topic profile used for scoring, the Personal history/watch context
+pool used for linking, and a phase trace for collection, PDF policy,
 deduplication, scoring, context linking, summarization, attention summaries,
 storage, and reporting,
 so later briefs remain understandable after the local profile changes. Brief
+and queue text output also show the compact context summary, so daily review can
+distinguish keyword-only matches from candidates linked to watched or previously
+seen Personal Radar work.
 ranking is review-aware: `watch` papers are listed before unreviewed papers, and
 `dismissed` papers are pushed behind active candidates. Stored run history also
 keeps non-secret collection settings such as limits, conference year, venue

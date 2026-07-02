@@ -17,6 +17,7 @@ from shared.literature_radar import (
     append_radar_source_coverage_to_report,
     append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
+    append_radar_context_summary_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_recommendation_report,
@@ -39,6 +40,7 @@ from shared.literature_radar import (
     mvp_source_ids,
     pdf_access_report_text,
     radar_dblp_venue_profile_selection_summary,
+    radar_context_summary,
     radar_source_policy_summary,
     radar_source_blocked_readiness,
     radar_source_preset,
@@ -431,6 +433,54 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(by_phase["long_term_storage"]["metrics"]["storage_target"], "test_index")
         self.assertEqual(by_phase["recommendation_report"]["status"], "succeeded")
 
+    def test_summarizes_context_pool_and_linked_recommendations(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00046",
+            title="Context Summary Memory Safety",
+            abstract="Memory safety and allocator hardening.",
+            identifiers={"arxiv_id": "2601.00046"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00046"},
+        )
+        paper["tags"] = ["memory safety"]
+        recommendation = {
+            "paper": paper,
+            "context": {
+                "relationship_summary": "Related to existing context: Allocator baseline.",
+                "related_items": [{"id": "item_1", "title": "Allocator baseline"}],
+            },
+        }
+        summary = radar_context_summary(
+            [
+                {
+                    "title": "Allocator baseline",
+                    "source": "team-library",
+                    "link": "https://example.test/baseline",
+                    "comment_context": "Team comments: Alice: useful baseline",
+                    "interest_terms": ["memory safety"],
+                    "discussion_terms": ["allocator hardening"],
+                },
+                {
+                    "title": "Watched agent paper",
+                    "source": "team-radar-watch",
+                    "interest_terms": ["agentic security"],
+                },
+            ],
+            [recommendation],
+        )
+
+        self.assertEqual(summary["context_item_count"], 2)
+        self.assertEqual(summary["source_counts"], {"team-library": 1, "team-radar-watch": 1})
+        self.assertEqual(summary["linked_recommendation_count"], 1)
+        self.assertEqual(summary["related_item_count"], 1)
+        self.assertEqual(summary["interest_term_count"], 2)
+        self.assertEqual(summary["discussion_term_count"], 1)
+        self.assertEqual(summary["linked_context_item_with_link_count"], 1)
+        self.assertEqual(summary["comment_context_count"], 1)
+        report = append_radar_context_summary_to_report("# Report\n", summary)
+        self.assertIn("Context Linking", report)
+        self.assertIn("sources=team-library=1, team-radar-watch=1", report)
+
     def test_dblp_venue_profiles_cover_required_conference_groups(self) -> None:
         profiles = dblp_venue_profiles()
         names = {profile["name"] for profile in profiles}
@@ -727,6 +777,67 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(len(merged[0]["source_records"]), 2)
         self.assertEqual(merged[0]["links"]["landing"], "https://doi.org/10.1145/example")
         self.assertEqual(merged[0]["links"]["pdf"], "https://example.org/open.pdf")
+
+    def test_deduplicates_title_only_venue_record_with_identifier_metadata(self) -> None:
+        venue_record = create_radar_paper(
+            source_id="dblp_venues",
+            source_paper_id="conf/ccs/MemorySafety2026",
+            title="Memory Safety for Systems",
+            year=2026,
+            venue="ACM CCS",
+            links={"landing": "https://dblp.org/rec/conf/ccs/MemorySafety2026"},
+            source_record={
+                "source_id": "dblp_venues",
+                "venue_profile_id": "acm_ccs",
+                "venue_year": 2026,
+            },
+        )
+        doi_record = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/title-match",
+            title="Memory Safety for Systems",
+            year=2026,
+            identifiers={"doi": "10.1145/title-match"},
+            links={"doi": "https://doi.org/10.1145/title-match"},
+            source_record={"source_id": "crossref", "publisher": "ACM"},
+        )
+
+        merged = merge_duplicate_papers([venue_record, doi_record])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["dedupe_key"], "doi:10.1145/title-match")
+        self.assertEqual(merged[0]["identifiers"]["doi"], "10.1145/title-match")
+        self.assertEqual(merged[0]["venue"], "ACM CCS")
+        self.assertEqual(merged[0]["links"]["landing"], "https://dblp.org/rec/conf/ccs/MemorySafety2026")
+        self.assertEqual(merged[0]["links"]["doi"], "https://doi.org/10.1145/title-match")
+        self.assertEqual(
+            [record["source_id"] for record in merged[0]["source_records"]],
+            ["dblp_venues", "crossref"],
+        )
+
+    def test_title_alias_dedupe_does_not_merge_conflicting_strong_identifiers(self) -> None:
+        first = create_radar_paper(
+            source_id="crossref",
+            source_paper_id="10.1145/first",
+            title="Memory Safety for Systems",
+            year=2026,
+            identifiers={"doi": "10.1145/first"},
+        )
+        second = create_radar_paper(
+            source_id="openalex",
+            source_paper_id="W123",
+            title="Memory Safety for Systems",
+            year=2026,
+            identifiers={"doi": "10.1145/second"},
+        )
+
+        merged = merge_duplicate_papers([first, second])
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(
+            sorted(record["dedupe_key"] for record in merged),
+            ["doi:10.1145/first", "doi:10.1145/second"],
+        )
 
     def test_pdf_policy_allows_arxiv_and_blocks_unverified_pdf(self) -> None:
         arxiv_paper = create_radar_paper(
@@ -1458,6 +1569,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                         report_written=True,
                         storage_target="team_sqlite",
                     ),
+                    "context_summary": {
+                        "context_item_count": 3,
+                        "source_counts": {"team-library": 2, "team-radar-watch": 1},
+                        "linked_recommendation_count": 2,
+                        "related_item_count": 2,
+                        "interest_term_count": 4,
+                        "discussion_term_count": 2,
+                        "comment_context_count": 1,
+                    },
                     "source_stats": [
                         {"source_id": "arxiv", "status": "succeeded", "collected_count": 2},
                         {"source_id": "dblp", "status": "failed", "collected_count": 0},
@@ -1505,6 +1625,9 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`metadata_collection`: partial=1", brief)
         self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
+        self.assertIn("Context Linking", brief)
+        self.assertIn("context_items=3; sources=team-library=2, team-radar-watch=1", brief)
+        self.assertIn("comment_context=1", brief)
         self.assertIn("Source Policy", brief)
         self.assertIn("authoritative=3", brief)
         self.assertIn("trend_signals=1", brief)

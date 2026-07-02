@@ -79,6 +79,13 @@ are imported. Their stored attention summary and any review note from the Queue
 page or `radar-review --reason` become local context text and discussion terms
 for future runs, so a lightweight `Watch` decision can steer later
 recommendations without polluting the main library.
+Each run stores a `context_summary` and appends a `Context Linking` report
+section showing how many Team library, watched Radar, comment-discussion, and
+linked recommendation signals were available. This makes it clear when Radar is
+actually connected to current Team Side-Brain usage versus only matching topic
+keywords. The same context summary appears on the web queue/brief health chips
+and in `radar-queue` text output for daily review; the selected run page also
+shows it in Run Provenance for post-run inspection.
 
 This keeps automatic collection broad without filling the team library with
 every candidate from arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, or venue
@@ -605,7 +612,12 @@ Recommended next MVP order:
 2. more OpenReview workshop presets for recurring safety, alignment,
    interpretability, and adversarial ML workshops when their invitation IDs are
    stable enough to encode;
-3. cross-source DOI/citation enrichment for venue-profile results.
+3. deeper cross-source citation enrichment for venue-profile results. The shared
+   dedupe core already merges title/year-only venue records with DOI-bearing
+   Crossref, OpenAlex, or Semantic Scholar records when sources describe the
+   same paper, preserving all provenance records and upgrading the dedupe key to
+   the strongest identifier. Records with conflicting strong identifiers stay
+   separate even if their title/year aliases match.
 
 Scheduling should remain product-owned: Team Side-Brain can run a cron/systemd
 timer against a team database, while Personal Side-Brain can run the same shared

@@ -1129,6 +1129,7 @@ class TeamResearchDatabase:
         report: str = "",
         status: str = "succeeded",
         error: str = "",
+        context_summary: dict[str, Any] | None = None,
         source_errors: list[dict[str, Any]] | None = None,
         source_stats: list[dict[str, Any]] | None = None,
         now: datetime | None = None,
@@ -1208,6 +1209,7 @@ class TeamResearchDatabase:
                     "error": error,
                     "source_errors": source_errors or [],
                     "source_stats": source_stats or [],
+                    "context_summary": context_summary or {},
                     "source_policy": radar_source_policy_summary(
                         run.get("sources") if isinstance(run.get("sources"), list) else []
                     ),

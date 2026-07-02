@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +25,7 @@ from shared.literature_radar import (
     append_radar_source_policy_to_report,
     append_radar_source_readiness_to_report,
     append_radar_source_stats_to_report,
+    append_radar_context_summary_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_collection_config,
@@ -57,6 +58,8 @@ from shared.literature_radar import (
     enrich_radar_papers_with_unpaywall,
     radar_history_source_coverage_summary,
     radar_history_source_policy_summary,
+    radar_history_context_summary,
+    radar_context_summary,
     radar_pdf_access_summary,
     radar_latest_signal_lines,
     radar_review_counts,
@@ -235,9 +238,10 @@ def run_personal_literature_radar(
             now=selected_now,
             max_bytes=pdf_cache_max_bytes,
         )
+    context_items = personal_radar_context_items(root)
     recommendations = add_recommendation_context(
         recommendations,
-        context_items=personal_radar_context_items(root),
+        context_items=context_items,
         interest_terms=selected_terms,
         now=selected_now,
     )
@@ -251,6 +255,7 @@ def run_personal_literature_radar(
             now=selected_now,
         )
     recommendations = add_recommendation_attention_summaries(recommendations, now=selected_now)
+    context_summary = radar_context_summary(context_items, recommendations)
     report = build_recommendation_report(
         recommendations,
         title="Personal Literature Radar Report",
@@ -261,6 +266,7 @@ def run_personal_literature_radar(
         recommendations=recommendations,
     )
     report = append_radar_venue_coverage_to_report(report, venue_coverage)
+    report = append_radar_context_summary_to_report(report, context_summary)
     report = append_radar_source_policy_to_report(report, selected_sources)
     report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
     report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
@@ -278,6 +284,7 @@ def run_personal_literature_radar(
         collected_papers=collected,
         collected_count=len(collected),
         recommendations=recommendations,
+        context_summary=context_summary,
         source_errors=source_errors,
         source_stats=source_stats,
         report_path=report_path,
@@ -299,6 +306,7 @@ def run_personal_literature_radar(
         "recommendation_count": len(recommendations),
         "source_errors": source_errors,
         "source_stats": source_stats,
+        "context_summary": context_summary,
         "venue_coverage": run_record.get("venue_coverage") or venue_coverage,
         "recommendations": recommendations,
         "report": report,
@@ -414,6 +422,7 @@ def build_personal_literature_radar_brief_payload(
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
     selected_run_limit = max(1, int(run_limit))
+    selected_now = now or datetime.now(timezone.utc)
     records = read_personal_radar_paper_history(root)
     review_counts = radar_review_counts(records)
     queue = build_radar_review_queue(records, limit=selected_limit, review_counts=review_counts)
@@ -422,9 +431,16 @@ def build_personal_literature_radar_brief_payload(
     brief = build_radar_history_brief(
         runs,
         title="Personal Literature Radar Brief",
+        generated_at=selected_now,
         days=selected_days,
         recommendation_limit=selected_limit,
     )
+    activity = personal_literature_radar_activity_digest(
+        root,
+        since=selected_now - timedelta(days=selected_days),
+        limit=20,
+    )
+    brief = append_personal_literature_radar_activity_to_brief(brief, activity)
     return {
         "success": True,
         "kind": "personal_literature_radar_brief",
@@ -435,12 +451,17 @@ def build_personal_literature_radar_brief_payload(
         "review_counts": review_counts,
         "source_coverage": radar_history_source_coverage_summary(
             runs,
-            generated_at=now,
+            generated_at=selected_now,
             days=selected_days,
         ),
         "source_policy": radar_history_source_policy_summary(
             runs,
-            generated_at=now,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "context_summary": radar_history_context_summary(
+            runs,
+            generated_at=selected_now,
             days=selected_days,
         ),
         "queue": {
@@ -450,15 +471,106 @@ def build_personal_literature_radar_brief_payload(
         },
         "latest_run": personal_literature_radar_run_summary(
             runs[0] if runs else None,
-            now=now,
+            now=selected_now,
             freshness_max_age_hours=freshness_max_age_hours,
         ),
+        "activity": activity,
         "brief": brief,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),
             "paper_history": str(personal_radar_paper_history_path(root)),
         },
     }
+
+
+def build_personal_literature_radar_activity_payload(
+    root: Path,
+    *,
+    days: int = 7,
+    limit: int = 50,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_days = max(1, int(days))
+    selected_limit = max(1, min(int(limit), 200))
+    selected_now = now or datetime.now(timezone.utc)
+    activity = personal_literature_radar_activity_digest(
+        root,
+        since=selected_now - timedelta(days=selected_days),
+        limit=selected_limit,
+    )
+    return {
+        "success": True,
+        "kind": "personal_literature_radar_activity",
+        "days": selected_days,
+        "limit": selected_limit,
+        "activity_count": len(activity),
+        "activity": activity,
+        "paths": {
+            "run_index": str(personal_radar_index_path(root)),
+            "paper_history": str(personal_radar_paper_history_path(root)),
+        },
+    }
+
+
+def personal_literature_radar_activity_digest(
+    root: Path,
+    *,
+    since: datetime | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    selected_limit = max(1, min(int(limit), 200))
+    events = []
+    for record in read_personal_radar_paper_history(root).values():
+        event = personal_literature_radar_activity_record(record)
+        if not event:
+            continue
+        event_time = parse_personal_radar_activity_time(event["created_at"])
+        if since is not None and (event_time is None or event_time < since):
+            continue
+        events.append(event)
+    return sorted(events, key=lambda event: event.get("created_at") or "", reverse=True)[:selected_limit]
+
+
+def personal_literature_radar_activity_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    reviewed_at = str(record.get("reviewed_at") or "").strip()
+    if not reviewed_at:
+        return None
+    status = personal_radar_review_record(record)["status"]
+    return {
+        "action": "personal_radar_paper_reviewed",
+        "action_label": f"Marked {status.replace('_', ' ')}",
+        "status": status,
+        "actor": str(record.get("reviewed_by") or "personal"),
+        "created_at": reviewed_at,
+        "dedupe_key": str(record.get("dedupe_key") or ""),
+        "title": str(record.get("title") or record.get("dedupe_key") or "Radar item"),
+        "reason": str(record.get("review_reason") or "").strip(),
+    }
+
+
+def parse_personal_radar_activity_time(value: str) -> datetime | None:
+    selected = str(value or "").strip()
+    if not selected:
+        return None
+    try:
+        parsed = datetime.fromisoformat(selected.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def append_personal_literature_radar_activity_to_brief(brief: str, activity: list[dict[str, Any]]) -> str:
+    if not activity:
+        return brief
+    lines = [brief.rstrip(), "", "## Personal Activity", ""]
+    for event in activity:
+        detail = f"- {event['action_label']}: {event['title']} ({event['actor']} at {event['created_at']})"
+        if event.get("reason"):
+            detail += f" - {event['reason']}"
+        lines.append(detail)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def personal_literature_radar_run_summary(
@@ -474,6 +586,7 @@ def personal_literature_radar_run_summary(
     venue_coverage = run.get("venue_coverage") if isinstance(run.get("venue_coverage"), list) else []
     sources = run.get("sources") if isinstance(run.get("sources"), list) else []
     source_policy = run.get("source_policy") if isinstance(run.get("source_policy"), dict) else {}
+    context_summary = run.get("context_summary") if isinstance(run.get("context_summary"), dict) else {}
     collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
     summary = {
         "id": run.get("id") or "",
@@ -486,6 +599,7 @@ def personal_literature_radar_run_summary(
         "source_errors": source_errors,
         "source_stats": source_stats,
         "source_policy": source_policy or radar_source_policy_summary(sources),
+        "context_summary": context_summary,
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
@@ -1060,6 +1174,7 @@ def build_personal_radar_run_record(
     collected_papers: list[dict[str, Any]],
     collected_count: int,
     recommendations: list[dict[str, Any]],
+    context_summary: dict[str, Any] | None = None,
     source_errors: list[dict[str, Any]] | None = None,
     source_stats: list[dict[str, Any]] | None = None,
     report_path: Path | None,
@@ -1096,6 +1211,7 @@ def build_personal_radar_run_record(
         "source_errors": errors,
         "source_stats": source_stats or [],
         "source_policy": radar_source_policy_summary(sources),
+        "context_summary": context_summary or {},
         "venue_coverage": build_venue_coverage_summary(
             collected_papers=collected_papers,
             recommendations=recommendations,

@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from personal.literature_radar import (
+    build_personal_literature_radar_activity_payload,
     build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
     personal_radar_context_items,
@@ -530,6 +531,9 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             )
             self.assertEqual(runs[0]["source_policy"]["authoritative_count"], 1)
             self.assertEqual(runs[0]["source_policy"]["class_counts"], {"primary_metadata": 1})
+            self.assertEqual(runs[0]["context_summary"]["context_item_count"], 0)
+            self.assertEqual(runs[0]["context_summary"]["linked_recommendation_count"], 0)
+            self.assertIn("Context Linking", result["report"])
             pipeline_by_phase = {record["phase"]: record for record in runs[0]["pipeline_trace"]}
             self.assertEqual(pipeline_by_phase["metadata_collection"]["status"], "succeeded")
             self.assertEqual(pipeline_by_phase["relevance_scoring"]["metrics"]["recommendation_count"], 1)
@@ -682,6 +686,8 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertIn("authoritative=1", queue_text)
             self.assertIn("freshness=", queue_text)
             self.assertIn("Source coverage:", queue_text)
+            self.assertIn("Context:", queue_text)
+            self.assertIn("context_items=0", queue_text)
             self.assertIn("Source readiness:", queue_text)
             self.assertIn("status=succeeded", queue_text)
             self.assertIn("status=ready", queue_text)
@@ -726,6 +732,34 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             updated_runs = read_personal_radar_index(root)
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["status"], "watch")
             self.assertEqual(updated_runs[0]["recommendations"][0]["review"]["reviewed_by"], "alice")
+            activity_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_stdout):
+                activity_code = personal_literature_radar.main(
+                    ["activity", "--root-path", str(root), "--days", "7", "--limit", "10", "--json"]
+                )
+            self.assertEqual(activity_code, 0)
+            activity = json.loads(activity_stdout.getvalue())
+            self.assertTrue(activity["success"])
+            self.assertEqual(activity["kind"], "personal_literature_radar_activity")
+            self.assertEqual(activity["activity_count"], 1)
+            self.assertEqual(activity["activity"][0]["action"], "personal_radar_paper_reviewed")
+            self.assertEqual(activity["activity"][0]["action_label"], "Marked watch")
+            self.assertEqual(activity["activity"][0]["actor"], "alice")
+            self.assertEqual(activity["activity"][0]["reason"], "Track for allocator hardening.")
+            self.assertEqual(activity["activity"][0]["dedupe_key"], papers[0]["dedupe_key"])
+            direct_activity = build_personal_literature_radar_activity_payload(
+                root,
+                days=7,
+                limit=10,
+                now=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+            )
+            self.assertEqual(direct_activity["activity_count"], 1)
+            activity_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_text_stdout):
+                activity_text_code = personal_literature_radar.main(["activity", "--root-path", str(root)])
+            self.assertEqual(activity_text_code, 0)
+            self.assertIn("Personal Literature Radar Activity", activity_text_stdout.getvalue())
+            self.assertIn("Marked watch", activity_text_stdout.getvalue())
             watch_stdout = io.StringIO()
             with contextlib.redirect_stdout(watch_stdout):
                 watch_code = personal_literature_radar.main(
@@ -782,6 +816,7 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["latest_run"]["freshness"]["max_age_hours"], 24)
             self.assertEqual(brief["latest_run"]["status"], "succeeded")
             self.assertEqual(brief["latest_run"]["recommendation_count"], 1)
+            self.assertEqual(brief["latest_run"]["context_summary"]["context_item_count"], 0)
             self.assertEqual(brief["source_coverage"]["run_count"], 1)
             self.assertEqual(brief["source_coverage"]["status_counts"], {"succeeded": 1})
             self.assertEqual(brief["source_coverage"]["sources"][0]["source_id"], "arxiv")
@@ -790,13 +825,19 @@ class PersonalLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["source_policy"]["authoritative_count"], 1)
             self.assertEqual(brief["source_policy"]["trend_signal_count"], 0)
             self.assertEqual(brief["source_policy"]["class_counts"], {"primary_metadata": 1})
+            self.assertEqual(brief["context_summary"]["run_count"], 1)
+            self.assertEqual(brief["context_summary"]["context_item_count"], 0)
+            self.assertEqual(brief["activity"][0]["action_label"], "Marked watch")
             self.assertIn("literature-radar-runs.json", brief["paths"]["run_index"])
             self.assertIn("literature-radar-papers.json", brief["paths"]["paper_history"])
             self.assertIn("Personal Literature Radar Brief", brief["brief"])
+            self.assertIn("Personal Activity", brief["brief"])
             self.assertIn("Agentic Security for Memory Safety", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Scoring Profiles", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Pipeline Trace", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Context Linking", brief_path.read_text(encoding="utf-8"))
             self.assertIn("Review: watch", brief_path.read_text(encoding="utf-8"))
+            self.assertIn("Personal Activity", brief_path.read_text(encoding="utf-8"))
             self.assertIn("PDF policy: download allowed", brief_path.read_text(encoding="utf-8"))
 
     def test_personal_literature_radar_cli_passes_source_preset(self) -> None:

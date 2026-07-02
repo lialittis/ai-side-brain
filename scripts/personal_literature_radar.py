@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from personal.literature_radar import (
     DEFAULT_PERSONAL_RADAR_SOURCES,
+    build_personal_literature_radar_activity_payload,
     build_personal_literature_radar_brief_payload,
     build_personal_literature_radar_queue_payload,
     ensure_personal_radar_topic_profile,
@@ -29,6 +30,7 @@ from personal.literature_radar import (
 )
 from shared.literature_radar import (
     build_radar_preflight_payload,
+    format_radar_context_summary,
     format_radar_run_health_action,
     format_radar_source_policy,
     format_radar_source_coverage,
@@ -124,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
     queue.add_argument("--limit", type=int, default=3)
     queue.add_argument("--freshness-max-age-hours", type=int, default=36)
     queue.add_argument("--json", action="store_true")
+
+    activity = subparsers.add_parser("activity", help="show recent personal radar review activity")
+    activity.add_argument("--root-path", type=Path, default=ROOT)
+    activity.add_argument("--days", type=int, default=7, help="review activity window in days")
+    activity.add_argument("--limit", type=int, default=50)
+    activity.add_argument("--json", action="store_true")
 
     settings = subparsers.add_parser("settings", help="show personal radar defaults and pre-run source readiness")
     settings.add_argument("--source-preset", choices=[preset["id"] for preset in radar_source_presets()])
@@ -453,6 +461,13 @@ def print_personal_queue(
         )
         if source_coverage:
             print(format_radar_source_coverage(source_coverage))
+        context_summary = (
+            latest_run.get("context_summary")
+            if isinstance(latest_run.get("context_summary"), dict)
+            else {}
+        )
+        if context_summary:
+            print(f"Context: {format_radar_context_summary(context_summary)}")
         source_readiness = (
             latest_run.get("source_readiness")
             if isinstance(latest_run.get("source_readiness"), dict)
@@ -511,6 +526,21 @@ def format_personal_queue_access_summary(summary: dict[str, Any]) -> str:
     if kind_text:
         parts.append(f"kinds={kind_text}")
     return " | ".join(parts)
+
+
+def print_personal_activity(payload: dict[str, Any]) -> None:
+    print("Personal Literature Radar Activity")
+    print(f"Window: last {payload.get('days')} day(s)")
+    activity = payload.get("activity") if isinstance(payload.get("activity"), list) else []
+    if not activity:
+        print("No Personal Literature Radar review activity in this window.")
+        return
+    for event in activity:
+        detail = f"- {event.get('action_label')}: {event.get('title')}"
+        detail += f" ({event.get('actor') or 'personal'} at {event.get('created_at') or 'unknown'})"
+        if event.get("reason"):
+            detail += f" - {event.get('reason')}"
+        print(detail)
 
 
 def sorted_paper_history(
@@ -642,6 +672,18 @@ def main(argv: list[str] | None = None) -> int:
                 latest_run=queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else None,
                 access_summary=queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else None,
             )
+        return 0
+
+    if args.command == "activity":
+        payload = build_personal_literature_radar_activity_payload(
+            args.root_path,
+            days=args.days,
+            limit=args.limit,
+        )
+        if args.json:
+            print_json(payload)
+        else:
+            print_personal_activity(payload)
         return 0
 
     if args.command == "settings":

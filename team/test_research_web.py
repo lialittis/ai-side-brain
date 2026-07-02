@@ -11,7 +11,7 @@ import unittest
 from urllib.request import urlopen
 from unittest import mock
 
-from shared.literature_radar import create_radar_paper, radar_supported_source_ids, recommend_papers
+from shared.literature_radar import create_radar_paper, radar_context_summary, radar_supported_source_ids, recommend_papers
 from team.literature_radar import build_team_literature_radar_queue_payload
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
@@ -440,6 +440,17 @@ class TeamResearchWebTest(unittest.TestCase):
                         "occurred_at": "2026-07-01T10:01:00+00:00",
                     }
                 ],
+                context_summary=radar_context_summary(
+                    [
+                        {
+                            "title": "Baseline Paper",
+                            "source": "team-library",
+                            "link": "https://example.org/baseline",
+                            "interest_terms": ["memory safety"],
+                        }
+                    ],
+                    recommendations,
+                ),
                 now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
             )
 
@@ -493,6 +504,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Status: partial", html)
             self.assertIn("Source coverage", html)
             self.assertIn("Source readiness", html)
+            self.assertIn("Context: 1 items / 1 linked", queue_html)
             self.assertIn("status: partial", html)
             self.assertIn("status: ready", html)
             self.assertIn("sources: 2/2", html)
@@ -513,6 +525,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Team Interest Weights", html)
             self.assertIn("memory safety: 90", html)
             self.assertIn("system security: 80", html)
+            self.assertIn("Context Linking", html)
+            self.assertIn("context items: 1", html)
+            self.assertIn("linked recommendations: 1", html)
+            self.assertIn("team-library: 1", html)
             self.assertIn("Pipeline Trace", html)
             self.assertIn("metadata collection: partial", html)
             self.assertIn("source error count: 1", html)
@@ -542,6 +558,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Source policy:", brief_html)
             self.assertIn("authoritative: 1", brief_html)
             self.assertIn("trend: 0", brief_html)
+            self.assertIn("Context:", brief_html)
+            self.assertIn("items: 1", brief_html)
+            self.assertIn("linked: 1", brief_html)
             self.assertIn("Review queue:", brief_html)
             self.assertIn("activity: 0", brief_html)
             self.assertIn("PDF access:", brief_html)

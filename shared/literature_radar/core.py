@@ -1040,8 +1040,11 @@ def dedupe_key(paper: dict[str, Any]) -> str:
     return dedupe_key_from_parts(paper.get("title", ""), paper.get("identifiers") or {}, paper.get("year"))
 
 
+STRONG_DEDUPE_IDENTIFIER_KEYS = ("doi", "arxiv_id", "semantic_scholar_id", "openalex_id", "corpus_id")
+
+
 def dedupe_key_from_parts(title: str, identifiers: dict[str, str], year: int | None) -> str:
-    for key in ("doi", "arxiv_id", "semantic_scholar_id", "openalex_id", "corpus_id"):
+    for key in STRONG_DEDUPE_IDENTIFIER_KEYS:
         value = identifiers.get(key)
         if value:
             return f"{key}:{value.lower()}"
@@ -1051,13 +1054,19 @@ def dedupe_key_from_parts(title: str, identifiers: dict[str, str], year: int | N
 
 def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
+    alias_to_key: dict[str, str] = {}
     for paper in papers:
-        key = dedupe_key(paper)
+        aliases = paper_dedupe_aliases(paper)
+        key = merge_duplicate_paper_key(paper, aliases, merged, alias_to_key)
         if key not in merged:
             merged[key] = dict(paper)
             merged[key]["source_records"] = list(paper.get("source_records") or [])
+            merged[key]["dedupe_key"] = dedupe_key(merged[key])
+            for alias in aliases:
+                alias_to_key[alias] = key
             continue
         target = merged[key]
+        before_aliases = paper_dedupe_aliases(target)
         for field in ("title", "abstract", "venue"):
             if not target.get(field) and paper.get(field):
                 target[field] = paper[field]
@@ -1068,7 +1077,65 @@ def merge_duplicate_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
         target["links"] = {**(paper.get("links") or {}), **(target.get("links") or {})}
         target["source_records"].extend(paper.get("source_records") or [])
         target["updated_at"] = max(str(target.get("updated_at") or ""), str(paper.get("updated_at") or ""))
+        target["dedupe_key"] = dedupe_key(target)
+        for alias in [*before_aliases, *aliases, *paper_dedupe_aliases(target)]:
+            alias_to_key[alias] = key
     return list(merged.values())
+
+
+def merge_duplicate_paper_key(
+    paper: dict[str, Any],
+    aliases: list[str],
+    merged: dict[str, dict[str, Any]],
+    alias_to_key: dict[str, str],
+) -> str:
+    for alias in paper_strong_dedupe_aliases(paper):
+        if alias in alias_to_key:
+            return alias_to_key[alias]
+    title_alias = paper_title_year_alias(paper)
+    if title_alias and title_alias in alias_to_key:
+        candidate_key = alias_to_key[title_alias]
+        if title_alias_merge_allowed(merged.get(candidate_key) or {}, paper):
+            return candidate_key
+    return aliases[0]
+
+
+def title_alias_merge_allowed(existing: dict[str, Any], paper: dict[str, Any]) -> bool:
+    existing_strong = set(paper_strong_dedupe_aliases(existing))
+    paper_strong = set(paper_strong_dedupe_aliases(paper))
+    return not existing_strong or not paper_strong or bool(existing_strong & paper_strong)
+
+
+def paper_dedupe_aliases(paper: dict[str, Any]) -> list[str]:
+    aliases = []
+    aliases.extend(paper_strong_dedupe_aliases(paper))
+    title_alias = paper_title_year_alias(paper)
+    if title_alias:
+        aliases.append(title_alias)
+    explicit = str(paper.get("dedupe_key") or "").strip().lower()
+    if explicit:
+        aliases.append(explicit)
+    return list(dict.fromkeys(aliases)) or [dedupe_key(paper)]
+
+
+def paper_strong_dedupe_aliases(paper: dict[str, Any]) -> list[str]:
+    identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
+    aliases = []
+    for key in STRONG_DEDUPE_IDENTIFIER_KEYS:
+        value = str(identifiers.get(key) or "").strip().lower()
+        if value:
+            aliases.append(f"{key}:{value}")
+    explicit = str(paper.get("dedupe_key") or "").strip().lower()
+    if explicit and any(explicit.startswith(f"{key}:") for key in STRONG_DEDUPE_IDENTIFIER_KEYS):
+        aliases.append(explicit)
+    return list(dict.fromkeys(aliases))
+
+
+def paper_title_year_alias(paper: dict[str, Any]) -> str:
+    title = str(paper.get("title") or "").strip()
+    if not title:
+        return ""
+    return dedupe_key_from_parts(title, {}, paper.get("year"))
 
 
 def assess_pdf_access(paper: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
@@ -2785,6 +2852,71 @@ def venue_coverage_report_lines(venue_coverage: list[dict[str, Any]]) -> list[st
     return lines
 
 
+def radar_context_summary(
+    context_items: list[dict[str, Any]] | None,
+    recommendations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    items = [item for item in context_items or [] if isinstance(item, dict)]
+    source_counts: dict[str, int] = {}
+    interest_terms = set()
+    discussion_terms = set()
+    link_count = 0
+    comment_context_count = 0
+    for item in items:
+        source = normalize_spaces(item.get("source") or "unknown") or "unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if item.get("link"):
+            link_count += 1
+        if item.get("comment_context"):
+            comment_context_count += 1
+        for term in item.get("interest_terms") or []:
+            normalized = normalize_spaces(term)
+            if normalized:
+                interest_terms.add(normalized)
+        for term in item.get("discussion_terms") or []:
+            normalized = normalize_spaces(term)
+            if normalized:
+                discussion_terms.add(normalized)
+    context_records = pipeline_context_records(recommendations or [])
+    linked_recommendation_count = sum(1 for context in context_records if context.get("related_items"))
+    related_item_count = sum(len(context.get("related_items") or []) for context in context_records)
+    return {
+        "context_item_count": len(items),
+        "source_counts": dict(sorted(source_counts.items())),
+        "source_ids": sorted(source_counts),
+        "linked_recommendation_count": linked_recommendation_count,
+        "related_item_count": related_item_count,
+        "interest_term_count": len(interest_terms),
+        "discussion_term_count": len(discussion_terms),
+        "linked_context_item_with_link_count": link_count,
+        "comment_context_count": comment_context_count,
+    }
+
+
+def format_radar_context_summary(summary: dict[str, Any]) -> str:
+    source_counts = summary.get("source_counts") if isinstance(summary.get("source_counts"), dict) else {}
+    source_text = ", ".join(
+        f"{source}={int(count)}"
+        for source, count in sorted(source_counts.items())
+        if int(count or 0) > 0
+    ) or "none"
+    return (
+        f"context_items={int(summary.get('context_item_count') or 0)}; "
+        f"sources={source_text}; "
+        f"linked_recommendations={int(summary.get('linked_recommendation_count') or 0)}; "
+        f"related_items={int(summary.get('related_item_count') or 0)}; "
+        f"interest_terms={int(summary.get('interest_term_count') or 0)}; "
+        f"discussion_terms={int(summary.get('discussion_term_count') or 0)}; "
+        f"comment_context={int(summary.get('comment_context_count') or 0)}"
+    )
+
+
+def append_radar_context_summary_to_report(report: str, summary: dict[str, Any]) -> str:
+    if not summary:
+        return report
+    return "\n".join([report.rstrip(), "", "## Context Linking", "", f"- {format_radar_context_summary(summary)}", ""])
+
+
 def build_radar_pipeline_trace(
     *,
     status: str,
@@ -3037,6 +3169,9 @@ def build_radar_history_brief(
     pipeline_lines = radar_brief_pipeline_trace_lines([bundle["run"] for bundle in bundles])
     if pipeline_lines:
         lines.extend(["## Pipeline Trace", "", *pipeline_lines, ""])
+    context_lines = radar_brief_context_summary_lines([bundle["run"] for bundle in bundles])
+    if context_lines:
+        lines.extend(["## Context Linking", "", *context_lines, ""])
     source_policy_lines = radar_brief_source_policy_lines([bundle["run"] for bundle in bundles])
     if source_policy_lines:
         lines.extend(["## Source Policy", "", *source_policy_lines, ""])
@@ -3339,6 +3474,82 @@ def radar_brief_pipeline_trace_lines(runs: list[dict[str, Any]]) -> list[str]:
         if phase not in RADAR_PIPELINE_PHASES:
             lines.append(f"- `{phase}`: {format_status_counts(counts)}")
     return lines
+
+
+def radar_brief_context_summary_lines(runs: list[dict[str, Any]]) -> list[str]:
+    combined = radar_history_context_summary(runs, days=None)
+    if int(combined.get("run_count") or 0) <= 0:
+        return []
+    summary = {
+        key: value
+        for key, value in combined.items()
+        if key not in {"run_count", "days"}
+    }
+    return [f"- {format_radar_context_summary(summary)}; runs={combined['run_count']}"]
+
+
+def radar_history_context_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    runs = [
+        bundle["run"]
+        for record in run_records
+        if (bundle := normalize_radar_brief_bundle(record))
+        and radar_brief_run_time(bundle["run"]) is not None
+        and (cutoff is None or radar_brief_run_time(bundle["run"]) >= cutoff)
+    ]
+    summaries = [
+        run.get("context_summary")
+        for run in runs
+        if isinstance(run.get("context_summary"), dict)
+    ]
+    if not summaries:
+        return {
+            "run_count": 0,
+            "days": selected_days,
+            "context_item_count": 0,
+            "source_counts": {},
+            "linked_recommendation_count": 0,
+            "related_item_count": 0,
+            "interest_term_count": 0,
+            "discussion_term_count": 0,
+            "linked_context_item_with_link_count": 0,
+            "comment_context_count": 0,
+        }
+    combined_source_counts: dict[str, int] = {}
+    combined = {
+        "run_count": len(summaries),
+        "days": selected_days,
+        "context_item_count": 0,
+        "linked_recommendation_count": 0,
+        "related_item_count": 0,
+        "interest_term_count": 0,
+        "discussion_term_count": 0,
+        "linked_context_item_with_link_count": 0,
+        "comment_context_count": 0,
+    }
+    for summary in summaries:
+        for key in (
+            "context_item_count",
+            "linked_recommendation_count",
+            "related_item_count",
+            "interest_term_count",
+            "discussion_term_count",
+            "linked_context_item_with_link_count",
+            "comment_context_count",
+        ):
+            combined[key] += int(summary.get(key) or 0)
+        source_counts = summary.get("source_counts") if isinstance(summary.get("source_counts"), dict) else {}
+        for source, count in source_counts.items():
+            combined_source_counts[str(source)] = combined_source_counts.get(str(source), 0) + int(count or 0)
+    combined["source_counts"] = dict(sorted(combined_source_counts.items()))
+    return combined
 
 
 def radar_brief_collection_config_lines(runs: list[dict[str, Any]]) -> list[str]:

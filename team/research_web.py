@@ -27,6 +27,7 @@ from shared.literature_radar import (
     assess_pdf_access,
     build_radar_preflight_payload,
     build_radar_review_queue,
+    format_radar_context_summary,
     openreview_venue_profile_selection_summary,
     radar_dblp_venue_profile_selection_summary,
     radar_pdf_access_summary,
@@ -1271,6 +1272,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     source_coverage = payload.get("source_coverage") if isinstance(payload.get("source_coverage"), dict) else {}
     source_policy = payload.get("source_policy") if isinstance(payload.get("source_policy"), dict) else {}
+    context_summary = payload.get("context_summary") if isinstance(payload.get("context_summary"), dict) else {}
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
     access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
@@ -1311,6 +1313,13 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">authoritative: {int(source_policy.get("authoritative_count") or 0)}</span>
         <span class="tag">trend: {int(source_policy.get("trend_signal_count") or 0)}</span>
         <span class="tag">unknown: {int(source_policy.get("unknown_count") or 0)}</span>
+      </div>
+      <div class="tags" title="{html_escape(format_radar_context_summary(context_summary))}">
+        <span class="muted">Context:</span>
+        <span class="tag">runs: {int(context_summary.get("run_count") or 0)}</span>
+        <span class="tag">items: {int(context_summary.get("context_item_count") or 0)}</span>
+        <span class="tag">linked: {int(context_summary.get("linked_recommendation_count") or 0)}</span>
+        <span class="tag">comments: {int(context_summary.get("comment_context_count") or 0)}</span>
       </div>
       <div class="tags">
         <span class="muted">Review queue:</span>
@@ -1965,6 +1974,7 @@ def render_radar_run_provenance(run: dict[str, Any]) -> str:
     sections = [
         render_radar_collection_config(run.get("collection_config")),
         render_radar_scoring_profile(run.get("scoring_profile")),
+        render_radar_context_provenance(run.get("context_summary")),
         render_radar_pipeline_trace(run.get("pipeline_trace")),
     ]
     rendered = [section for section in sections if section]
@@ -2045,6 +2055,25 @@ def render_radar_scoring_profile(profile: Any) -> str:
     if len(topics) > 6:
         chips.append(render_radar_metric_chip("more topics", len(topics) - 6))
     return render_radar_provenance_section("Scoring Profile", chips)
+
+
+def render_radar_context_provenance(summary: Any) -> str:
+    if not isinstance(summary, dict) or not summary:
+        return ""
+    source_counts = summary.get("source_counts") if isinstance(summary.get("source_counts"), dict) else {}
+    chips = [
+        render_radar_metric_chip("context items", int(summary.get("context_item_count") or 0)),
+        render_radar_metric_chip("linked recommendations", int(summary.get("linked_recommendation_count") or 0)),
+        render_radar_metric_chip("related items", int(summary.get("related_item_count") or 0)),
+        render_radar_metric_chip("interest terms", int(summary.get("interest_term_count") or 0)),
+        render_radar_metric_chip("discussion terms", int(summary.get("discussion_term_count") or 0)),
+        render_radar_metric_chip("comment context", int(summary.get("comment_context_count") or 0)),
+    ]
+    for source, count in sorted(source_counts.items())[:6]:
+        chips.append(render_radar_metric_chip(str(source), int(count or 0)))
+    if len(source_counts) > 6:
+        chips.append(render_radar_metric_chip("more sources", len(source_counts) - 6))
+    return render_radar_provenance_section("Context Linking", chips)
 
 
 def render_radar_pipeline_trace(trace: Any) -> str:
@@ -2556,6 +2585,14 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
         f'<span class="pill">Policy: {int(source_policy.get("authoritative_count") or 0)} authoritative'
         f' / {int(source_policy.get("trend_signal_count") or 0)} trend</span>'
     )
+    context_summary = run.get("context_summary") if isinstance(run.get("context_summary"), dict) else {}
+    context_label = (
+        f'<span class="pill" title="{html_escape(format_radar_context_summary(context_summary))}">'
+        f'Context: {int(context_summary.get("context_item_count") or 0)} items'
+        f' / {int(context_summary.get("linked_recommendation_count") or 0)} linked</span>'
+        if context_summary
+        else ""
+    )
     readiness_status = str(source_readiness.get("status") or "unknown")
     readiness_css = "warn" if readiness_status == "blocked" else "good" if readiness_status == "ready" else ""
     readiness_label = (
@@ -2597,6 +2634,7 @@ def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
       {health_label}
       {freshness_label}
       {source_policy_label}
+      {context_label}
       {coverage_label}
       {readiness_label}
       <span class="pill">Collected: {int(run.get("collected_count") or 0)}</span>
