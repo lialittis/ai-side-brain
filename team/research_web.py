@@ -45,6 +45,7 @@ from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
     apply_team_radar_source_preset,
+    build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     build_team_radar_scorer,
@@ -479,6 +480,22 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     }}
     .radar-run-link:hover, .radar-run-link.active {{ border-color: #9db7e8; background: #f5f8ff; text-decoration: none; }}
     .radar-run-title {{ font-weight: 750; overflow-wrap: anywhere; }}
+    .radar-activity {{
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }}
+    .radar-activity h2 {{ margin: 0; }}
+    .radar-activity-list {{ display: grid; gap: 6px; }}
+    .radar-activity-item {{
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      overflow-wrap: anywhere;
+    }}
     .radar-run-form {{
       display: grid;
       gap: 10px;
@@ -861,6 +878,7 @@ def render_literature_radar_page(
         {render_radar_status_summary(database, runs)}
         {render_radar_run_list(runs, selected_run)}
         {render_radar_history_actions(database)}
+        {render_literature_radar_activity(database)}
         {render_radar_run_form(database)}
       </section>
       <section class="panel">
@@ -1083,6 +1101,7 @@ def build_literature_radar_settings_payload(
             "html": "/radar",
             "queue_html": "/radar/queue?limit=20",
             "queue_json": "/radar/queue.json?limit=20",
+            "activity_json": "/radar/activity.json?days=7&limit=50",
             "brief_json": "/radar/brief.json?days=7&limit=20",
         },
     )
@@ -1171,10 +1190,65 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
       <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
+      <a class="button" href="/radar/activity.json?days=7&amp;limit=50">Activity JSON</a>
       <a class="button" href="/radar/settings.json">Settings JSON</a>
     </div>
     {render_radar_review_count_links(review_counts, selected_review="all", limit=50)}
     """
+
+
+def render_literature_radar_activity(database: TeamResearchDatabase, *, limit: int = 8) -> str:
+    events = database.list_audit_events(limit=limit, object_type_prefix="literature_radar_paper")
+    if not events:
+        return ""
+    return f"""
+    <div class="radar-activity">
+      <h2>Recent Activity</h2>
+      <div class="radar-activity-list">
+        {"".join(render_literature_radar_activity_item(event) for event in events)}
+      </div>
+    </div>
+    """
+
+
+def render_literature_radar_activity_item(event: dict[str, Any]) -> str:
+    after = event.get("after") if isinstance(event.get("after"), dict) else {}
+    before = event.get("before") if isinstance(event.get("before"), dict) else {}
+    title = radar_activity_title(after) or radar_activity_title(before) or str(event.get("object_id") or "Radar item")
+    action = radar_activity_action_text(event, after)
+    timestamp = display_radar_datetime(str(event.get("created_at") or "")) or str(event.get("created_at") or "")
+    actor = str(event.get("actor") or "team-member")
+    return f"""
+    <div class="radar-activity-item">
+      <div><strong>{html_escape(action)}</strong> {html_escape(title)}</div>
+      <div class="meta">{html_escape(actor)} · {html_escape(timestamp)}</div>
+    </div>
+    """
+
+
+def radar_activity_title(record: dict[str, Any]) -> str:
+    if not isinstance(record, dict):
+        return ""
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    recommendation = record.get("recommendation") if isinstance(record.get("recommendation"), dict) else {}
+    recommendation_paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    return str(record.get("title") or paper.get("title") or recommendation_paper.get("title") or "").strip()
+
+
+def radar_activity_action_text(event: dict[str, Any], after: dict[str, Any]) -> str:
+    action = str(event.get("action") or "")
+    if action == "literature_radar_paper_reviewed":
+        status = str(after.get("review_status") or "reviewed").replace("_", " ")
+        return f"Marked {status}:"
+    if action == "literature_radar_paper_imported":
+        return "Added to library:"
+    if action == "literature_radar_recommendation_imported":
+        return "Imported recommendation:"
+    if action == "literature_radar_recommendation_reviewed":
+        review = after.get("review") if isinstance(after.get("review"), dict) else {}
+        status = str(review.get("status") or "reviewed").replace("_", " ")
+        return f"Updated recommendation {status}:"
+    return action.replace("_", " ").title() + ":"
 
 
 def render_radar_brief_form(*, days: int, limit: int) -> str:
@@ -1200,6 +1274,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
     review_counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
     access_summary = queue.get("access_summary") if isinstance(queue.get("access_summary"), dict) else {}
+    activity = payload.get("activity") if isinstance(payload.get("activity"), list) else []
     latest_status = str(latest_run.get("status") or "unknown") if latest_run else "none"
     freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
     coverage_status = radar_brief_source_coverage_status(source_coverage)
@@ -1243,6 +1318,7 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">unreviewed: {int(review_counts.get("unreviewed") or 0)}</span>
         <span class="tag">watch: {int(review_counts.get("watch") or 0)}</span>
         <span class="tag">dismissed: {int(review_counts.get("dismissed") or 0)}</span>
+        <span class="tag">activity: {len(activity)}</span>
       </div>
       <div class="tags">
         <span class="muted">PDF access:</span>
@@ -3304,6 +3380,7 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
         run_id,
         dedupe_key,
         import_result,
+        actor=fields.get("actor") or "team-member",
     )
     return str(import_result["item_id"])
 
@@ -3341,7 +3418,11 @@ def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[s
         actor=fields.get("actor") or "team-member",
     )
     import_result["dedupe_key"] = dedupe_key
-    database.mark_literature_radar_paper_imported(dedupe_key, import_result)
+    database.mark_literature_radar_paper_imported(
+        dedupe_key,
+        import_result,
+        actor=fields.get("actor") or "team-member",
+    )
     return str(import_result["item_id"])
 
 
@@ -3675,6 +3756,14 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                             default=36,
                             maximum=24 * 30,
                         ),
+                    )
+                )
+            elif parsed.path == "/radar/activity.json":
+                self.respond_json(
+                    build_team_literature_radar_activity_payload(
+                        self.database,
+                        days=clean_positive_int(query.get("days", [""])[0], default=7, maximum=365),
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=50, maximum=200),
                     )
                 )
             elif parsed.path == "/radar/papers":

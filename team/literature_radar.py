@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -483,6 +483,7 @@ def build_team_literature_radar_brief_payload(
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
     selected_run_limit = max(1, int(run_limit))
+    selected_now = now or datetime.now(timezone.utc)
     review_counts = database.literature_radar_paper_review_counts()
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
@@ -501,9 +502,16 @@ def build_team_literature_radar_brief_payload(
     brief = build_radar_history_brief(
         run_bundles,
         title="Team Literature Radar Brief",
+        generated_at=selected_now,
         days=selected_days,
         recommendation_limit=selected_limit,
     )
+    activity = team_literature_radar_activity_digest(
+        database,
+        since=selected_now - timedelta(days=selected_days),
+        limit=20,
+    )
+    brief = append_team_literature_radar_activity_to_brief(brief, activity)
     return {
         "success": True,
         "kind": "team_literature_radar_brief",
@@ -527,9 +535,10 @@ def build_team_literature_radar_brief_payload(
             "access_summary": radar_pdf_access_summary(queue_papers),
             "papers": queue_papers,
         },
+        "activity": activity,
         "latest_run": team_literature_radar_run_summary(
             runs[0] if runs else None,
-            now=now,
+            now=selected_now,
             freshness_max_age_hours=freshness_max_age_hours,
         ),
         "brief": brief,
@@ -540,6 +549,101 @@ def build_team_literature_radar_brief_payload(
             "queue": f"/radar/queue.json?limit={selected_limit}",
         },
     }
+
+
+def build_team_literature_radar_activity_payload(
+    database: TeamResearchDatabase,
+    *,
+    days: int = 7,
+    limit: int = 50,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_days = max(1, int(days))
+    selected_limit = max(1, min(int(limit), 200))
+    selected_now = now or datetime.now(timezone.utc)
+    activity = team_literature_radar_activity_digest(
+        database,
+        since=selected_now - timedelta(days=selected_days),
+        limit=selected_limit,
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_activity",
+        "days": selected_days,
+        "limit": selected_limit,
+        "activity_count": len(activity),
+        "activity": activity,
+        "links": {
+            "radar": "/radar",
+            "json": f"/radar/activity.json?days={selected_days}&limit={selected_limit}",
+            "brief_json": f"/radar/brief.json?days={selected_days}&limit=20",
+            "queue_json": "/radar/queue.json?limit=20",
+        },
+    }
+
+
+def team_literature_radar_activity_digest(
+    database: TeamResearchDatabase,
+    *,
+    since: datetime | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    events = database.list_audit_events(
+        limit=limit,
+        object_type_prefix="literature_radar_paper",
+        since=since,
+    )
+    return [team_literature_radar_activity_record(event) for event in events]
+
+
+def team_literature_radar_activity_record(event: dict[str, Any]) -> dict[str, Any]:
+    after = event.get("after") if isinstance(event.get("after"), dict) else {}
+    before = event.get("before") if isinstance(event.get("before"), dict) else {}
+    action = str(event.get("action") or "")
+    status = str(after.get("review_status") or "").strip()
+    imported_item_id = str(after.get("imported_item_id") or "").strip()
+    return {
+        "action": action,
+        "action_label": team_literature_radar_activity_label(action, status),
+        "status": status,
+        "actor": str(event.get("actor") or "team-member"),
+        "created_at": str(event.get("created_at") or ""),
+        "dedupe_key": str(event.get("object_id") or after.get("dedupe_key") or before.get("dedupe_key") or ""),
+        "title": team_literature_radar_activity_title(after)
+        or team_literature_radar_activity_title(before)
+        or str(event.get("object_id") or "Radar item"),
+        "imported_item_id": imported_item_id,
+        "reason": str(after.get("review_reason") or "").strip(),
+    }
+
+
+def team_literature_radar_activity_title(record: dict[str, Any]) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    return str(record.get("title") or paper.get("title") or "").strip()
+
+
+def team_literature_radar_activity_label(action: str, status: str) -> str:
+    if action == "literature_radar_paper_reviewed":
+        selected_status = status.replace("_", " ") if status else "reviewed"
+        return f"Marked {selected_status}"
+    if action == "literature_radar_paper_imported":
+        return "Added to library"
+    return action.replace("_", " ").title()
+
+
+def append_team_literature_radar_activity_to_brief(brief: str, activity: list[dict[str, Any]]) -> str:
+    if not activity:
+        return brief
+    lines = [brief.rstrip(), "", "## Team Activity", ""]
+    for event in activity:
+        detail = f"- {event['action_label']}: {event['title']}"
+        if event.get("imported_item_id"):
+            detail += f" -> {event['imported_item_id']}"
+        detail += f" ({event['actor']} at {event['created_at']})"
+        if event.get("reason"):
+            detail += f" - {event['reason']}"
+        lines.append(detail)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def team_literature_radar_run_summary(

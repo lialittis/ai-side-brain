@@ -43,6 +43,7 @@ http://127.0.0.1:8790/radar/brief?days=7
 http://127.0.0.1:8790/radar/brief.json?days=7
 http://127.0.0.1:8790/radar/papers
 http://127.0.0.1:8790/radar/queue.json
+http://127.0.0.1:8790/radar/activity.json
 http://127.0.0.1:8790/radar/settings.json
 ```
 
@@ -105,6 +106,10 @@ For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
 Its actions return to that queue, while `/radar/queue.json` keeps the equivalent
 machine-readable contract for scripts and dashboards.
+Watch, dismiss, clear, and add-to-library actions are also recorded in the
+Team `audit_events` table as Literature Radar activity. The `/radar` page shows
+a compact Recent Activity feed so team members can see the latest triage and
+import decisions without opening the database.
 If the latest scheduled run produced no stored papers but did fail or complete,
 the same panel still shows latest-run health, counts, and source-error status so
 an empty queue is not confused with a healthy run that simply found nothing.
@@ -119,7 +124,10 @@ Stored daily or weekly briefs are also available as local JSON at
 the HTML brief and CLI `radar-brief --json`; it does not collect sources,
 download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
 health and freshness, limits, run count, review counts, the active queue preview
-with PDF access summary, and links back to the Team Radar pages.
+with PDF access summary, recent team Radar activity from the audit log, and
+links back to the Team Radar pages. The Markdown brief also includes a Team
+Activity section when watch, dismiss, clear, or import decisions occurred inside
+the requested window.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
 IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
@@ -316,6 +324,8 @@ python team/research_cli.py radar-queue --freshness-max-age-hours 24
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
 python team/research_cli.py radar-review DEDUPE_KEY --status watch --actor alice
+python team/research_cli.py radar-activity --days 7
+python team/research_cli.py radar-activity --days 7 --json
 python team/research_cli.py radar-report              # latest report
 python team/research_cli.py radar-report RUN_ID --output team/logs/literature-radar-selected.md
 python team/research_cli.py radar-brief --days 7 --output team/logs/literature-radar-weekly.md
@@ -379,13 +389,18 @@ source coverage status, `source_policy` authoritative/trend-signal counts, a
 `health_action` next step, persisted signal lines, top-level
 `attention_summary` records for queued papers, active-queue PDF access summary,
 paper records, and links back to the HTML review surfaces.
+`/radar/activity.json?days=7&limit=50` and
+`python team/research_cli.py radar-activity --json` return the same recent
+watch, dismiss, clear, and add-to-library audit digest with
+`kind=team_literature_radar_activity`, actor, action label, paper title, dedupe
+key, optional review reason, and imported item ID.
 `/radar/brief.json?days=7&limit=20` and
 `python team/research_cli.py radar-brief --json` return the same stored brief
 shape with `kind=team_literature_radar_brief`, the selected limits, run count,
 latest-run health/source stats, structured `source_policy` and `source_coverage`
 for every run in the brief window, review counts, active queue preview, the
-Markdown brief, and links back to the HTML brief, Radar page, JSON endpoint,
-and queue JSON.
+Markdown brief, recent team Radar activity, and links back to the HTML brief,
+Radar page, JSON endpoint, and queue JSON.
 If one source fails during a multi-source run, the run is stored as `partial`;
 successful source results are still ranked and reported. Per-source collection
 stats show which sources contributed candidates, source coverage summarizes
@@ -459,10 +474,15 @@ snapshot uses the same queue payload as `radar-queue --json`, including
 `latest_run` health, `access_summary`, plus per-paper `signal_lines`. Stable
 `literature-radar-settings-latest.json` and `literature-radar-queue-latest.*`
 files are refreshed when latest-copy output is enabled. Use `RADAR_QUEUE_LIMIT`
-to change how many active queue papers are included. The
-brief script writes a stored-run roll-up without collecting again and refreshes
-`literature-radar-brief-latest.*` when latest-copy output is enabled. The cycle
-script runs both in order; if collection fails, the brief step does not run.
+to change how many active queue papers are included.
+The run script and brief script also write text and JSON
+`literature-radar-activity-*` snapshots unless `RADAR_WRITE_ACTIVITY=0`; those
+snapshots use the same activity payload as `radar-activity --json` and show
+recent watch, dismiss, clear, and add-to-library audit events. The brief script
+writes a stored-run roll-up without collecting again and refreshes
+`literature-radar-brief-latest.*` plus `literature-radar-activity-latest.*`
+when latest-copy output is enabled. The cycle script runs both in order; if
+collection fails, the brief step does not run.
 
 PDF caching is disabled by default. To cache only legal open-access PDFs for
 ranked recommendations, use:
@@ -501,10 +521,15 @@ It reads `.env` first and supports these optional variables:
   from `run_literature_radar.sh`.
 - `RADAR_WRITE_QUEUE=0`: skip writing queue snapshots from
   `run_literature_radar.sh`.
+- `RADAR_WRITE_ACTIVITY=0`: skip writing activity snapshots from
+  `run_literature_radar.sh` and `build_literature_radar_brief.sh`.
 - `RADAR_WRITE_LATEST=0`: skip refreshing stable `*-latest.*` copies while
   keeping timestamped report, queue, and brief history.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
+- `RADAR_ACTIVITY_DAYS`: activity history window; default `7`.
+- `RADAR_ACTIVITY_LIMIT`: maximum activity events in scheduled snapshots;
+  default `50`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
   `RADAR_SUMMARY_LIMIT`.

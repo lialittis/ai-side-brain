@@ -28,6 +28,7 @@ from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
     apply_team_radar_source_preset,
+    build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     run_team_literature_radar,
@@ -267,6 +268,15 @@ def build_parser() -> argparse.ArgumentParser:
     radar_review.add_argument("--actor", default="team-member")
     radar_review.add_argument("--reason", default="")
     radar_review.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_activity = subparsers.add_parser(
+        "radar-activity",
+        help="show recent Literature Radar review and import activity",
+    )
+    add_db_args(radar_activity)
+    radar_activity.add_argument("--days", type=int, default=7, help="activity window in days")
+    radar_activity.add_argument("--limit", type=int, default=50, help="maximum activity events")
+    radar_activity.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_report = subparsers.add_parser("radar-report", help="show a stored Literature Radar report")
     add_db_args(radar_report)
@@ -684,6 +694,24 @@ def print_radar_review(record: dict[str, Any]) -> None:
     print(f"{record.get('dedupe_key')} | review={status} | reviewed_by={actor}{suffix} | {record.get('title')}")
 
 
+def print_radar_activity(result: dict[str, Any]) -> None:
+    print("Team Literature Radar Activity")
+    print(f"Window: last {int(result.get('days') or 0)} day(s)")
+    print(f"Activity: {int(result.get('activity_count') or 0)} event(s)")
+    for event in result.get("activity") or []:
+        title = event.get("title") or event.get("dedupe_key") or "Radar item"
+        line = (
+            f"- {event.get('action_label') or event.get('action')}: {title}"
+            f" | actor={event.get('actor') or 'team-member'}"
+            f" | at={event.get('created_at') or 'unknown'}"
+        )
+        if event.get("imported_item_id"):
+            line += f" | item={event['imported_item_id']}"
+        if event.get("reason"):
+            line += f" | reason={event['reason']}"
+        print(line)
+
+
 def print_radar_report(run: dict[str, Any], recommendations: list[dict[str, Any]]) -> None:
     print(run.get("report") or "")
     if recommendations and not run.get("report"):
@@ -1009,6 +1037,18 @@ def main(argv: list[str] | None = None) -> int:
             print_json(record)
         else:
             print_radar_review(record)
+        return 0
+
+    if args.command == "radar-activity":
+        result = build_team_literature_radar_activity_payload(
+            database,
+            days=args.days,
+            limit=args.limit,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_activity(result)
         return 0
 
     if args.command == "radar-report":

@@ -22,11 +22,15 @@ REPORT_PATH="$OUTPUT_DIR/literature-radar-$STAMP.md"
 JSON_PATH="$OUTPUT_DIR/literature-radar-$STAMP.json"
 QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-$STAMP.json"
+ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.txt"
+ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-$STAMP.json"
 SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-$STAMP.json"
 LATEST_REPORT_PATH="$OUTPUT_DIR/literature-radar-latest.md"
 LATEST_JSON_PATH="$OUTPUT_DIR/literature-radar-latest.json"
 LATEST_QUEUE_PATH="$OUTPUT_DIR/literature-radar-queue-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-queue-latest.json"
+LATEST_ACTIVITY_PATH="$OUTPUT_DIR/literature-radar-activity-latest.txt"
+LATEST_ACTIVITY_JSON_PATH="$OUTPUT_DIR/literature-radar-activity-latest.json"
 LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-settings-latest.json"
 mkdir -p "$OUTPUT_DIR"
 
@@ -210,6 +214,32 @@ if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   fi
 fi
 
+if [[ "${RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
+  ACTIVITY_ARGS=(
+    "team/research_cli.py"
+    "radar-activity"
+    "--days" "${RADAR_ACTIVITY_DAYS:-7}"
+    "--limit" "${RADAR_ACTIVITY_LIMIT:-50}"
+    "--json"
+  )
+  ACTIVITY_TEXT_ARGS=(
+    "team/research_cli.py"
+    "radar-activity"
+    "--days" "${RADAR_ACTIVITY_DAYS:-7}"
+    "--limit" "${RADAR_ACTIVITY_LIMIT:-50}"
+  )
+  if [[ -n "${RADAR_DB_PATH:-}" ]]; then
+    ACTIVITY_ARGS+=("--db-path" "$RADAR_DB_PATH")
+    ACTIVITY_TEXT_ARGS+=("--db-path" "$RADAR_DB_PATH")
+  fi
+  "$PYTHON_BIN" "${ACTIVITY_ARGS[@]}" > "$ACTIVITY_JSON_PATH"
+  "$PYTHON_BIN" "${ACTIVITY_TEXT_ARGS[@]}" > "$ACTIVITY_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    cp "$ACTIVITY_JSON_PATH" "$LATEST_ACTIVITY_JSON_PATH"
+    cp "$ACTIVITY_PATH" "$LATEST_ACTIVITY_PATH"
+  fi
+fi
+
 echo "Literature Radar report: $REPORT_PATH"
 echo "Literature Radar JSON: $JSON_PATH"
 if [[ "${RADAR_WRITE_SETTINGS:-1}" == "1" ]]; then
@@ -228,5 +258,13 @@ if [[ "${RADAR_WRITE_QUEUE:-1}" == "1" ]]; then
   if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
     echo "Literature Radar latest queue: $LATEST_QUEUE_PATH"
     echo "Literature Radar latest queue JSON: $LATEST_QUEUE_JSON_PATH"
+  fi
+fi
+if [[ "${RADAR_WRITE_ACTIVITY:-1}" == "1" ]]; then
+  echo "Literature Radar activity: $ACTIVITY_PATH"
+  echo "Literature Radar activity JSON: $ACTIVITY_JSON_PATH"
+  if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
+    echo "Literature Radar latest activity: $LATEST_ACTIVITY_PATH"
+    echo "Literature Radar latest activity JSON: $LATEST_ACTIVITY_JSON_PATH"
   fi
 fi

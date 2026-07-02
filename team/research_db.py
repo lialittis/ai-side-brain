@@ -1300,10 +1300,12 @@ class TeamResearchDatabase:
         dedupe_key: str,
         import_result: dict[str, Any],
         *,
+        actor: str = "team-member",
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
-        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
         item_id = str(import_result.get("item_id") or "").strip()
         if not item_id:
             raise ValueError("Radar import result must include an item_id.")
@@ -1319,6 +1321,7 @@ class TeamResearchDatabase:
             if row is None:
                 raise KeyError(f"Unknown literature radar recommendation: {dedupe_key}")
             recommendation = loads(row["record_json"])
+            before_recommendation = dict(recommendation)
             recommendation.update(
                 {
                     "imported_item_id": item_id,
@@ -1334,6 +1337,7 @@ class TeamResearchDatabase:
             ).fetchone()
             if paper_row:
                 paper_record = loads(paper_row["record_json"])
+                before_paper = dict(paper_record)
                 paper_record["imported_item_id"] = item_id
                 connection.execute(
                     """
@@ -1342,6 +1346,18 @@ class TeamResearchDatabase:
                     WHERE dedupe_key = ?
                     """,
                     (item_id, dumps(paper_record), dedupe_key),
+                )
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=actor,
+                        action="literature_radar_paper_imported",
+                        object_type="literature_radar_paper",
+                        object_id=dedupe_key,
+                        before=before_paper,
+                        after=paper_record,
+                        now=selected_now,
+                    ),
                 )
             else:
                 paper = (recommendation.get("recommendation") or {}).get("paper") or {}
@@ -1353,6 +1369,18 @@ class TeamResearchDatabase:
                         imported_item_id=item_id,
                         count_seen=False,
                     )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="literature_radar_recommendation_imported",
+                    object_type="literature_radar_recommendation",
+                    object_id=recommendation["id"],
+                    before=before_recommendation,
+                    after=recommendation,
+                    now=selected_now,
+                ),
+            )
         return recommendation
 
     def mark_literature_radar_paper_imported(
@@ -1360,10 +1388,12 @@ class TeamResearchDatabase:
         dedupe_key: str,
         import_result: dict[str, Any],
         *,
+        actor: str = "team-member",
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
-        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
         item_id = str(import_result.get("item_id") or "").strip()
         if not item_id:
             raise ValueError("Radar import result must include an item_id.")
@@ -1375,6 +1405,7 @@ class TeamResearchDatabase:
             if paper_row is None:
                 raise KeyError(f"Unknown literature radar paper: {dedupe_key}")
             paper_record = loads(paper_row["record_json"])
+            before_paper = dict(paper_record)
             paper_record["imported_item_id"] = item_id
             connection.execute(
                 """
@@ -1394,6 +1425,7 @@ class TeamResearchDatabase:
             ).fetchall()
             for row in rows:
                 recommendation = loads(row["record_json"])
+                before_recommendation = dict(recommendation)
                 recommendation.update(
                     {
                         "imported_item_id": item_id,
@@ -1402,6 +1434,30 @@ class TeamResearchDatabase:
                     }
                 )
                 self._upsert_literature_radar_recommendation(connection, recommendation)
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=actor,
+                        action="literature_radar_recommendation_imported",
+                        object_type="literature_radar_recommendation",
+                        object_id=recommendation["id"],
+                        before=before_recommendation,
+                        after=recommendation,
+                        now=selected_now,
+                    ),
+                )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="literature_radar_paper_imported",
+                    object_type="literature_radar_paper",
+                    object_id=dedupe_key,
+                    before=before_paper,
+                    after=paper_record,
+                    now=selected_now,
+                ),
+            )
         return paper_record
 
     def mark_literature_radar_paper_review(
@@ -1415,7 +1471,8 @@ class TeamResearchDatabase:
     ) -> dict[str, Any]:
         self.initialize()
         selected_status = normalize_literature_radar_review_status(status)
-        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
         with self.connect() as connection:
             paper_row = connection.execute(
                 "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
@@ -1424,6 +1481,7 @@ class TeamResearchDatabase:
             if paper_row is None:
                 raise KeyError(f"Unknown literature radar paper: {dedupe_key}")
             paper_record = loads(paper_row["record_json"])
+            before_paper = dict(paper_record)
             apply_literature_radar_review(
                 paper_record,
                 status=selected_status,
@@ -1450,10 +1508,85 @@ class TeamResearchDatabase:
             ).fetchall()
             for row in rows:
                 recommendation = loads(row["record_json"])
+                before_recommendation = dict(recommendation)
                 recommendation["review"] = review
                 recommendation["updated_at"] = timestamp
                 self._upsert_literature_radar_recommendation(connection, recommendation)
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=actor,
+                        action="literature_radar_recommendation_reviewed",
+                        object_type="literature_radar_recommendation",
+                        object_id=recommendation["id"],
+                        before=before_recommendation,
+                        after=recommendation,
+                        now=selected_now,
+                    ),
+                )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="literature_radar_paper_reviewed",
+                    object_type="literature_radar_paper",
+                    object_id=dedupe_key,
+                    before=before_paper,
+                    after=paper_record,
+                    now=selected_now,
+                ),
+            )
         return paper_record
+
+    def list_audit_events(
+        self,
+        *,
+        limit: int = 20,
+        object_type_prefix: str | None = None,
+        since: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        selected_limit = max(1, min(int(limit or 20), 200))
+        since_timestamp = iso_timestamp(since) if since else None
+        with self.connect() as connection:
+            if object_type_prefix:
+                query = """
+                    SELECT record_json
+                    FROM audit_events
+                    WHERE object_type LIKE ?
+                """
+                params: list[Any] = [f"{object_type_prefix}%"]
+                if since_timestamp:
+                    query += " AND created_at >= ?"
+                    params.append(since_timestamp)
+                query += """
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """
+                params.append(selected_limit)
+                rows = connection.execute(
+                    query,
+                    tuple(params),
+                ).fetchall()
+            else:
+                query = """
+                    SELECT record_json
+                    FROM audit_events
+                """
+                params = []
+                if since_timestamp:
+                    query += " WHERE created_at >= ?"
+                    params.append(since_timestamp)
+                query += """
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """
+                params.append(selected_limit)
+                rows = connection.execute(
+                    query,
+                    tuple(params),
+                ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
 
     def get_literature_radar_paper(self, dedupe_key: str) -> dict[str, Any] | None:
         self.initialize()
@@ -1894,9 +2027,10 @@ class TeamResearchDatabase:
                 if isinstance(paper.get("pdf_access"), dict)
                 else assess_pdf_access(paper, now=access_time)
             ),
+            "review_status": existing.get("review_status") or "unreviewed",
             "paper": paper,
         }
-        for key in ("review_status", "reviewed_by", "reviewed_at", "review_reason"):
+        for key in ("reviewed_by", "reviewed_at", "review_reason"):
             if existing.get(key):
                 record[key] = existing[key]
         if recommendation:

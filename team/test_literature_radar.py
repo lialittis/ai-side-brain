@@ -18,6 +18,7 @@ from shared.literature_radar import (
 from team import research_cli
 from team.literature_radar import (
     apply_team_radar_source_preset,
+    build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     import_radar_recommendation,
     run_team_literature_radar,
@@ -1429,6 +1430,44 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             stored_recommendations = database.list_literature_radar_recommendations(result["run_id"])
             self.assertEqual(stored_recommendations[0]["review"]["status"], "watch")
             self.assertEqual(stored_recommendations[0]["review"]["reviewed_by"], "alice")
+            activity_brief = build_team_literature_radar_brief_payload(
+                database,
+                days=7,
+                now=datetime(2026, 7, 2, tzinfo=timezone.utc),
+            )
+            self.assertEqual(activity_brief["activity"][0]["action"], "literature_radar_paper_reviewed")
+            self.assertEqual(activity_brief["activity"][0]["action_label"], "Marked watch")
+            self.assertEqual(activity_brief["activity"][0]["actor"], "alice")
+            self.assertEqual(activity_brief["activity"][0]["title"], "Memory Safety for Agentic Security")
+            self.assertEqual(activity_brief["activity"][0]["reason"], "team priority")
+            self.assertIn("## Team Activity", activity_brief["brief"])
+            self.assertIn("Marked watch: Memory Safety for Agentic Security", activity_brief["brief"])
+            self.assertIn("team priority", activity_brief["brief"])
+            activity_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_stdout):
+                activity_code = research_cli.main(
+                    [
+                        "radar-activity",
+                        "--db-path",
+                        str(db_path),
+                        "--days",
+                        "7",
+                        "--limit",
+                        "5",
+                        "--json",
+                    ]
+                )
+            self.assertEqual(activity_code, 0)
+            activity = json.loads(activity_stdout.getvalue())
+            self.assertEqual(activity["kind"], "team_literature_radar_activity")
+            self.assertEqual(activity["activity_count"], 1)
+            self.assertEqual(activity["activity"][0]["action_label"], "Marked watch")
+            activity_text_stdout = io.StringIO()
+            with contextlib.redirect_stdout(activity_text_stdout):
+                activity_text_code = research_cli.main(["radar-activity", "--db-path", str(db_path)])
+            self.assertEqual(activity_text_code, 0)
+            self.assertIn("Team Literature Radar Activity", activity_text_stdout.getvalue())
+            self.assertIn("Marked watch: Memory Safety for Agentic Security", activity_text_stdout.getvalue())
             self.assertEqual(report_code, 0)
             report = json.loads(report_stdout.getvalue())
             self.assertEqual(report["run"]["id"], result["run_id"])

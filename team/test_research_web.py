@@ -238,6 +238,13 @@ class TeamResearchWebTest(unittest.TestCase):
                     brief_content_type = response.headers.get("Content-Type")
                     brief_status = response.status
                 with urlopen(
+                    f"http://127.0.0.1:{port}/radar/activity.json?days=7&limit=5",
+                    timeout=5,
+                ) as response:
+                    activity_payload = json.loads(response.read().decode("utf-8"))
+                    activity_content_type = response.headers.get("Content-Type")
+                    activity_status = response.status
+                with urlopen(
                     f"http://127.0.0.1:{port}/radar/settings.json",
                     timeout=5,
                 ) as response:
@@ -295,6 +302,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief_payload["queue"]["papers"][0]["title"], "Route Verified Radar Queue Paper")
+            self.assertEqual(brief_payload["activity"], [])
             self.assertEqual(brief_payload["latest_run"]["id"], run["id"])
             self.assertEqual(brief_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(brief_payload["source_coverage"]["run_count"], 1)
@@ -305,6 +313,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(settings_content_type, "application/json")
             self.assertTrue(settings_payload["success"])
             self.assertEqual(settings_payload["links"]["html"], "/radar")
+            self.assertEqual(settings_payload["links"]["activity_json"], "/radar/activity.json?days=7&limit=50")
             self.assertEqual(settings_payload["supported_source_ids"], radar_supported_source_ids())
             self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
             self.assertEqual(settings_payload["trend_signal_options"][0]["collector_status"], "not_implemented")
@@ -316,6 +325,14 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Route Verified Radar Queue Paper", brief_payload["brief"])
             self.assertEqual(brief_payload["links"]["radar"], "/radar")
             self.assertEqual(brief_payload["links"]["json"], "/radar/brief.json?days=7&limit=1&run_limit=5")
+            self.assertEqual(activity_status, 200)
+            self.assertEqual(activity_content_type, "application/json")
+            self.assertTrue(activity_payload["success"])
+            self.assertEqual(activity_payload["kind"], "team_literature_radar_activity")
+            self.assertEqual(activity_payload["days"], 7)
+            self.assertEqual(activity_payload["limit"], 5)
+            self.assertEqual(activity_payload["activity"], [])
+            self.assertEqual(activity_payload["links"]["radar"], "/radar")
 
     def test_literature_radar_page_lists_stored_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -526,6 +543,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("authoritative: 1", brief_html)
             self.assertIn("trend: 0", brief_html)
             self.assertIn("Review queue:", brief_html)
+            self.assertIn("activity: 0", brief_html)
             self.assertIn("PDF access:", brief_html)
             self.assertIn("Team Literature Radar Brief", brief_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", brief_html)
@@ -974,9 +992,18 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(stored_recommendation["imported_item_id"], item_id)
             self.assertEqual(stored_recommendation["import_result"]["status"], "imported")
             self.assertEqual(database.get_literature_radar_paper(paper["dedupe_key"])["imported_item_id"], item_id)
+            paper_events = database.list_audit_events(object_type_prefix="literature_radar_paper")
+            self.assertEqual(paper_events[0]["action"], "literature_radar_paper_imported")
+            self.assertEqual(paper_events[0]["actor"], "alice")
+            self.assertEqual(paper_events[0]["object_id"], paper["dedupe_key"])
+            recommendation_events = database.list_audit_events(object_type_prefix="literature_radar_recommendation")
+            self.assertEqual(recommendation_events[0]["action"], "literature_radar_recommendation_imported")
             html = render_literature_radar_page(database, run_id=run["id"])
             self.assertIn("In Library", html)
             self.assertNotIn("Add to Library", html)
+            self.assertIn("Recent Activity", html)
+            self.assertIn("Added to library:", html)
+            self.assertIn("System Security for Memory Safe Agents", html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar insight", latest_html)
             self.assertIn("This paper links memory safety to agentic systems.", latest_html)
@@ -1038,9 +1065,19 @@ class TeamResearchWebTest(unittest.TestCase):
             stored_recommendation = database.list_literature_radar_recommendations(run["id"])[0]
             self.assertEqual(stored_recommendation["review"]["status"], "watch")
             self.assertEqual(stored_recommendation["review"]["reason"], "Track this for allocator hardening.")
+            paper_events = database.list_audit_events(object_type_prefix="literature_radar_paper")
+            self.assertEqual(paper_events[0]["action"], "literature_radar_paper_reviewed")
+            self.assertEqual(paper_events[0]["actor"], "alice")
+            self.assertEqual(paper_events[0]["before"]["review_status"], "unreviewed")
+            self.assertEqual(paper_events[0]["after"]["review_status"], "watch")
+            recommendation_events = database.list_audit_events(object_type_prefix="literature_radar_recommendation")
+            self.assertEqual(recommendation_events[0]["action"], "literature_radar_recommendation_reviewed")
             reviewed_html = render_literature_radar_page(database, run_id=run["id"])
             self.assertIn(">Watch</span>", reviewed_html)
             self.assertIn(">Clear</button>", reviewed_html)
+            self.assertIn("Recent Activity", reviewed_html)
+            self.assertIn("Marked watch:", reviewed_html)
+            self.assertIn("Watchable Memory Safety Radar Paper", reviewed_html)
             history_html = render_literature_radar_papers_page(database)
             self.assertIn(">Watch</span>", history_html)
             self.assertIn("<strong>Review note:</strong> Track this for allocator hardening.", history_html)
