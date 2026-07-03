@@ -310,7 +310,6 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
             f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
-            f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar Ops</a>',
         ]
     )
     return f"""<!doctype html>
@@ -894,6 +893,59 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .today-summary {{
       color: #344054;
       max-width: 820px;
+    }}
+    .today-feed {{
+      display: grid;
+      gap: 12px;
+    }}
+    .today-paper-list {{
+      display: grid;
+      gap: 10px;
+    }}
+    .today-paper-card {{
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      min-width: 0;
+    }}
+    .today-paper-head {{
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }}
+    .today-paper-title {{
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.3;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }}
+    .today-paper-summary {{
+      margin: 0;
+      color: #344054;
+      max-width: 920px;
+    }}
+    .today-paper-reasons {{
+      display: grid;
+      gap: 6px;
+      color: #344054;
+    }}
+    .today-paper-reasons p {{
+      margin: 0;
+      overflow-wrap: anywhere;
+    }}
+    .today-paper-actions {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .today-paper-actions .inline-form {{
+      margin: 0;
     }}
     .member-filter-strip {{
       display: flex;
@@ -4531,15 +4583,13 @@ def render_today_page(
           <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records)))}</div>
         </div>
         <div class="radar-overview-actions">
-          <a class="button primary" href="/radar/queue?limit=20">See More New Items</a>
-          <a class="button" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
+          <a class="button primary" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
           <a class="button" href="/library">Library</a>
         </div>
       </div>
       {render_today_update_note(latest_run)}
-      {render_today_kpis(payload, counts, records)}
     </section>
-    {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="latest", queue_window=queue_window)}
+    {render_today_feed(records, review_filter=selected_review, queue_window=queue_window)}
     {render_empty_today(records, counts)}
     """
     return page("Today", body, active="today")
@@ -4560,19 +4610,11 @@ def radar_today_status_line(counts: dict[str, Any], visible_count: int) -> str:
 
 def render_today_update_note(latest_run: dict[str, Any]) -> str:
     if not latest_run:
-        return '<div class="muted">No Radar update has been stored yet.</div>'
+        return ""
     updated_at = display_radar_datetime(str(latest_run.get("completed_at") or latest_run.get("started_at") or ""))
-    status = str(latest_run.get("status") or "unknown")
-    freshness = radar_run_freshness(latest_run)
-    parts = []
-    if updated_at:
-        parts.append(f"Updated {updated_at}")
-    if freshness.get("status"):
-        parts.append(f"{str(freshness.get('status')).replace('_', ' ')}")
-    message = ". ".join(parts) or "Latest Radar update available"
-    if status in {"failed", "partial"}:
-        message += "; some sources may be incomplete."
-    return f'<div class="muted">{html_escape(message)}</div>'
+    if not updated_at:
+        return ""
+    return f'<div class="muted">Updated {html_escape(updated_at)}</div>'
 
 
 def render_today_kpis(payload: dict[str, Any], counts: dict[str, Any], records: list[dict[str, Any]]) -> str:
@@ -4595,6 +4637,206 @@ def render_empty_today(records: list[dict[str, Any]], counts: dict[str, Any]) ->
     if total:
         return '<section class="panel"><div class="empty">No new items match today\'s priority filters. Try the full Radar feed or the digest.</div></section>'
     return '<section class="panel"><div class="empty">No Radar items yet. Submit a paper or wait for the next collector run.</div></section>'
+
+
+def render_today_feed(
+    records: list[dict[str, Any]],
+    *,
+    review_filter: str,
+    queue_window: dict[str, int | str] | None = None,
+) -> str:
+    if not records:
+        return ""
+    items = "".join(
+        render_today_paper_card(record, review_filter=review_filter, queue_window=queue_window)
+        for record in records
+    )
+    return f"""
+    <section class="today-feed" aria-label="Papers worth reading today">
+      <div class="today-paper-list">{items}</div>
+    </section>
+    """
+
+
+def render_today_paper_card(
+    record: dict[str, Any],
+    *,
+    review_filter: str,
+    queue_window: dict[str, int | str] | None = None,
+) -> str:
+    review = radar_review_from_record(record)
+    summary = today_research_summary(record)
+    reason_rows = render_today_reason_rows(record)
+    primary_link = render_primary_radar_link(record)
+    import_control = render_radar_paper_import_control(
+        record,
+        review_filter=review_filter,
+        return_to="latest",
+        queue_window=queue_window,
+    )
+    review_controls = render_radar_review_controls(
+        record.get("dedupe_key") or "",
+        return_to="latest",
+        review=review,
+        review_filter=review_filter,
+        queue_window=queue_window,
+    )
+    status = member_review_status_label(str(review.get("status") or "unreviewed"))
+    title = html_escape(record.get("title") or "Untitled radar paper")
+    return f"""
+    <article class="today-paper-card">
+      <div class="today-paper-head">
+        <div class="muted">{html_escape(status)}</div>
+        <h3 class="today-paper-title">{title}</h3>
+      </div>
+      {f'<p class="today-paper-summary">{html_escape(summary)}</p>' if summary else ''}
+      {reason_rows}
+      <div class="today-paper-actions">
+        {primary_link}
+        {import_control}
+        {review_controls}
+      </div>
+    </article>
+    """
+
+
+def today_research_summary(record: dict[str, Any]) -> str:
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+    candidates = [
+        summary.get("short_summary"),
+        attention.get("why_attention"),
+        reason.get("headline"),
+        paper.get("abstract"),
+        record.get("abstract"),
+    ]
+    for candidate in candidates:
+        text = clean_today_research_text(candidate)
+        if text and not today_text_looks_operational(text):
+            return truncate_member_text(text, limit=380)
+    for candidate in candidates:
+        text = clean_today_research_text(candidate)
+        if text:
+            return truncate_member_text(text, limit=380)
+    return ""
+
+
+def render_today_reason_rows(record: dict[str, Any]) -> str:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    connection = clean_today_research_text(
+        today_reason_point(record, "Why")
+        or attention.get("relationship_to_interests")
+    )
+    context = clean_today_research_text(
+        today_reason_point(record, "Existing work")
+        or attention.get("relationship_to_existing_work")
+    )
+    why_now = today_member_why_now(
+        today_reason_point(record, "Why now")
+        or attention.get("why_now")
+    )
+    rows: list[tuple[str, str]] = []
+    if connection:
+        rows.append(("Connects to", connection))
+    if context and not context.lower().startswith("no existing research context"):
+        rows.append(("Related work", context))
+    if why_now:
+        rows.append(("Why now", why_now))
+    if not rows:
+        return ""
+    return (
+        '<div class="today-paper-reasons">'
+        + "".join(
+            f"<p><strong>{html_escape(label)}:</strong> {html_escape(truncate_member_text(text, limit=260))}</p>"
+            for label, text in rows[:3]
+        )
+        + "</div>"
+    )
+
+
+def today_reason_point(record: dict[str, Any], label: str) -> str:
+    reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+    target = label.strip().lower()
+    for point in reason.get("points") or []:
+        if not isinstance(point, dict):
+            continue
+        point_label = normalize_inline_text(point.get("label") or "").lower()
+        if point_label == target:
+            return normalize_inline_text(point.get("text") or "")
+    return ""
+
+
+def today_member_why_now(value: Any) -> str:
+    text = clean_today_research_text(value)
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower.startswith("new this run"):
+        return "New in the latest Radar update."
+    if lower.startswith("seen before"):
+        return "Seen before, but still matches the current research focus."
+    if today_text_looks_operational(text):
+        return ""
+    return text
+
+
+def clean_today_research_text(value: Any) -> str:
+    text = normalize_inline_text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\s*Ranked with editable Team Interest weights\.?", "", text)
+    text = re.sub(r"\s+with weight \d+", "", text)
+    for marker in (
+        "; released=",
+        "; metadata/link only",
+        "; kind=",
+        "; reason=",
+        "; download=",
+        "; oa=",
+        "; license=",
+        "; accessed=",
+        "; source=",
+    ):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+    return text
+
+
+def today_text_looks_operational(text: str) -> bool:
+    lower = text.lower()
+    operational_markers = [
+        "matched content via",
+        "matched title, content via",
+        "ranked with editable",
+        "metadata_only",
+        "download_not_requested",
+        "not_legally_downloadable",
+        "source=",
+    ]
+    return any(marker in lower for marker in operational_markers)
+
+
+def truncate_member_text(text: str, *, limit: int) -> str:
+    cleaned = normalize_inline_text(text)
+    if len(cleaned) <= limit:
+        return cleaned
+    truncated = cleaned[: max(0, limit - 1)].rstrip()
+    if " " in truncated:
+        truncated = truncated.rsplit(" ", 1)[0].rstrip()
+    return f"{truncated}..."
+
+
+def render_primary_radar_link(record: dict[str, Any]) -> str:
+    links = radar_record_link_map(record)
+    for key in ("landing", "arxiv", "doi", "pdf", "oa_pdf", "arxiv_pdf"):
+        url = str(links.get(key) or "").strip()
+        if url:
+            return f'<a class="button primary" href="{html_escape(url)}" target="_blank" rel="noreferrer">Open paper</a>'
+    return ""
 
 
 def render_latest_papers_page(
