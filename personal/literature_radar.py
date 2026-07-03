@@ -17,17 +17,21 @@ from typing import Any, Callable
 
 from shared.literature_radar import (
     DEFAULT_ARXIV_CATEGORIES,
+    DEFAULT_OPENREVIEW_VENUE_PROFILES,
     add_local_recommendation_summaries,
     add_recommendation_context,
     add_recommendation_attention_summaries,
     add_recommendation_novelty,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_primary_source_coverage_to_report,
     append_radar_source_policy_to_report,
     append_radar_source_readiness_to_report,
     append_radar_oa_enrichment_to_report,
     append_radar_source_stats_to_report,
     append_radar_context_summary_to_report,
+    append_radar_daily_review_plan_to_report,
+    append_radar_daily_source_health_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_brief_recommendation_records,
@@ -65,17 +69,25 @@ from shared.literature_radar import (
     radar_history_source_provenance_summary,
     radar_history_oa_enrichment_summary,
     radar_history_pipeline_summary,
+    radar_history_primary_source_coverage_summary,
     radar_history_source_readiness_summary,
     radar_history_context_summary,
+    radar_daily_workflow_summary,
+    radar_daily_queue_guidance,
+    radar_daily_review_plan,
+    radar_daily_source_health,
     radar_context_summary,
+    radar_config_value,
     radar_pdf_access_summary,
     radar_pipeline_trace_summary,
+    radar_queue_evidence_summary,
     radar_source_provenance_summary,
     radar_triage_action_options,
     radar_triage_summary,
     radar_latest_signal_lines,
     paper_release_date,
     radar_oa_enrichment_summary,
+    radar_primary_source_coverage_summary,
     radar_review_counts,
     radar_run_freshness,
     radar_run_health_action,
@@ -92,6 +104,7 @@ from shared.literature_radar import (
     summarize_radar_recommendations_with_openrouter,
 )
 from shared.literature_radar.collectors import fetch_url
+from shared.literature_radar.ai import RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE
 from shared.research.core import iso_timestamp, stable_id
 
 
@@ -101,6 +114,7 @@ DEFAULT_PERSONAL_RADAR_SOURCES = (
     "semantic_scholar",
     "openalex",
     "crossref",
+    "openreview_venues",
     "usenix_security",
     "ndss",
 )
@@ -112,11 +126,13 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
 PERSONAL_RADAR_INDEX_NAME = "literature-radar-runs.json"
 PERSONAL_RADAR_PAPER_HISTORY_NAME = "literature-radar-papers.json"
 PERSONAL_RADAR_TOPIC_PROFILE_NAME = "literature-radar-topic-profile.json"
+PERSONAL_RADAR_QUEUE_REVIEWS_NAME = "literature-radar-queue-reviews.json"
 PERSONAL_RADAR_PDF_CACHE_DIR = Path("memory") / "06_Logs" / "literature-radar-pdfs"
 PERSONAL_RADAR_INBOX_DIR = Path("memory") / "00_Inbox"
 PERSONAL_RADAR_SOURCE_CONTACT_ENV = "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL"
 RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 PERSONAL_RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
+PERSONAL_RADAR_QUEUE_USEFULNESS_VALUES = {"useful", "partly_useful", "not_useful", "needs_review"}
 
 
 def run_personal_literature_radar(
@@ -129,6 +145,7 @@ def run_personal_literature_radar(
     summarize: bool = False,
     summary_provider: str = "local",
     summary_limit: int | None = None,
+    summary_min_score: int | None = None,
     summary_client: Any | None = None,
     semantic_scholar_api_key: str | None = None,
     seed_paper_ids: list[str] | None = None,
@@ -140,6 +157,7 @@ def run_personal_literature_radar(
     semantic_scholar_author_ids: list[str] | None = None,
     dblp_author_pids: list[str] | None = None,
     openalex_author_ids: list[str] | None = None,
+    arxiv_categories: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
@@ -162,6 +180,10 @@ def run_personal_literature_radar(
         root,
         topic_profile_path=topic_profile_path,
     )
+    selected_topic_profile_version = personal_radar_topic_profile_version(
+        selected_topic_profile,
+        topic_profile_path=topic_profile_path,
+    )
     preset = radar_source_preset(source_preset)
     selected_sources = list((preset or {}).get("sources") or sources or DEFAULT_PERSONAL_RADAR_SOURCES)
     selected_dblp_venue_profiles = dblp_venue_profiles
@@ -174,10 +196,63 @@ def run_personal_literature_radar(
             selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
         if selected_usenix_security_cycles is None:
             selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
-    if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
+    selected_seed_paper_ids = (
+        seed_paper_ids
+        or env_list("PERSONAL_RADAR_SEED_PAPER_IDS")
+        or env_list("RADAR_SEED_PAPER_IDS")
+    )
+    selected_negative_seed_paper_ids = (
+        negative_seed_paper_ids
+        or env_list("PERSONAL_RADAR_NEGATIVE_SEED_PAPER_IDS")
+        or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS")
+    )
+    selected_semantic_scholar_author_ids = (
+        semantic_scholar_author_ids
+        or env_list("PERSONAL_RADAR_AUTHOR_IDS")
+        or env_list("RADAR_AUTHOR_IDS")
+    )
+    selected_dblp_author_pids = (
+        dblp_author_pids
+        or env_list("PERSONAL_RADAR_DBLP_AUTHOR_PIDS")
+        or env_list("RADAR_DBLP_AUTHOR_PIDS")
+    )
+    selected_openalex_author_ids = (
+        openalex_author_ids
+        or env_list("PERSONAL_RADAR_OPENALEX_AUTHOR_IDS")
+        or env_list("RADAR_OPENALEX_AUTHOR_IDS")
+    )
+    selected_arxiv_categories = (
+        arxiv_categories
+        or env_list("PERSONAL_RADAR_ARXIV_CATEGORIES")
+        or env_list("RADAR_ARXIV_CATEGORIES")
+        or None
+    )
+    selected_openreview_invitations = (
+        openreview_invitations
+        or env_list("PERSONAL_RADAR_OPENREVIEW_INVITATIONS")
+        or env_list("PERSONAL_OPENREVIEW_INVITATIONS")
+        or env_list("OPENREVIEW_INVITATIONS")
+    )
+    if selected_dblp_venue_profiles is None:
+        selected_dblp_venue_profiles = env_list("PERSONAL_RADAR_DBLP_VENUES") or env_list("RADAR_DBLP_VENUES")
+    if selected_openreview_venue_profiles is None:
+        selected_openreview_venue_profiles = env_list("PERSONAL_RADAR_OPENREVIEW_VENUES") or env_list("RADAR_OPENREVIEW_VENUES")
+    if selected_seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
-    if openreview_invitations and "openreview" not in selected_sources:
+    if selected_semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
+        selected_sources.append("semantic_scholar_authors")
+    if selected_dblp_author_pids and "dblp_authors" not in selected_sources:
+        selected_sources.append("dblp_authors")
+    if selected_openalex_author_ids and "openalex_authors" not in selected_sources:
+        selected_sources.append("openalex_authors")
+    if selected_dblp_venue_profiles and not any(
+        source in selected_sources for source in {"dblp_venues", "openalex_venues"}
+    ):
+        selected_sources.append("dblp_venues")
+    if selected_openreview_invitations and "openreview" not in selected_sources:
         selected_sources.append("openreview")
+    if selected_openreview_venue_profiles and "openreview_venues" not in selected_sources:
+        selected_sources.append("openreview_venues")
     selected_terms = query_terms or personal_radar_query_terms(selected_topic_profile)
     collection_config = personal_radar_collection_config(
         selected_sources=selected_sources,
@@ -187,16 +262,18 @@ def run_personal_literature_radar(
         summarize=summarize,
         summary_provider=summary_provider,
         summary_limit=summary_limit,
+        summary_min_score=summary_min_score,
         semantic_scholar_api_key=semantic_scholar_api_key,
-        seed_paper_ids=seed_paper_ids,
-        negative_seed_paper_ids=negative_seed_paper_ids,
+        seed_paper_ids=selected_seed_paper_ids,
+        negative_seed_paper_ids=selected_negative_seed_paper_ids,
         openalex_mailto=openalex_mailto,
-        openreview_invitations=openreview_invitations,
+        openreview_invitations=selected_openreview_invitations,
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
-        semantic_scholar_author_ids=semantic_scholar_author_ids,
-        dblp_author_pids=dblp_author_pids,
-        openalex_author_ids=openalex_author_ids,
+        semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
+        dblp_author_pids=selected_dblp_author_pids,
+        openalex_author_ids=selected_openalex_author_ids,
+        arxiv_categories=selected_arxiv_categories,
         conference_year=conference_year,
         dblp_venue_profiles=selected_dblp_venue_profiles,
         openreview_venue_profiles=selected_openreview_venue_profiles,
@@ -218,15 +295,15 @@ def run_personal_literature_radar(
         query_terms=selected_terms,
         max_results=max_results,
         semantic_scholar_api_key=semantic_scholar_api_key,
-        seed_paper_ids=seed_paper_ids,
-        negative_seed_paper_ids=negative_seed_paper_ids,
+        seed_paper_ids=selected_seed_paper_ids,
+        negative_seed_paper_ids=selected_negative_seed_paper_ids,
         openalex_mailto=openalex_mailto,
-        openreview_invitations=openreview_invitations,
+        openreview_invitations=selected_openreview_invitations,
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
-        semantic_scholar_author_ids=semantic_scholar_author_ids,
-        dblp_author_pids=dblp_author_pids,
-        openalex_author_ids=openalex_author_ids,
+        semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
+        dblp_author_pids=selected_dblp_author_pids,
+        openalex_author_ids=selected_openalex_author_ids,
         conference_year=conference_year,
         dblp_venue_profiles=selected_dblp_venue_profiles,
         openreview_venue_profiles=selected_openreview_venue_profiles,
@@ -270,6 +347,7 @@ def run_personal_literature_radar(
             recommendations,
             provider=summary_provider,
             limit=summary_limit,
+            min_score=summary_min_score,
             client=summary_client,
             query_terms=selected_terms,
             now=selected_now,
@@ -288,6 +366,7 @@ def run_personal_literature_radar(
     report = append_radar_venue_coverage_to_report(report, venue_coverage)
     report = append_radar_context_summary_to_report(report, context_summary)
     report = append_radar_source_policy_to_report(report, selected_sources)
+    report = append_radar_primary_source_coverage_to_report(report, selected_sources, collection_config)
     report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
     report = append_radar_oa_enrichment_to_report(report, selected_sources, collection_config)
     report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
@@ -301,6 +380,7 @@ def run_personal_literature_radar(
         sources=selected_sources,
         query_terms=selected_terms,
         topic_profile=selected_topic_profile,
+        topic_profile_version=selected_topic_profile_version,
         collection_config=collection_config,
         collected_papers=collected,
         collected_count=len(collected),
@@ -340,6 +420,7 @@ def summarize_personal_recommendations(
     *,
     provider: str = "local",
     limit: int | None = None,
+    min_score: int | None = None,
     client: Any | None = None,
     query_terms: list[str] | None = None,
     now: datetime | None = None,
@@ -354,10 +435,14 @@ def summarize_personal_recommendations(
             for index, recommendation in enumerate(recommendations)
         ]
     if selected_provider == "openrouter":
+        selected_min_score = (
+            RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE if min_score is None else max(0, min(100, int(min_score)))
+        )
         return summarize_radar_recommendations_with_openrouter(
             recommendations,
             client=client,
             limit=limit,
+            min_score=selected_min_score,
             query_terms=query_terms or [],
             audience="personal researcher",
             processor="openrouter-personal-literature-radar-summary-v0.1",
@@ -405,6 +490,7 @@ def build_personal_literature_radar_queue_payload(
     freshness_max_age_hours: int = 36,
     triage_action: str = "",
     recent_days: int = 0,
+    configured_primary_source_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     selected_recent_days = max(0, int(recent_days or 0))
@@ -412,6 +498,7 @@ def build_personal_literature_radar_queue_payload(
     counts = radar_review_counts(records)
     runs = read_personal_radar_index(root)
     latest_run = runs[0] if runs else None
+    latest_run_id = str((latest_run or {}).get("id") or "").strip()
     queue = build_radar_review_queue(
         records,
         limit=selected_limit,
@@ -422,6 +509,35 @@ def build_personal_literature_radar_queue_payload(
     )
     queue_papers = queue.get("papers") or []
     triage_summary = radar_triage_summary(queue_papers)
+    access_summary = radar_pdf_access_summary(queue_papers)
+    latest_run_summary = personal_literature_radar_run_summary(
+        latest_run,
+        now=now,
+        freshness_max_age_hours=freshness_max_age_hours,
+    )
+    daily_source_health = radar_daily_source_health(
+        latest_run_summary,
+        configured_primary_source_coverage=configured_primary_source_coverage,
+    )
+    daily_guidance = radar_daily_queue_guidance(
+        queue_papers,
+        review_counts=queue.get("review_counts") or counts,
+        latest_run=latest_run_summary,
+        access_summary=access_summary,
+        triage_summary=triage_summary,
+        source_health=daily_source_health,
+    )
+    evidence_summary = radar_queue_evidence_summary(queue_papers)
+    latest_queue_review = latest_personal_literature_radar_queue_review(
+        root,
+        run_id=latest_run_id or None,
+    )
+    daily_workflow = personal_radar_daily_workflow(
+        latest_run=latest_run_summary,
+        queue_papers=queue_papers,
+        evidence_summary=evidence_summary,
+        latest_queue_review=latest_queue_review,
+    )
     return {
         "success": True,
         "kind": "personal_literature_radar_queue",
@@ -430,22 +546,60 @@ def build_personal_literature_radar_queue_payload(
         "recent_days": selected_recent_days,
         "review_counts": queue.get("review_counts") or counts,
         "filtered_counts": queue.get("filtered_counts") or {},
-        "access_summary": radar_pdf_access_summary(queue_papers),
+        "access_summary": access_summary,
         "provenance_summary": radar_source_provenance_summary(queue_papers),
+        "evidence_summary": evidence_summary,
         "triage_summary": triage_summary,
+        "daily_guidance": daily_guidance,
+        "daily_source_health": daily_source_health,
+        "daily_workflow": daily_workflow,
+        "daily_review_plan": radar_daily_review_plan(queue_papers, guidance=daily_guidance),
         "triage_action_options": radar_triage_action_options(queue.get("triage_action") or "", triage_summary),
         "limit": selected_limit,
-        "latest_run": personal_literature_radar_run_summary(
-            latest_run,
-            now=now,
-            freshness_max_age_hours=freshness_max_age_hours,
-        ),
+        "latest_run": latest_run_summary,
+        "latest_queue_review": latest_queue_review,
         "papers": queue_papers,
         "paths": {
             "run_index": str(personal_radar_index_path(root)),
             "paper_history": str(personal_radar_paper_history_path(root)),
+            "queue_reviews": str(personal_radar_queue_reviews_path(root)),
         },
     }
+
+
+def personal_radar_daily_workflow(
+    *,
+    latest_run: dict[str, Any] | None,
+    queue_papers: list[dict[str, Any]],
+    evidence_summary: dict[str, Any],
+    latest_queue_review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    remaining: list[str] = []
+    run = latest_run if isinstance(latest_run, dict) else {}
+    if not run.get("id"):
+        remaining.append("latest_run")
+    if not queue_papers:
+        remaining.append("review_queue")
+    if str(evidence_summary.get("status") or "") != "passed":
+        remaining.append("recommendation_evidence")
+    review = latest_queue_review if isinstance(latest_queue_review, dict) else {}
+    if str(review.get("usefulness") or "") not in {"useful", "partly_useful"}:
+        remaining.append("queue_usefulness_review")
+    return radar_daily_workflow_summary(
+        {"remaining_stage_ids": remaining},
+        run_command=os.environ.get(
+            "PERSONAL_RADAR_THIN_MVP_RUN_COMMAND",
+            "scripts/run_personal_literature_radar_cycle.sh",
+        ),
+        review_command=os.environ.get(
+            "PERSONAL_RADAR_THIN_MVP_REVIEW_COMMAND",
+            "python scripts/personal_literature_radar.py queue",
+        ),
+        queue_review_command=os.environ.get(
+            "PERSONAL_RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND",
+            "python scripts/personal_literature_radar.py review-queue --usefulness useful --reviewer <name>",
+        ),
+    )
 
 
 def build_personal_literature_radar_brief_payload(
@@ -457,6 +611,7 @@ def build_personal_literature_radar_brief_payload(
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
     queue_recent_days: int = 0,
+    configured_primary_source_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
@@ -488,13 +643,46 @@ def build_personal_literature_radar_brief_payload(
         recommendation_limit=selected_limit,
     )
     top_triage_summary = radar_triage_summary(top_recommendations)
+    latest_run_summary = personal_literature_radar_run_summary(
+        runs[0] if runs else None,
+        now=selected_now,
+        freshness_max_age_hours=freshness_max_age_hours,
+    )
+    latest_queue_review = latest_personal_literature_radar_queue_review(
+        root,
+        run_id=str((runs[0] if runs else {}).get("id") or "").strip() or None,
+    )
     activity = personal_literature_radar_activity_digest(
         root,
         since=selected_now - timedelta(days=selected_days),
         limit=20,
     )
     brief = append_personal_literature_radar_activity_to_brief(brief, activity)
+    brief = append_personal_literature_radar_queue_usefulness_to_brief(brief, latest_queue_review)
     triage_summary = radar_triage_summary(queue_papers)
+    access_summary = radar_pdf_access_summary(queue_papers)
+    daily_source_health = radar_daily_source_health(
+        latest_run_summary,
+        configured_primary_source_coverage=configured_primary_source_coverage,
+    )
+    daily_guidance = radar_daily_queue_guidance(
+        queue_papers,
+        review_counts=review_counts,
+        latest_run=latest_run_summary,
+        access_summary=access_summary,
+        triage_summary=triage_summary,
+        source_health=daily_source_health,
+    )
+    daily_review_plan = radar_daily_review_plan(queue_papers, guidance=daily_guidance)
+    evidence_summary = radar_queue_evidence_summary(queue_papers)
+    daily_workflow = personal_radar_daily_workflow(
+        latest_run=latest_run_summary,
+        queue_papers=queue_papers,
+        evidence_summary=evidence_summary,
+        latest_queue_review=latest_queue_review,
+    )
+    brief = append_radar_daily_source_health_to_report(brief, daily_source_health)
+    brief = append_radar_daily_review_plan_to_report(brief, daily_review_plan)
     return {
         "success": True,
         "kind": "personal_literature_radar_brief",
@@ -508,6 +696,11 @@ def build_personal_literature_radar_brief_payload(
             "triage_action_options": radar_triage_action_options("", top_triage_summary),
         },
         "source_coverage": radar_history_source_coverage_summary(
+            runs,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "primary_source_coverage": radar_history_primary_source_coverage_summary(
             runs,
             generated_at=selected_now,
             days=selected_days,
@@ -542,21 +735,25 @@ def build_personal_literature_radar_brief_payload(
             generated_at=selected_now,
             days=selected_days,
         ),
+        "daily_source_health": daily_source_health,
+        "daily_workflow": daily_workflow,
         "queue": {
             "review": queue.get("review") or "",
             "recent_days": selected_queue_recent_days,
             "filtered_counts": queue.get("filtered_counts") or {},
-            "access_summary": radar_pdf_access_summary(queue_papers),
+            "access_summary": access_summary,
             "provenance_summary": radar_source_provenance_summary(queue_papers),
             "triage_summary": triage_summary,
+            "daily_guidance": daily_guidance,
+            "daily_source_health": daily_source_health,
+            "daily_workflow": daily_workflow,
+            "daily_review_plan": daily_review_plan,
+            "latest_queue_review": latest_queue_review,
             "triage_action_options": radar_triage_action_options("", triage_summary),
             "papers": queue_papers,
         },
-        "latest_run": personal_literature_radar_run_summary(
-            runs[0] if runs else None,
-            now=selected_now,
-            freshness_max_age_hours=freshness_max_age_hours,
-        ),
+        "latest_run": latest_run_summary,
+        "latest_queue_review": latest_queue_review,
         "activity": activity,
         "top_recommendations": top_recommendations,
         "brief": brief,
@@ -604,6 +801,14 @@ def personal_literature_radar_activity_digest(
 ) -> list[dict[str, Any]]:
     selected_limit = max(1, min(int(limit), 200))
     events = []
+    for review in read_personal_literature_radar_queue_reviews(root):
+        event = personal_literature_radar_queue_review_activity_record(review)
+        if not event:
+            continue
+        event_time = parse_personal_radar_activity_time(event["created_at"])
+        if since is not None and (event_time is None or event_time < since):
+            continue
+        events.append(event)
     for record in read_personal_radar_paper_history(root).values():
         event = personal_literature_radar_activity_record(record)
         if not event:
@@ -613,6 +818,24 @@ def personal_literature_radar_activity_digest(
             continue
         events.append(event)
     return sorted(events, key=lambda event: event.get("created_at") or "", reverse=True)[:selected_limit]
+
+
+def personal_literature_radar_queue_review_activity_record(review: dict[str, Any]) -> dict[str, Any] | None:
+    created_at = str(review.get("created_at") or "").strip()
+    if not created_at:
+        return None
+    usefulness = normalize_personal_queue_usefulness(str(review.get("usefulness") or "needs_review"))
+    return {
+        "action": "personal_radar_queue_usefulness_reviewed",
+        "action_label": f"Reviewed queue as {usefulness.replace('_', ' ')}",
+        "status": usefulness,
+        "actor": str(review.get("reviewer") or "personal"),
+        "created_at": created_at,
+        "dedupe_key": "",
+        "run_id": str(review.get("run_id") or ""),
+        "title": f"Personal Radar queue {review.get('run_id') or ''}".strip(),
+        "reason": str(review.get("note") or "").strip(),
+    }
 
 
 def personal_literature_radar_activity_record(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -671,6 +894,27 @@ def append_personal_literature_radar_activity_to_brief(brief: str, activity: lis
     return "\n".join(lines).rstrip() + "\n"
 
 
+def append_personal_literature_radar_queue_usefulness_to_brief(
+    brief: str,
+    review: dict[str, Any] | None,
+) -> str:
+    if not review:
+        return brief
+    usefulness = normalize_personal_queue_usefulness(str(review.get("usefulness") or "needs_review"))
+    lines = [
+        brief.rstrip(),
+        "",
+        "## Queue Usefulness Review",
+        "",
+        f"- Latest queue review: {usefulness.replace('_', ' ')}",
+        f"- Reviewer: {review.get('reviewer') or review.get('actor') or 'personal'}",
+        f"- Reviewed at: {review.get('created_at') or 'unknown'}",
+    ]
+    if review.get("note"):
+        lines.append(f"- Note: {review['note']}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def personal_literature_radar_run_summary(
     run: dict[str, Any] | None,
     *,
@@ -704,6 +948,7 @@ def personal_literature_radar_run_summary(
         "pipeline_summary": radar_pipeline_trace_summary(pipeline_trace),
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "oa_enrichment": radar_oa_enrichment_summary(sources, collection_config),
+        "primary_source_coverage": radar_primary_source_coverage_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
             source_errors,
@@ -940,13 +1185,13 @@ def collect_personal_radar_candidates(
             sources,
             SEMANTIC_SCHOLAR_SEED_SOURCES,
             seed_paper_ids,
-            ["RADAR_SEED_PAPER_IDS"],
+            ["PERSONAL_RADAR_SEED_PAPER_IDS", "RADAR_SEED_PAPER_IDS"],
         ),
         semantic_scholar_author_ids=personal_resolved_source_list(
             sources,
             {"semantic_scholar_authors"},
             semantic_scholar_author_ids,
-            ["RADAR_AUTHOR_IDS"],
+            ["PERSONAL_RADAR_AUTHOR_IDS", "RADAR_AUTHOR_IDS"],
         ),
         dblp_author_pids=personal_resolved_source_list(
             sources,
@@ -964,11 +1209,9 @@ def collect_personal_radar_candidates(
             sources,
             {"openreview"},
             openreview_invitations,
-            ["OPENREVIEW_INVITATIONS"],
+            ["PERSONAL_RADAR_OPENREVIEW_INVITATIONS", "PERSONAL_OPENREVIEW_INVITATIONS", "OPENREVIEW_INVITATIONS"],
         ),
-        semantic_scholar_api_key_configured=bool(
-            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-        ),
+        semantic_scholar_api_key_configured=bool(personal_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(selected_openalex_mailto),
         crossref_mailto_configured=bool(selected_crossref_mailto),
         unpaywall_email_configured=bool(selected_unpaywall_email),
@@ -998,7 +1241,14 @@ def collect_personal_radar_candidates(
         )
 
     if "arxiv" in sources:
-        collect_source("arxiv", lambda: collect_arxiv(query_terms=query_terms, max_results=max_results))
+        collect_source(
+            "arxiv",
+            lambda: collect_arxiv(
+                query_terms=query_terms,
+                categories=list(readiness_config.get("arxiv_categories") or DEFAULT_ARXIV_CATEGORIES),
+                max_results=max_results,
+            ),
+        )
     if "crossref" in sources:
         collect_source(
             "crossref",
@@ -1029,7 +1279,9 @@ def collect_personal_radar_candidates(
         collect_source(
             "dblp_venues",
             lambda: collect_dblp_venue_publications(
-                venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
+                venue_profiles=dblp_venue_profiles
+                or env_list("PERSONAL_RADAR_DBLP_VENUES")
+                or env_list("RADAR_DBLP_VENUES"),
                 year=selected_year,
                 max_results=max_results,
             ),
@@ -1040,7 +1292,7 @@ def collect_personal_radar_candidates(
             lambda: collect_semantic_scholar_search(
                 query_terms=query_terms,
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=personal_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_authors" in sources:
@@ -1049,7 +1301,7 @@ def collect_personal_radar_candidates(
             lambda: collect_semantic_scholar_author_papers(
                 author_ids=required_semantic_scholar_author_ids(semantic_scholar_author_ids),
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=personal_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_references" in sources:
@@ -1059,7 +1311,7 @@ def collect_personal_radar_candidates(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="references",
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=personal_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_citations" in sources:
@@ -1069,7 +1321,7 @@ def collect_personal_radar_candidates(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="citations",
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=personal_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_recommendations" in sources:
@@ -1077,9 +1329,11 @@ def collect_personal_radar_candidates(
             "semantic_scholar_recommendations",
             lambda: collect_semantic_scholar_recommendations(
                 positive_paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
-                negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
+                negative_paper_ids=negative_seed_paper_ids
+                or env_list("PERSONAL_RADAR_NEGATIVE_SEED_PAPER_IDS")
+                or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=personal_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "openalex" in sources:
@@ -1104,7 +1358,9 @@ def collect_personal_radar_candidates(
         collect_source(
             "openalex_venues",
             lambda: collect_openalex_venue_publications(
-                venue_profiles=dblp_venue_profiles or env_list("RADAR_DBLP_VENUES"),
+                venue_profiles=dblp_venue_profiles
+                or env_list("PERSONAL_RADAR_DBLP_VENUES")
+                or env_list("RADAR_DBLP_VENUES"),
                 year=selected_year,
                 max_results=max_results,
                 mailto=selected_openalex_mailto,
@@ -1122,7 +1378,9 @@ def collect_personal_radar_candidates(
         collect_source(
             "openreview_venues",
             lambda: collect_openreview_venue_submissions(
-                venue_profiles=openreview_venue_profiles or env_list("RADAR_OPENREVIEW_VENUES"),
+                venue_profiles=openreview_venue_profiles
+                or env_list("PERSONAL_RADAR_OPENREVIEW_VENUES")
+                or env_list("RADAR_OPENREVIEW_VENUES"),
                 year=selected_year,
                 accepted_only=openreview_accepted_only,
                 max_results=max_results,
@@ -1168,19 +1426,29 @@ def collect_personal_radar_candidates(
 
 
 def required_semantic_scholar_seed_ids(seed_paper_ids: list[str] | None = None) -> list[str]:
-    selected_seed_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
+    selected_seed_ids = (
+        seed_paper_ids
+        or env_list("PERSONAL_RADAR_SEED_PAPER_IDS")
+        or env_list("RADAR_SEED_PAPER_IDS")
+    )
     if not selected_seed_ids:
         raise ValueError(
-            "Semantic Scholar graph expansion requires --seed-paper-id or RADAR_SEED_PAPER_IDS."
+            "Semantic Scholar graph expansion requires --seed-paper-id, PERSONAL_RADAR_SEED_PAPER_IDS, "
+            "or RADAR_SEED_PAPER_IDS."
         )
     return selected_seed_ids
 
 
 def required_semantic_scholar_author_ids(author_ids: list[str] | None = None) -> list[str]:
-    selected_author_ids = author_ids or env_list("RADAR_AUTHOR_IDS")
+    selected_author_ids = (
+        author_ids
+        or env_list("PERSONAL_RADAR_AUTHOR_IDS")
+        or env_list("RADAR_AUTHOR_IDS")
+    )
     if not selected_author_ids:
         raise ValueError(
-            "Semantic Scholar author tracking requires --semantic-scholar-author-id or RADAR_AUTHOR_IDS."
+            "Semantic Scholar author tracking requires --semantic-scholar-author-id, PERSONAL_RADAR_AUTHOR_IDS, "
+            "or RADAR_AUTHOR_IDS."
         )
     return selected_author_ids
 
@@ -1214,9 +1482,17 @@ def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[st
 
 
 def required_openreview_invitations(invitations: list[str] | None = None) -> list[str]:
-    selected_invitations = invitations or env_list("OPENREVIEW_INVITATIONS")
+    selected_invitations = (
+        invitations
+        or env_list("PERSONAL_RADAR_OPENREVIEW_INVITATIONS")
+        or env_list("PERSONAL_OPENREVIEW_INVITATIONS")
+        or env_list("OPENREVIEW_INVITATIONS")
+    )
     if not selected_invitations:
-        raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
+        raise ValueError(
+            "OpenReview source requires --openreview-invitation, PERSONAL_RADAR_OPENREVIEW_INVITATIONS, "
+            "PERSONAL_OPENREVIEW_INVITATIONS, or OPENREVIEW_INVITATIONS."
+        )
     return selected_invitations
 
 
@@ -1286,6 +1562,7 @@ def build_personal_radar_run_record(
     query_terms: list[str],
     topic_profile: dict[str, Any],
     collection_config: dict[str, Any],
+    topic_profile_version: dict[str, Any] | None = None,
     collected_papers: list[dict[str, Any]],
     collected_count: int,
     recommendations: list[dict[str, Any]],
@@ -1311,8 +1588,12 @@ def build_personal_radar_run_record(
         "query_terms": query_terms,
         "topic_profile_id": topic_profile.get("id") or "personal-literature-radar",
         "topic_profile_name": topic_profile.get("name") or "",
+        "topic_profile_version": dict(topic_profile_version or {}),
         "collection_config": collection_config,
-        "scoring_profile": personal_radar_scoring_profile(topic_profile),
+        "scoring_profile": personal_radar_scoring_profile(
+            topic_profile,
+            profile_version=topic_profile_version,
+        ),
         "pipeline_trace": build_radar_pipeline_trace(
             status=selected_status,
             collected_papers=collected_papers,
@@ -1326,6 +1607,7 @@ def build_personal_radar_run_record(
         "source_errors": errors,
         "source_stats": source_stats or [],
         "source_policy": radar_source_policy_summary(sources),
+        "primary_source_coverage": radar_primary_source_coverage_summary(sources, collection_config),
         "provenance_summary": radar_source_provenance_summary(recommendations),
         "context_summary": context_summary or {},
         "venue_coverage": build_venue_coverage_summary(
@@ -1357,7 +1639,37 @@ def build_personal_radar_run_record(
     }
 
 
-def personal_radar_scoring_profile(topic_profile: dict[str, Any]) -> dict[str, Any]:
+def personal_radar_topic_profile_version(
+    topic_profile: dict[str, Any],
+    *,
+    topic_profile_path: Path | None = None,
+) -> dict[str, Any]:
+    profile = personal_radar_scoring_profile(topic_profile)
+    profile_hash = stable_id(
+        "personal-topic-profile-hash",
+        {
+            "id": profile["id"],
+            "name": profile["name"],
+            "topics": profile["topics"],
+        },
+    )
+    return {
+        "id": stable_id("personal-topic-profile-version", {"profile_hash": profile_hash}),
+        "profile_type": "topic_profile",
+        "profile_id": profile["id"],
+        "profile_name": profile["name"],
+        "profile_hash": profile_hash,
+        "topic_count": len(profile["topics"]),
+        "topic_ids": [str(topic.get("id") or "") for topic in profile["topics"]],
+        "topic_profile_path": str(topic_profile_path) if topic_profile_path else "",
+    }
+
+
+def personal_radar_scoring_profile(
+    topic_profile: dict[str, Any],
+    *,
+    profile_version: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     topics = []
     for topic_id, topic in (topic_profile.get("topics") or {}).items():
         if not isinstance(topic, dict):
@@ -1377,12 +1689,17 @@ def personal_radar_scoring_profile(topic_profile: dict[str, Any]) -> dict[str, A
                 ],
             }
         )
-    return {
+    profile = {
         "type": "topic_profile",
         "id": topic_profile.get("id") or "personal-literature-radar",
         "name": topic_profile.get("name") or "Personal Literature Radar",
         "topics": topics,
     }
+    if isinstance(profile_version, dict) and profile_version.get("id"):
+        profile["profile_version_id"] = str(profile_version["id"])
+        profile["profile_hash"] = str(profile_version.get("profile_hash") or "")
+        profile["profile_version_path"] = str(profile_version.get("topic_profile_path") or "")
+    return profile
 
 
 def personal_radar_collection_config(
@@ -1394,6 +1711,7 @@ def personal_radar_collection_config(
     summarize: bool,
     summary_provider: str,
     summary_limit: int | None,
+    summary_min_score: int | None,
     semantic_scholar_api_key: str | None,
     seed_paper_ids: list[str] | None,
     negative_seed_paper_ids: list[str] | None,
@@ -1404,6 +1722,7 @@ def personal_radar_collection_config(
     semantic_scholar_author_ids: list[str] | None,
     dblp_author_pids: list[str] | None,
     openalex_author_ids: list[str] | None,
+    arxiv_categories: list[str] | None,
     conference_year: int | None,
     dblp_venue_profiles: list[str] | None,
     openreview_venue_profiles: list[str] | None,
@@ -1424,22 +1743,24 @@ def personal_radar_collection_config(
         summarize=summarize,
         summary_provider=summary_provider,
         summary_limit=summary_limit,
+        summary_min_score=summary_min_score,
         topic_profile_path=topic_profile_path,
         write_report=write_report,
-        arxiv_categories=list(DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
+        arxiv_categories=list(arxiv_categories or DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
         conference_year=conference_year or radar_year(now),
         dblp_venue_profiles=personal_resolved_source_list(
             selected_sources,
             {"dblp_venues", "openalex_venues"},
             dblp_venue_profiles,
-            ["RADAR_DBLP_VENUES"],
+            ["PERSONAL_RADAR_DBLP_VENUES", "RADAR_DBLP_VENUES"],
         ),
         openreview_venue_profiles=personal_resolved_source_list(
             selected_sources,
             {"openreview_venues"},
             openreview_venue_profiles,
-            ["RADAR_OPENREVIEW_VENUES"],
-        ),
+            ["PERSONAL_RADAR_OPENREVIEW_VENUES", "RADAR_OPENREVIEW_VENUES"],
+        )
+        or (list(DEFAULT_OPENREVIEW_VENUE_PROFILES) if "openreview_venues" in selected_sources else []),
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=(usenix_security_cycles or [1]) if "usenix_security" in selected_sources else None,
         official_accepted_pages=official_accepted_pages if "official_accepted_pages" in selected_sources else None,
@@ -1447,19 +1768,19 @@ def personal_radar_collection_config(
             selected_sources,
             SEMANTIC_SCHOLAR_SEED_SOURCES,
             seed_paper_ids,
-            ["RADAR_SEED_PAPER_IDS"],
+            ["PERSONAL_RADAR_SEED_PAPER_IDS", "RADAR_SEED_PAPER_IDS"],
         ),
         negative_seed_paper_ids=personal_resolved_source_list(
             selected_sources,
             {"semantic_scholar_recommendations"},
             negative_seed_paper_ids,
-            ["RADAR_NEGATIVE_SEED_PAPER_IDS"],
+            ["PERSONAL_RADAR_NEGATIVE_SEED_PAPER_IDS", "RADAR_NEGATIVE_SEED_PAPER_IDS"],
         ),
         semantic_scholar_author_ids=personal_resolved_source_list(
             selected_sources,
             {"semantic_scholar_authors"},
             semantic_scholar_author_ids,
-            ["RADAR_AUTHOR_IDS"],
+            ["PERSONAL_RADAR_AUTHOR_IDS", "RADAR_AUTHOR_IDS"],
         ),
         dblp_author_pids=personal_resolved_source_list(
             selected_sources,
@@ -1477,11 +1798,9 @@ def personal_radar_collection_config(
             selected_sources,
             {"openreview"},
             openreview_invitations,
-            ["OPENREVIEW_INVITATIONS"],
+            ["PERSONAL_RADAR_OPENREVIEW_INVITATIONS", "PERSONAL_OPENREVIEW_INVITATIONS", "OPENREVIEW_INVITATIONS"],
         ),
-        semantic_scholar_api_key_configured=bool(
-            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-        ),
+        semantic_scholar_api_key_configured=bool(personal_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(personal_openalex_mailto(openalex_mailto)),
         crossref_mailto_configured=bool(personal_crossref_mailto(crossref_mailto)),
         unpaywall_email_configured=bool(personal_unpaywall_email(unpaywall_email)),
@@ -1510,10 +1829,14 @@ def personal_resolved_source_list(
 
 def personal_contact_value(*values: str | None) -> str | None:
     for value in values:
-        text = str(value or "").strip()
+        text = radar_config_value(value)
         if text:
             return text
     return None
+
+
+def personal_semantic_scholar_api_key(value: str | None = None) -> str | None:
+    return personal_contact_value(value, os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
 
 
 def personal_source_contact_email() -> str | None:
@@ -1526,6 +1849,8 @@ def personal_source_contact_email() -> str | None:
 def personal_openalex_mailto(value: str | None = None) -> str | None:
     return personal_contact_value(
         value,
+        os.environ.get("PERSONAL_RADAR_OPENALEX_MAILTO"),
+        os.environ.get("RADAR_OPENALEX_MAILTO"),
         os.environ.get("OPENALEX_MAILTO"),
         personal_source_contact_email(),
     )
@@ -1534,6 +1859,8 @@ def personal_openalex_mailto(value: str | None = None) -> str | None:
 def personal_crossref_mailto(value: str | None = None) -> str | None:
     return personal_contact_value(
         value,
+        os.environ.get("PERSONAL_RADAR_CROSSREF_MAILTO"),
+        os.environ.get("RADAR_CROSSREF_MAILTO"),
         os.environ.get("CROSSREF_MAILTO"),
         personal_source_contact_email(),
     )
@@ -1542,6 +1869,8 @@ def personal_crossref_mailto(value: str | None = None) -> str | None:
 def personal_unpaywall_email(value: str | None = None) -> str | None:
     return personal_contact_value(
         value,
+        os.environ.get("PERSONAL_RADAR_UNPAYWALL_EMAIL"),
+        os.environ.get("RADAR_UNPAYWALL_EMAIL"),
         os.environ.get("UNPAYWALL_EMAIL"),
         personal_source_contact_email(),
     )
@@ -1826,6 +2155,70 @@ def normalize_personal_radar_review_status(status: str) -> str:
     return selected
 
 
+def normalize_personal_queue_usefulness(value: str) -> str:
+    selected = str(value or "").strip().lower()
+    if selected not in PERSONAL_RADAR_QUEUE_USEFULNESS_VALUES:
+        raise ValueError("Unsupported personal radar queue usefulness value.")
+    return selected
+
+
+def add_personal_literature_radar_queue_review(
+    root: Path,
+    *,
+    run_id: str,
+    usefulness: str,
+    reviewer: str = "personal",
+    note: str = "",
+    queue_counts: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    cleaned_run_id = str(run_id or "").strip()
+    if not cleaned_run_id:
+        raise ValueError("Personal Radar run id cannot be empty.")
+    cleaned_reviewer = " ".join(str(reviewer or "personal").split()) or "personal"
+    cleaned_note = " ".join(str(note or "").split())
+    timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+    review = {
+        "id": stable_id(
+            "personal_radar_queue_review",
+            {
+                "run_id": cleaned_run_id,
+                "usefulness": normalize_personal_queue_usefulness(usefulness),
+                "reviewer": cleaned_reviewer,
+                "note": cleaned_note,
+                "created_at": timestamp,
+            },
+        ),
+        "run_id": cleaned_run_id,
+        "usefulness": normalize_personal_queue_usefulness(usefulness),
+        "reviewer": cleaned_reviewer,
+        "note": cleaned_note,
+        "queue_counts": dict(queue_counts or {}),
+        "created_at": timestamp,
+    }
+    reviews = [
+        existing
+        for existing in read_personal_literature_radar_queue_reviews(root)
+        if existing.get("id") != review["id"]
+    ]
+    reviews.insert(0, review)
+    write_personal_literature_radar_queue_reviews(root, reviews)
+    return review
+
+
+def latest_personal_literature_radar_queue_review(
+    root: Path,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any] | None:
+    selected_run_id = str(run_id or "").strip()
+    for review in read_personal_literature_radar_queue_reviews(root):
+        if selected_run_id and str(review.get("run_id") or "") != selected_run_id:
+            continue
+        return review
+    return None
+
+
 def build_personal_radar_paper_history_record(
     *,
     existing: dict[str, Any] | None,
@@ -1909,6 +2302,141 @@ def append_personal_radar_index(root: Path, run_record: dict[str, Any]) -> None:
     write_personal_radar_index(root, runs[:200])
 
 
+def backfill_personal_literature_radar_pipeline_trace(
+    root: Path,
+    run_id: str | None = None,
+    *,
+    force: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    runs = read_personal_radar_index(root)
+    selected_run_id = str(run_id or "").strip()
+    run_index = None
+    for index, run in enumerate(runs):
+        if selected_run_id and str(run.get("id") or "") != selected_run_id:
+            continue
+        run_index = index
+        break
+    if run_index is None:
+        selected = selected_run_id or "latest"
+        raise KeyError(f"Unknown personal literature radar run: {selected}")
+
+    run = dict(runs[run_index])
+    existing_trace = run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
+    if existing_trace and not force:
+        return {
+            "updated": False,
+            "reason": "pipeline_trace_already_present",
+            "run": run,
+            "pipeline_trace": existing_trace,
+            "recommendation_count": int(run.get("recommendation_count") or 0),
+            "collected_count": int(run.get("collected_count") or 0),
+        }
+
+    histories = read_personal_radar_paper_history(root)
+    recommendations = _personal_radar_recommendations_for_pipeline_backfill(run, histories)
+    collected_papers = _personal_radar_collected_papers_for_pipeline_backfill(run, histories, recommendations)
+    trace = build_radar_pipeline_trace(
+        status=str(run.get("status") or "succeeded"),
+        collected_papers=collected_papers,
+        recommendations=recommendations,
+        source_errors=run.get("source_errors") if isinstance(run.get("source_errors"), list) else [],
+        report_written=bool(run.get("report_path")),
+        storage_target="personal_index",
+    )
+    timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+    run["pipeline_trace"] = trace
+    run["pipeline_trace_backfill"] = {
+        "backfilled_at": timestamp,
+        "source": "personal_index_legacy_run",
+        "collected_record_count": len(collected_papers),
+        "recommendation_record_count": len(recommendations),
+        "forced": bool(force),
+    }
+    runs[run_index] = run
+    write_personal_radar_index(root, runs)
+    return {
+        "updated": True,
+        "reason": "pipeline_trace_backfilled",
+        "run": run,
+        "pipeline_trace": trace,
+        "recommendation_count": len(recommendations),
+        "collected_count": len(collected_papers),
+    }
+
+
+def _personal_radar_recommendations_for_pipeline_backfill(
+    run: dict[str, Any],
+    histories: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    recommendations = []
+    for entry in run.get("recommendations") or []:
+        if not isinstance(entry, dict):
+            continue
+        dedupe_key = str(entry.get("dedupe_key") or "").strip()
+        history = histories.get(dedupe_key) if dedupe_key else None
+        history_recommendation = (
+            history.get("latest_recommendation")
+            if isinstance(history, dict) and isinstance(history.get("latest_recommendation"), dict)
+            else {}
+        )
+        paper = history.get("paper") if isinstance(history, dict) and isinstance(history.get("paper"), dict) else {}
+        if not paper:
+            paper = {
+                "dedupe_key": dedupe_key,
+                "title": entry.get("title"),
+                "identifiers": entry.get("identifiers") if isinstance(entry.get("identifiers"), dict) else {},
+                "links": entry.get("links") if isinstance(entry.get("links"), dict) else {},
+                "release_date": entry.get("release_date"),
+            }
+        scoring = {
+            "score": entry.get("score"),
+            "label": entry.get("label"),
+            "matched_positive_keywords": history_recommendation.get("matched_positive_keywords") or [],
+        }
+        recommendations.append(
+            {
+                "paper": paper,
+                "scoring": scoring,
+                "pdf_access": entry.get("pdf_access")
+                if isinstance(entry.get("pdf_access"), dict)
+                else (history.get("pdf_access") if isinstance(history, dict) else None),
+                "context": history_recommendation.get("context"),
+                "summary": entry.get("summary") or history_recommendation.get("summary"),
+                "attention_summary": entry.get("attention_summary") or history_recommendation.get("attention_summary"),
+                "novelty": entry.get("novelty") or history_recommendation.get("novelty"),
+            }
+        )
+    return recommendations
+
+
+def _personal_radar_collected_papers_for_pipeline_backfill(
+    run: dict[str, Any],
+    histories: dict[str, dict[str, Any]],
+    recommendations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    completed_at = str(run.get("completed_at") or "").strip()
+    if completed_at:
+        papers = [
+            record["paper"]
+            for record in histories.values()
+            if isinstance(record, dict)
+            and str(record.get("latest_seen_at") or "") == completed_at
+            and isinstance(record.get("paper"), dict)
+        ]
+        if papers:
+            return papers
+    papers = []
+    seen: set[str] = set()
+    for recommendation in recommendations:
+        paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+        dedupe_key = personal_radar_paper_key(paper) if paper else ""
+        if paper and dedupe_key not in seen:
+            papers.append(paper)
+            seen.add(dedupe_key)
+    return papers
+
+
 def update_personal_radar_index_review(
     root: Path,
     dedupe_key: str,
@@ -1988,6 +2516,26 @@ def personal_radar_paper_history_path(root: Path) -> Path:
     return root / "indexes" / PERSONAL_RADAR_PAPER_HISTORY_NAME
 
 
+def read_personal_literature_radar_queue_reviews(root: Path | None = None) -> list[dict[str, Any]]:
+    path = personal_radar_queue_reviews_path(root or repo_root())
+    if not path.exists():
+        return []
+    records = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(records, list):
+        raise ValueError(f"Personal radar queue reviews must be a JSON array: {path}")
+    return [record for record in records if isinstance(record, dict)]
+
+
+def write_personal_literature_radar_queue_reviews(root: Path, reviews: list[dict[str, Any]]) -> None:
+    path = personal_radar_queue_reviews_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(reviews[:200], ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def personal_radar_queue_reviews_path(root: Path) -> Path:
+    return root / "indexes" / PERSONAL_RADAR_QUEUE_REVIEWS_NAME
+
+
 def personal_radar_topic_profile_path(root: Path, *, topic_profile_path: Path | None = None) -> Path:
     if topic_profile_path is None:
         return root / "indexes" / PERSONAL_RADAR_TOPIC_PROFILE_NAME
@@ -2008,7 +2556,7 @@ def personal_radar_run_id(sources: list[str], query_terms: list[str], now: datet
 
 
 def env_list(name: str) -> list[str]:
-    return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
+    return [part for part in re.split(r"[\s,]+", os.environ.get(name, "").strip()) if part]
 
 
 def radar_year(now: datetime | None = None) -> int:

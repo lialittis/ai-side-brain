@@ -22,6 +22,7 @@ def summarize_radar_recommendations_with_openrouter(
     client: Any | None = None,
     model: str | None = None,
     limit: int | None = None,
+    min_score: int | None = None,
     query_terms: list[str] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
@@ -30,6 +31,7 @@ def summarize_radar_recommendations_with_openrouter(
         client=client,
         model=model,
         limit=limit,
+        min_score=min_score,
         query_terms=query_terms,
         audience="research team",
         processor=RADAR_SUMMARY_PROCESSOR,

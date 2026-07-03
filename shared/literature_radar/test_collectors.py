@@ -685,11 +685,14 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(first["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(first["abstract"], "We study memory safety and kernel security for isolation.")
         self.assertEqual(first["year"], 2026)
+        self.assertEqual(first["release_date"], "2026")
         self.assertEqual(first["venue"], "USENIX Security 2026")
         self.assertEqual(
             first["links"]["landing"],
             "https://www.usenix.org/conference/usenixsecurity26/presentation/example",
         )
+        self.assertEqual(first["source_records"][0]["venue_year"], 2026)
+        self.assertEqual(first["source_records"][0]["release_date"], "2026")
         self.assertEqual(first["source_records"][0]["cycle"], 1)
 
     def test_collect_usenix_security_uses_injected_fetcher(self) -> None:
@@ -721,8 +724,11 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(first["title"], "A Causal Perspective for Jailbreak Defense")
         self.assertEqual(first["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(first["year"], 2026)
+        self.assertEqual(first["release_date"], "2026")
         self.assertEqual(first["venue"], "NDSS 2026")
         self.assertEqual(first["links"]["landing"], "https://www.ndss-symposium.org/ndss-paper/example/")
+        self.assertEqual(first["source_records"][0]["venue_year"], 2026)
+        self.assertEqual(first["source_records"][0]["release_date"], "2026")
 
     def test_collect_ndss_uses_injected_fetcher(self) -> None:
         seen_urls = []
@@ -993,7 +999,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
             collected_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
         )
 
-        self.assertIn("api2.openreview.net/notes", url)
+        self.assertIn("api.openreview.net/notes", url)
         self.assertIn("invitation=ICLR.cc%2F2026%2FConference%2F-%2FSubmission", url)
         self.assertIn("limit=5", url)
         self.assertEqual(len(papers), 1)
@@ -1051,7 +1057,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
             ["iclr", "neurips", "neurips_datasets", "neurips_creative_ai", "icml", "icml_position"],
         )
         self.assertEqual(len(papers), 1)
-        self.assertIn("ICLR.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
+        self.assertIn("content.venueid=ICLR.cc%2F2026%2FConference", seen_urls[0])
         paper = papers[0]
         self.assertEqual(paper["source_id"], "openreview")
         self.assertEqual(paper["source_paper_id"], "accepted123")
@@ -1082,7 +1088,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
             ["neurips", "icml"],
         )
 
-    def test_openreview_venue_collection_uses_selected_preset_invitation(self) -> None:
+    def test_openreview_venue_collection_uses_selected_preset_venueid(self) -> None:
         seen_urls = []
 
         def fetcher(url: str) -> bytes:
@@ -1098,7 +1104,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         )
 
         self.assertEqual(len(seen_urls), 1)
-        self.assertIn("NeurIPS.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
+        self.assertIn("content.venueid=NeurIPS.cc%2F2026%2FConference", seen_urls[0])
 
     def test_openreview_venue_collection_can_include_unaccepted_submissions(self) -> None:
         def fetcher(url: str) -> bytes:
@@ -1115,6 +1121,24 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         self.assertEqual(len(papers), 2)
         rejected = next(paper for paper in papers if paper["source_paper_id"] == "rejected123")
         self.assertFalse(rejected["source_records"][0]["openreview_accepted"])
+
+    def test_openreview_venue_collection_uses_submission_invitations_when_unaccepted_included(self) -> None:
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            return OPENREVIEW_VENUE_FIXTURE.encode("utf-8")
+
+        collect_openreview_venue_submissions(
+            venue_profiles=["iclr"],
+            year=2026,
+            accepted_only=False,
+            max_results=20,
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(seen_urls), 1)
+        self.assertIn("invitation=ICLR.cc%2F2026%2FConference%2F-%2FSubmission", seen_urls[0])
 
     def test_builds_and_parses_semantic_scholar_search(self) -> None:
         url = build_semantic_scholar_search_url(

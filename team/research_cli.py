@@ -16,39 +16,83 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.literature_radar import (
+    build_radar_source_validation_result,
+    DEFAULT_ARXIV_CATEGORIES,
+    RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+    evaluate_radar_relevance_cases,
     format_radar_context_summary,
+    format_radar_daily_workflow,
+    format_radar_daily_queue_guidance,
+    format_radar_daily_review_plan,
+    format_radar_daily_source_health,
+    format_radar_guardrail_readiness,
     format_radar_keyword_profile,
+    format_radar_mvp_readiness,
+    format_radar_mvp_readiness_checklist,
+    format_radar_mvp_setup_action_plan,
+    format_radar_mvp_setup_env_audit,
+    format_radar_mvp_setup_env_block,
+    format_radar_mvp_setup_env_file,
+    format_radar_operations_readiness,
     format_radar_oa_enrichment,
+    format_radar_oa_enrichment_actions,
     format_radar_pipeline_summary,
+    format_radar_primary_source_coverage,
+    format_radar_relevance_evaluation,
     format_radar_run_health_action,
     format_radar_source_provenance_summary,
     format_radar_source_policy,
     format_radar_source_coverage,
     format_radar_source_readiness,
+    format_radar_source_validation_commands,
+    format_radar_source_validation_evidence,
+    format_radar_source_validation_guidance,
+    format_radar_source_validation_plan,
+    format_radar_source_validation_result,
+    format_radar_source_validation_result_actions,
+    format_radar_source_validation_result_guidance,
     format_radar_source_stats,
+    format_radar_thin_mvp_readiness,
     format_radar_triage_options,
     format_radar_triage_summary,
+    radar_config_value,
+    radar_effective_recommendation_scoring,
+    radar_history_record_source_ids,
     radar_latest_signal_lines,
+    radar_pipeline_trace_summary,
+    radar_relevance_evaluation_cases_for_interests,
+    radar_review_triage_hint,
+    radar_source_validation_results_from_stats,
     radar_supported_source_ids,
+    paper_release_date,
     parse_official_accepted_page_specs,
     source_provenance_report_text,
 )
 from shared.research import topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
+    SEMANTIC_SCHOLAR_SEED_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
     apply_team_radar_source_preset,
     build_team_literature_radar_activity_payload,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
+    build_team_radar_scorer,
     import_literature_radar_queue,
+    collect_team_radar_candidates,
     run_team_literature_radar,
+    team_radar_queue_review_context,
+    team_radar_query_terms,
     team_radar_source_presets,
 )
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
-from team.research_web import build_literature_radar_settings_payload, build_literature_radar_status_payload
+from team.research_web import (
+    build_literature_radar_settings_payload,
+    build_literature_radar_status_payload,
+    radar_settings_collection_config,
+)
 
 
 DEMO_METADATA = {
@@ -131,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=radar_supported_source_ids(),
         help="source to collect; repeatable",
     )
+    radar.add_argument("--arxiv-category", action="append", default=[], help="arXiv category to include; repeatable")
     radar.add_argument("--query-term", action="append", default=[], help="interest term override; repeatable")
     radar.add_argument("--max-results", type=int, help="maximum results per source query")
     radar.add_argument("--limit", type=int, help="maximum recommendations to report")
@@ -142,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="summary provider; openrouter requires OPENROUTER_API_KEY",
     )
     radar.add_argument("--summary-limit", type=int, help="maximum recommendations to summarize")
+    radar.add_argument(
+        "--summary-min-score",
+        type=int,
+        help="minimum relevance score for OpenRouter summaries; defaults to highly relevant",
+    )
     radar.add_argument("--import-results", action="store_true", help="import recommended papers into the team library")
     radar.add_argument("--import-limit", type=int, default=5, help="maximum recommendations to import")
     radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
@@ -239,6 +289,13 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue.add_argument("--recent-days", type=int, default=0, help="only show papers released or first seen in the last N days")
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    radar_eval = subparsers.add_parser(
+        "radar-evaluate-relevance",
+        help="run offline golden relevance checks against current Team Interest weights",
+    )
+    add_db_args(radar_eval)
+    radar_eval.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     radar_import_queue = subparsers.add_parser(
         "radar-import-queue",
         help="import active Literature Radar queue papers into the Team library",
@@ -251,6 +308,26 @@ def build_parser() -> argparse.ArgumentParser:
     radar_import_queue.add_argument("--project", default="team-library", help="team library project id for imported papers")
     radar_import_queue.add_argument("--actor", default="team-member")
     radar_import_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_review_queue = subparsers.add_parser(
+        "radar-review-queue",
+        help="record whether the latest Literature Radar queue was useful for daily review",
+    )
+    add_db_args(radar_review_queue)
+    radar_review_queue.add_argument("--run-id", default="", help="run id to review; defaults to the latest run")
+    radar_review_queue.add_argument(
+        "--usefulness",
+        choices=["useful", "partly_useful", "not_useful", "needs_review"],
+        required=True,
+        help="team judgement for the current queue",
+    )
+    radar_review_queue.add_argument("--reviewer", default="team-member")
+    radar_review_queue.add_argument("--note", default="")
+    radar_review_queue.add_argument("--limit", type=int, default=20)
+    radar_review_queue.add_argument("--freshness-max-age-hours", type=int, default=36)
+    radar_review_queue.add_argument("--triage-action", default="", help="queue filter used during review")
+    radar_review_queue.add_argument("--recent-days", type=int, default=0, help="recent-window filter used during review")
+    radar_review_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_status = subparsers.add_parser(
         "radar-status",
@@ -268,11 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar_status.add_argument("--source-preset", choices=[preset["id"] for preset in team_radar_source_presets()])
     radar_status.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    radar_status.add_argument("--arxiv-category", action="append", default=[])
     radar_status.add_argument("--max-results", type=int)
     radar_status.add_argument("--recommendation-limit", type=int, help="recommendation limit for the embedded settings preflight")
     radar_status.add_argument("--summarize", action="store_true")
     radar_status.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
     radar_status.add_argument("--summary-limit", type=int)
+    radar_status.add_argument("--summary-min-score", type=int)
     radar_status.add_argument("--semantic-scholar-api-key")
     radar_status.add_argument("--dblp-author-pid", action="append", default=[])
     radar_status.add_argument("--semantic-scholar-author-id", action="append", default=[])
@@ -298,6 +377,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="configured official accepted page for the embedded settings preflight",
     )
+    radar_status.add_argument(
+        "--source-validation-json",
+        type=Path,
+        help="optional radar-validate-sources JSON snapshot to fold into beta/backlog readiness",
+    )
+    radar_status.add_argument(
+        "--relevance-evaluation-json",
+        type=Path,
+        help="optional radar-evaluate-relevance JSON snapshot to fold into beta/backlog readiness",
+    )
+    radar_status.add_argument(
+        "--setup-env",
+        action="store_true",
+        help="print a local env-file fragment for remaining beta/backlog setup and exit",
+    )
     radar_status.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_settings = subparsers.add_parser(
@@ -312,11 +406,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar_settings.add_argument("--source-preset", choices=[preset["id"] for preset in team_radar_source_presets()])
     radar_settings.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    radar_settings.add_argument("--arxiv-category", action="append", default=[])
     radar_settings.add_argument("--max-results", type=int)
     radar_settings.add_argument("--limit", type=int)
     radar_settings.add_argument("--summarize", action="store_true")
     radar_settings.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
     radar_settings.add_argument("--summary-limit", type=int)
+    radar_settings.add_argument("--summary-min-score", type=int)
     radar_settings.add_argument("--semantic-scholar-api-key")
     radar_settings.add_argument("--dblp-author-pid", action="append", default=[])
     radar_settings.add_argument("--semantic-scholar-author-id", action="append", default=[])
@@ -344,6 +440,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     radar_settings.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    radar_validate = subparsers.add_parser(
+        "radar-validate-sources",
+        help="validate Literature Radar source readiness; use --live to perform small source checks",
+    )
+    add_db_args(radar_validate)
+    radar_validate.add_argument(
+        "--use-saved-defaults",
+        action="store_true",
+        help="start from Team Radar defaults saved by the web UI",
+    )
+    radar_validate.add_argument("--source-preset", choices=[preset["id"] for preset in team_radar_source_presets()])
+    radar_validate.add_argument("--source", action="append", choices=radar_supported_source_ids())
+    radar_validate.add_argument("--query-term", action="append", default=[], help="validation query term override; repeatable")
+    radar_validate.add_argument("--arxiv-category", action="append", default=[])
+    radar_validate.add_argument("--max-results", type=int)
+    radar_validate.add_argument("--limit", type=int)
+    radar_validate.add_argument("--summarize", action="store_true")
+    radar_validate.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
+    radar_validate.add_argument("--summary-limit", type=int)
+    radar_validate.add_argument("--summary-min-score", type=int)
+    radar_validate.add_argument("--semantic-scholar-api-key")
+    radar_validate.add_argument("--dblp-author-pid", action="append", default=[])
+    radar_validate.add_argument("--semantic-scholar-author-id", action="append", default=[])
+    radar_validate.add_argument("--seed-paper-id", action="append", default=[])
+    radar_validate.add_argument("--negative-seed-paper-id", action="append", default=[])
+    radar_validate.add_argument("--source-contact-email")
+    radar_validate.add_argument("--openalex-mailto")
+    radar_validate.add_argument("--openalex-author-id", action="append", default=[])
+    radar_validate.add_argument("--openreview-invitation", action="append", default=[])
+    radar_validate.add_argument("--openreview-venue-profile", action="append", default=[])
+    radar_validate.add_argument("--include-openreview-unaccepted", action="store_true")
+    radar_validate.add_argument("--crossref-mailto")
+    radar_validate.add_argument("--unpaywall-email")
+    radar_validate.add_argument("--cache-pdfs", action="store_true")
+    radar_validate.add_argument("--pdf-cache-dir", type=Path)
+    radar_validate.add_argument("--pdf-cache-max-bytes", type=int)
+    radar_validate.add_argument("--conference-year", type=int)
+    radar_validate.add_argument("--venue-profile", action="append", default=[])
+    radar_validate.add_argument("--usenix-cycle", action="append", type=int, default=[])
+    radar_validate.add_argument(
+        "--official-accepted-page",
+        action="append",
+        default=[],
+        help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
+    radar_validate.add_argument("--live", action="store_true", help="perform one-sample network validation")
+    radar_validate.add_argument(
+        "--validation-max-results",
+        type=int,
+        default=1,
+        help="maximum metadata records per source during --live validation",
+    )
+    radar_validate.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     radar_review = subparsers.add_parser(
         "radar-review",
         help="mark one Literature Radar paper as watch, dismissed, or unreviewed",
@@ -369,6 +519,19 @@ def build_parser() -> argparse.ArgumentParser:
     radar_report.add_argument("run_id", nargs="?", help="run id; defaults to the latest run")
     radar_report.add_argument("--output", type=Path, help="write stored Markdown report")
     radar_report.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_backfill_pipeline = subparsers.add_parser(
+        "radar-backfill-pipeline",
+        help="backfill missing Literature Radar pipeline trace from local stored run records",
+    )
+    add_db_args(radar_backfill_pipeline)
+    radar_backfill_pipeline.add_argument("run_id", nargs="?", help="run id; defaults to the latest run")
+    radar_backfill_pipeline.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing pipeline trace instead of only filling missing traces",
+    )
+    radar_backfill_pipeline.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_brief = subparsers.add_parser("radar-brief", help="build a weekly or daily Literature Radar brief")
     add_db_args(radar_brief)
@@ -457,6 +620,28 @@ def add_item(args: argparse.Namespace) -> dict[str, Any]:
 
 def print_json(record: Any) -> None:
     print(json.dumps(record, ensure_ascii=True, indent=2, sort_keys=True))
+
+
+def read_json_mapping(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def read_source_validation_result(path: Path | None) -> dict[str, Any]:
+    payload = read_json_mapping(path)
+    result = payload.get("source_validation_result") if isinstance(payload.get("source_validation_result"), dict) else {}
+    return result if result else payload
+
+
+def read_relevance_evaluation(path: Path | None) -> dict[str, Any]:
+    payload = read_json_mapping(path)
+    result = payload.get("evaluation") if isinstance(payload.get("evaluation"), dict) else {}
+    return result if result else payload
 
 
 def print_add_summary(summary: dict[str, Any]) -> None:
@@ -596,28 +781,45 @@ def print_radar_papers(
         imported = record.get("imported_item_id") or "not imported"
         review_state = (record.get("review_status") or "unreviewed")
         latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+        effective_scoring = radar_effective_recommendation_scoring(record)
+        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+        if not triage:
+            triage = radar_review_triage_hint(record)
         latest_signal = (
-            f" | {latest.get('label') or 'needs_review'} {int(float(latest.get('score') or 0))}/100"
-            if latest
+            f" | {effective_scoring.get('label') or 'needs_review'} "
+            f"{int(float(effective_scoring.get('score') or 0))}/100"
+            if latest or effective_scoring
             else ""
         )
-        action = (latest.get("recommended_action") or "human_review") if latest else "human_review"
+        action = triage.get("action") or ((latest.get("recommended_action") or "human_review") if latest else "human_review")
         paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
-        release_date = str(record.get("release_date") or paper.get("release_date") or "").strip()
+        release_date = str(record.get("release_date") or "").strip()
+        if release_date == "1970-01-01" or not release_date:
+            release_date = paper_release_date(paper)
         release_text = f" | released={release_date}" if release_date else ""
+        source_ids_text = ", ".join(radar_history_record_source_ids(record))
         print(
             f"{record.get('dedupe_key')} | seen={record.get('seen_count', 0)} | "
             f"review={review_state} | "
-            f"latest={record.get('latest_seen_at')}{release_text} | sources={', '.join(record.get('source_ids') or [])} | "
+            f"latest={record.get('latest_seen_at')}{release_text} | sources={source_ids_text} | "
             f"{access} | {imported}{latest_signal} | action={action} | {record.get('title')}"
         )
-        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
         if triage:
             print(
                 f"  Triage: {triage.get('label') or triage.get('action') or 'Review'}"
                 f" - {triage.get('reason') or 'No triage reason recorded.'}"
             )
-        provenance = paper.get("source_provenance") if isinstance(paper.get("source_provenance"), dict) else {}
+        reason_to_read = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+        if reason_to_read:
+            headline = str(reason_to_read.get("headline") or "").strip()
+            if headline:
+                print(f"  Reason to read: {headline}")
+            for point in reason_to_read.get("points") or []:
+                if isinstance(point, dict) and str(point.get("text") or "").strip():
+                    print(f"    - {point.get('label') or 'Reason'}: {point.get('text')}")
+        provenance = record.get("source_provenance") if isinstance(record.get("source_provenance"), dict) else {}
+        if not provenance and isinstance(paper.get("source_provenance"), dict):
+            provenance = paper["source_provenance"]
         if provenance:
             print(f"  Source provenance: {source_provenance_report_text(provenance)}")
         review_reason = str(record.get("review_reason") or "").strip()
@@ -625,7 +827,7 @@ def print_radar_papers(
             review_reason = str(record["review"].get("reason") or "").strip()
         if review_reason:
             print(f"  Review reason: {review_reason}")
-        for line in radar_latest_signal_lines(latest):
+        for line in radar_latest_signal_lines(record):
             print(f"  {line}")
 
 
@@ -658,6 +860,57 @@ def print_radar_queue_import(result: dict[str, Any]) -> None:
         )
 
 
+def print_radar_queue_review(result: dict[str, Any]) -> None:
+    review = result.get("review") if isinstance(result.get("review"), dict) else {}
+    queue = result.get("queue") if isinstance(result.get("queue"), dict) else {}
+    print(
+        "Radar queue usefulness review: "
+        f"run={review.get('run_id') or 'unknown'} "
+        f"usefulness={review.get('usefulness') or 'unknown'} "
+        f"reviewer={review.get('reviewer') or 'team-member'}"
+    )
+    if review.get("note"):
+        print(f"Note: {review.get('note')}")
+    context = review.get("queue_context") if isinstance(review.get("queue_context"), dict) else {}
+    if context:
+        sample = context.get("sample") if isinstance(context.get("sample"), list) else []
+        first_sample = sample[0] if sample and isinstance(sample[0], dict) else {}
+        active_count = int(context.get("active_count") or 0)
+        visible_count = int(context.get("visible_count") or 0)
+        parts = [
+            f"limit={int(context.get('limit') or 0)}",
+            f"active={active_count}",
+            f"visible={visible_count}",
+        ]
+        if context.get("triage_action"):
+            parts.append(f"triage={context.get('triage_action')}")
+        if context.get("recent_days"):
+            parts.append(f"recent_days={int(context.get('recent_days') or 0)}")
+        if first_sample.get("title"):
+            parts.append(f"first={first_sample.get('title')}")
+        print("Review context: " + " | ".join(parts))
+        print(f"Review scope: {visible_count} visible / {active_count} active")
+    usefulness_id = str(review.get("usefulness") or "").strip()
+    if usefulness_id in {"useful", "partly_useful"}:
+        print("Thin MVP review state: recorded and passing")
+    elif usefulness_id:
+        print("Thin MVP review state: recorded but still needs tuning")
+    latest_review = (
+        queue.get("latest_queue_review")
+        if isinstance(queue.get("latest_queue_review"), dict)
+        else {}
+    )
+    if latest_review:
+        print(
+            "Latest queue review: "
+            f"{latest_review.get('usefulness') or 'unknown'} "
+            f"by {latest_review.get('reviewer') or latest_review.get('actor') or 'unknown'}"
+        )
+    thin = result.get("thin_mvp_readiness") if isinstance(result.get("thin_mvp_readiness"), dict) else {}
+    if thin:
+        print(format_radar_thin_mvp_readiness(thin))
+
+
 def print_radar_queue(result: dict[str, Any]) -> None:
     print("Team Literature Radar Queue")
     print(
@@ -668,6 +921,39 @@ def print_radar_queue(result: dict[str, Any]) -> None:
         )
     )
     latest_run = result.get("latest_run") if isinstance(result.get("latest_run"), dict) else {}
+    daily_guidance = result.get("daily_guidance") if isinstance(result.get("daily_guidance"), dict) else {}
+    if daily_guidance:
+        print(format_radar_daily_queue_guidance(daily_guidance))
+    papers = result.get("papers") if isinstance(result.get("papers"), list) else []
+    active_count = int(daily_guidance.get("active_count") or len(papers))
+    visible_count = len(papers)
+    daily_source_health = result.get("daily_source_health") if isinstance(result.get("daily_source_health"), dict) else {}
+    if daily_source_health:
+        print(format_radar_daily_source_health(daily_source_health))
+    daily_review_plan = result.get("daily_review_plan") if isinstance(result.get("daily_review_plan"), dict) else {}
+    if daily_review_plan:
+        print(format_radar_daily_review_plan(daily_review_plan))
+    for line in format_radar_daily_workflow(
+        result.get("daily_workflow") if isinstance(result.get("daily_workflow"), dict) else {}
+    ):
+        print(line)
+    latest_queue_review = (
+        result.get("latest_queue_review")
+        if isinstance(result.get("latest_queue_review"), dict)
+        else {}
+    )
+    usefulness_id = str(latest_queue_review.get("usefulness") or "").strip()
+    if usefulness_id:
+        reviewer = str(latest_queue_review.get("reviewer") or latest_queue_review.get("actor") or "unknown")
+        state = "recorded and passing" if usefulness_id in {"useful", "partly_useful"} else "recorded but still needs tuning"
+        print(f"Queue usefulness: {usefulness_id} by {reviewer}")
+        print(f"Review scope: {visible_count} visible / {active_count} active")
+        print(f"Thin MVP review state: {state}")
+    elif latest_run:
+        print("Queue usefulness: not reviewed yet")
+        print(f"Review scope: {visible_count} visible / {active_count} active")
+        print("Optional feedback: Queue usefulness review")
+        print("Record queue usefulness: python team/research_cli.py radar-review-queue --usefulness useful")
     if latest_run:
         print(format_radar_queue_latest_run(latest_run))
         health_action = (
@@ -684,6 +970,13 @@ def print_radar_queue(result: dict[str, Any]) -> None:
         )
         if source_policy:
             print(format_radar_source_policy(source_policy))
+        primary_source_coverage = (
+            latest_run.get("primary_source_coverage")
+            if isinstance(latest_run.get("primary_source_coverage"), dict)
+            else {}
+        )
+        if primary_source_coverage:
+            print(format_radar_primary_source_coverage(primary_source_coverage))
         source_coverage = (
             latest_run.get("source_coverage")
             if isinstance(latest_run.get("source_coverage"), dict)
@@ -804,11 +1097,22 @@ def print_radar_settings(result: dict[str, Any]) -> None:
     print(f"Recommendations: {settings.get('limit') or 'n/a'}")
     print(f"Summaries: {'yes' if settings.get('summarize') else 'no'}")
     print(f"Provider: {settings.get('summary_provider') or 'local'}")
+    print(f"Summary min score: {int(settings.get('summary_min_score') or 0)}")
     scoring_profile_summary = (
         result.get("scoring_profile_summary") if isinstance(result.get("scoring_profile_summary"), dict) else {}
     )
     if scoring_profile_summary:
         print(f"Scoring: {scoring_profile_summary.get('description') or scoring_profile_summary.get('name')}")
+    interest_profile_version = (
+        result.get("interest_profile_version") if isinstance(result.get("interest_profile_version"), dict) else {}
+    )
+    if interest_profile_version:
+        print(
+            "Interest profile version: "
+            f"id={interest_profile_version.get('id') or 'unknown'} "
+            f"hash={interest_profile_version.get('profile_hash') or 'unknown'} "
+            f"interests={int(interest_profile_version.get('interest_count') or 0)}"
+        )
     interest_profiles = (
         result.get("interest_keyword_profiles") if isinstance(result.get("interest_keyword_profiles"), list) else []
     )
@@ -825,9 +1129,16 @@ def print_radar_settings(result: dict[str, Any]) -> None:
     oa_enrichment = result.get("oa_enrichment") if isinstance(result.get("oa_enrichment"), dict) else {}
     if oa_enrichment:
         print(format_radar_oa_enrichment(oa_enrichment))
+        for line in format_radar_oa_enrichment_actions(oa_enrichment, product="team"):
+            print(line)
     source_policy = result.get("source_policy") if isinstance(result.get("source_policy"), dict) else {}
     if source_policy:
         print(format_radar_source_policy(source_policy))
+    primary_source_coverage = (
+        result.get("primary_source_coverage") if isinstance(result.get("primary_source_coverage"), dict) else {}
+    )
+    if primary_source_coverage:
+        print(format_radar_primary_source_coverage(primary_source_coverage))
     source_readiness = result.get("source_readiness") if isinstance(result.get("source_readiness"), dict) else {}
     if source_readiness:
         print(format_radar_source_readiness(source_readiness))
@@ -841,6 +1152,16 @@ def print_radar_settings(result: dict[str, Any]) -> None:
                 f"! recommended for {entry.get('source_id')}: "
                 f"{entry.get('label') or entry.get('key')}"
             )
+    validation_plan = result.get("source_validation_plan") if isinstance(result.get("source_validation_plan"), dict) else {}
+    if validation_plan:
+        print(format_radar_source_validation_plan(validation_plan))
+    validation_guidance = (
+        result.get("source_validation_guidance")
+        if isinstance(result.get("source_validation_guidance"), dict)
+        else {}
+    )
+    if validation_guidance:
+        print(format_radar_source_validation_guidance(validation_guidance))
     links = result.get("links") if isinstance(result.get("links"), dict) else {}
     if links:
         print(f"Web: {links.get('html') or '/radar'}")
@@ -848,8 +1169,175 @@ def print_radar_settings(result: dict[str, Any]) -> None:
         print(f"Brief JSON: {links.get('brief_json') or '/radar/brief.json?days=7&limit=20'}")
 
 
+def build_team_literature_radar_relevance_evaluation_payload(database: TeamResearchDatabase) -> dict[str, Any]:
+    interests = database.list_team_interest_keywords()
+    active_cases = radar_relevance_evaluation_cases_for_interests(
+        [str(interest.get("keyword") or "") for interest in interests]
+    )
+    evaluation = evaluate_radar_relevance_cases(
+        cases=active_cases,
+        scorer=build_team_radar_scorer(interests),
+        check_expected_keywords=False,
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_relevance_evaluation",
+        "scorer": "team_interests",
+        "interest_count": len(interests),
+        "interests": interests,
+        "case_scope": "active_team_interests",
+        "case_count": len(active_cases),
+        "evaluation": evaluation,
+    }
+
+
+def review_literature_radar_queue_usefulness_cli(
+    database: TeamResearchDatabase,
+    *,
+    run_id: str = "",
+    usefulness: str,
+    reviewer: str,
+    note: str = "",
+    limit: int = 20,
+    freshness_max_age_hours: int = 36,
+    triage_action: str = "",
+    recent_days: int = 0,
+) -> dict[str, Any]:
+    selected_limit = max(1, int(limit or 20))
+    selected_freshness = max(1, int(freshness_max_age_hours or 36))
+    selected_recent_days = max(0, int(recent_days or 0))
+    settings_payload = build_literature_radar_settings_payload(database)
+    primary_source_coverage = (
+        settings_payload.get("primary_source_coverage")
+        if isinstance(settings_payload.get("primary_source_coverage"), dict)
+        else {}
+    )
+    queue_payload = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        freshness_max_age_hours=selected_freshness,
+        triage_action=triage_action,
+        recent_days=selected_recent_days,
+        configured_primary_source_coverage=primary_source_coverage,
+    )
+    latest_run = queue_payload.get("latest_run") if isinstance(queue_payload.get("latest_run"), dict) else {}
+    selected_run_id = str(run_id or latest_run.get("id") or "").strip()
+    if not selected_run_id:
+        raise ValueError("No Literature Radar run is available to review.")
+    review = database.add_literature_radar_queue_review(
+        run_id=selected_run_id,
+        usefulness=usefulness,
+        reviewer=reviewer,
+        note=note,
+        queue_counts=queue_payload.get("review_counts") if isinstance(queue_payload.get("review_counts"), dict) else {},
+        queue_context=team_radar_queue_review_context(
+            queue_payload,
+            limit=selected_limit,
+            triage_action=triage_action,
+            recent_days=selected_recent_days,
+        ),
+    )
+    updated_queue = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        freshness_max_age_hours=selected_freshness,
+        triage_action=triage_action,
+        recent_days=selected_recent_days,
+        configured_primary_source_coverage=primary_source_coverage,
+    )
+    status_payload = build_literature_radar_status_payload(
+        database,
+        limit=selected_limit,
+        freshness_max_age_hours=selected_freshness,
+        triage_action=triage_action,
+        recent_days=selected_recent_days,
+        relevance_evaluation=build_team_literature_radar_relevance_evaluation_payload(database).get("evaluation"),
+    )
+    return {
+        "success": True,
+        "kind": "team_literature_radar_queue_review",
+        "review": review,
+        "queue": updated_queue,
+        "thin_mvp_readiness": status_payload.get("thin_mvp_readiness")
+        if isinstance(status_payload.get("thin_mvp_readiness"), dict)
+        else {},
+        "mvp_readiness": status_payload.get("mvp_readiness")
+        if isinstance(status_payload.get("mvp_readiness"), dict)
+        else {},
+    }
+
+
+def print_radar_relevance_evaluation(result: dict[str, Any]) -> None:
+    print("Team Literature Radar Relevance Evaluation")
+    evaluation = result.get("evaluation") if isinstance(result.get("evaluation"), dict) else {}
+    if evaluation:
+        print(format_radar_relevance_evaluation(evaluation))
+        for case in evaluation.get("cases") or []:
+            if not isinstance(case, dict):
+                continue
+            status = "PASS" if case.get("passed") else "FAIL"
+            print(
+                f"- {status} {case.get('id')}: "
+                f"{case.get('actual_label')} score={int(case.get('actual_score') or 0)}"
+            )
+            for failure in case.get("failures") or []:
+                print(f"  ! {failure}")
+
+
 def print_radar_status(result: dict[str, Any]) -> None:
     print("Team Literature Radar Status")
+    thin_mvp_readiness = (
+        result.get("thin_mvp_readiness") if isinstance(result.get("thin_mvp_readiness"), dict) else {}
+    )
+    if thin_mvp_readiness:
+        print(format_radar_thin_mvp_readiness(thin_mvp_readiness))
+    for line in format_radar_daily_workflow(
+        result.get("daily_workflow") if isinstance(result.get("daily_workflow"), dict) else {}
+    ):
+        print(line)
+    mvp_readiness = result.get("mvp_readiness") if isinstance(result.get("mvp_readiness"), dict) else {}
+    if mvp_readiness:
+        print(format_radar_mvp_readiness(mvp_readiness).replace("MVP readiness:", "Beta/backlog readiness:"))
+        for line in format_radar_mvp_readiness_checklist(mvp_readiness):
+            print(f"- {line}")
+    mvp_setup_actions = result.get("mvp_setup_actions") if isinstance(result.get("mvp_setup_actions"), dict) else {}
+    for line in format_radar_mvp_setup_action_plan(mvp_setup_actions):
+        print(line.replace("MVP setup actions:", "Beta/backlog setup actions:"))
+    for line in format_radar_mvp_setup_env_block(mvp_setup_actions):
+        print(line.replace("MVP setup env block:", "Beta/backlog setup env block:"))
+    setup_env_audit = result.get("mvp_setup_env_audit") if isinstance(result.get("mvp_setup_env_audit"), dict) else {}
+    if setup_env_audit:
+        print(format_radar_mvp_setup_env_audit(setup_env_audit).replace("MVP setup env audit:", "Beta/backlog setup env audit:"))
+    operations_readiness = result.get("operations_readiness") if isinstance(result.get("operations_readiness"), dict) else {}
+    if operations_readiness:
+        print(format_radar_operations_readiness(operations_readiness))
+    guardrail_readiness = result.get("guardrail_readiness") if isinstance(result.get("guardrail_readiness"), dict) else {}
+    if guardrail_readiness:
+        print(format_radar_guardrail_readiness(guardrail_readiness))
+    schema_migrations = result.get("schema_migrations") if isinstance(result.get("schema_migrations"), dict) else {}
+    if schema_migrations:
+        print(
+            "Schema migrations: "
+            f"status={schema_migrations.get('status') or 'unknown'} "
+            f"version={int(schema_migrations.get('current_version') or 0)}/"
+            f"{int(schema_migrations.get('expected_version') or 0)} "
+            f"applied={int(schema_migrations.get('applied_count') or 0)} "
+            f"pending={int(schema_migrations.get('pending_count') or 0)}"
+        )
+    source_validation_commands = (
+        result.get("source_validation_commands")
+        if isinstance(result.get("source_validation_commands"), dict)
+        else {}
+    )
+    for line in format_radar_source_validation_commands(source_validation_commands):
+        print(line)
+    source_validation_evidence = (
+        result.get("source_validation_evidence")
+        if isinstance(result.get("source_validation_evidence"), dict)
+        else {}
+    )
+    if source_validation_evidence:
+        print(format_radar_source_validation_evidence(source_validation_evidence))
     settings = result.get("settings") if isinstance(result.get("settings"), dict) else {}
     queue = result.get("queue") if isinstance(result.get("queue"), dict) else {}
     if settings:
@@ -860,6 +1348,43 @@ def print_radar_status(result: dict[str, Any]) -> None:
     links = result.get("links") if isinstance(result.get("links"), dict) else {}
     if links:
         print(f"Status JSON: {links.get('status_json') or '/radar/status.json?limit=20'}")
+
+
+def print_radar_source_validation(result: dict[str, Any]) -> None:
+    print("Team Literature Radar Source Validation")
+    print(f"Mode: {'live' if result.get('live') else 'dry-run'}")
+    plan = result.get("source_validation_plan") if isinstance(result.get("source_validation_plan"), dict) else {}
+    if plan:
+        print(format_radar_source_validation_plan(plan))
+    guidance = result.get("source_validation_guidance") if isinstance(result.get("source_validation_guidance"), dict) else {}
+    if guidance:
+        print(format_radar_source_validation_guidance(guidance))
+    validation = result.get("source_validation_result") if isinstance(result.get("source_validation_result"), dict) else {}
+    if validation:
+        print(format_radar_source_validation_result(validation))
+        result_guidance = (
+            validation.get("result_guidance")
+            if isinstance(validation.get("result_guidance"), dict)
+            else {}
+        )
+        if result_guidance:
+            print(format_radar_source_validation_result_guidance(result_guidance))
+            for line in format_radar_source_validation_result_actions(result_guidance):
+                print(line)
+        for check in validation.get("checks") or []:
+            if not isinstance(check, dict):
+                continue
+            detail = (
+                f"- {check.get('source_id')}: {check.get('status')} "
+                f"samples={int(check.get('sample_count') or 0)}"
+            )
+            message = str(check.get("message") or "").strip()
+            if message:
+                detail += f" - {message}"
+            print(detail)
+    source_stats = result.get("source_stats") if isinstance(result.get("source_stats"), list) else []
+    if source_stats:
+        print(f"Source stats: {format_radar_source_stats(source_stats)}")
 
 
 def format_radar_settings_venue_profiles(summary: dict[str, Any]) -> str:
@@ -939,6 +1464,10 @@ def saved_radar_list(settings: dict[str, Any], key: str) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [part.strip() for part in re.split(r"[\n, ]+", str(value)) if part.strip()]
+
+
+def radar_env_list(name: str) -> list[str]:
+    return [part for part in re.split(r"[\s,]+", os.environ.get(name, "").strip()) if part]
 
 
 def saved_radar_official_pages(settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1025,47 +1554,142 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         "summarize": args.summarize or bool(saved_defaults.get("summarize")) or summary_provider == "openrouter",
         "summary_provider": summary_provider,
         "summary_limit": args.summary_limit,
+        "summary_min_score": args.summary_min_score
+        if args.summary_min_score is not None
+        else saved_radar_int(
+            saved_defaults,
+            "summary_min_score",
+            RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+        ),
         "cache_pdfs": args.cache_pdfs or saved_radar_bool(saved_defaults, "cache_pdfs"),
         "pdf_cache_dir": str(args.pdf_cache_dir or saved_radar_path(saved_defaults, "pdf_cache_dir") or ""),
         "pdf_cache_max_bytes": args.pdf_cache_max_bytes
         or saved_radar_int(saved_defaults, "pdf_cache_max_bytes", 50 * 1024 * 1024),
-        "source_contact_email": args.source_contact_email or saved_source_contact_email or "",
+        "source_contact_email": radar_config_value(args.source_contact_email)
+        or radar_config_value(saved_source_contact_email)
+        or "",
         "semantic_scholar_api_key_configured": bool(
-            args.semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+            radar_config_value(args.semantic_scholar_api_key) or radar_config_value(os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
         ),
         "conference_year": args.conference_year or saved_radar_optional_int(saved_defaults, "conference_year") or "",
         "usenix_security_cycles": args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles"),
         "include_openreview_unaccepted": args.include_openreview_unaccepted
         or saved_radar_bool(saved_defaults, "include_openreview_unaccepted"),
         "semantic_scholar_author_ids": args.semantic_scholar_author_id
-        or saved_radar_list(saved_defaults, "semantic_scholar_author_ids"),
-        "dblp_author_pids": args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids"),
-        "openalex_author_ids": args.openalex_author_id or saved_radar_list(saved_defaults, "openalex_author_ids"),
-        "seed_paper_ids": args.seed_paper_id or saved_radar_list(saved_defaults, "seed_paper_ids"),
+        or saved_radar_list(saved_defaults, "semantic_scholar_author_ids")
+        or radar_env_list("RADAR_AUTHOR_IDS"),
+        "dblp_author_pids": args.dblp_author_pid
+        or saved_radar_list(saved_defaults, "dblp_author_pids")
+        or radar_env_list("RADAR_DBLP_AUTHOR_PIDS"),
+        "openalex_author_ids": args.openalex_author_id
+        or saved_radar_list(saved_defaults, "openalex_author_ids")
+        or radar_env_list("RADAR_OPENALEX_AUTHOR_IDS"),
+        "arxiv_categories": getattr(args, "arxiv_category", [])
+        or saved_radar_list(saved_defaults, "arxiv_categories")
+        or radar_env_list("RADAR_ARXIV_CATEGORIES"),
+        "seed_paper_ids": args.seed_paper_id
+        or saved_radar_list(saved_defaults, "seed_paper_ids")
+        or radar_env_list("RADAR_SEED_PAPER_IDS"),
         "negative_seed_paper_ids": args.negative_seed_paper_id
-        or saved_radar_list(saved_defaults, "negative_seed_paper_ids"),
+        or saved_radar_list(saved_defaults, "negative_seed_paper_ids")
+        or radar_env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
         "openreview_invitations": args.openreview_invitation
-        or saved_radar_list(saved_defaults, "openreview_invitations"),
+        or saved_radar_list(saved_defaults, "openreview_invitations")
+        or radar_env_list("RADAR_OPENREVIEW_INVITATIONS")
+        or radar_env_list("OPENREVIEW_INVITATIONS"),
         "openreview_venue_profiles": args.openreview_venue_profile
-        or saved_radar_list(saved_defaults, "openreview_venue_profiles"),
-        "venue_profiles": args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles"),
+        or saved_radar_list(saved_defaults, "openreview_venue_profiles")
+        or radar_env_list("RADAR_OPENREVIEW_VENUES"),
+        "venue_profiles": args.venue_profile
+        or saved_radar_list(saved_defaults, "venue_profiles")
+        or radar_env_list("RADAR_DBLP_VENUES"),
         "official_accepted_pages": parse_official_accepted_page_specs(args.official_accepted_page)
         or saved_radar_official_pages(saved_defaults),
     }
-    if args.openalex_mailto:
-        settings["openalex_mailto"] = args.openalex_mailto
-    if args.crossref_mailto:
-        settings["crossref_mailto"] = args.crossref_mailto
-    if args.unpaywall_email:
-        settings["unpaywall_email"] = args.unpaywall_email
+    if radar_config_value(args.openalex_mailto):
+        settings["openalex_mailto"] = radar_config_value(args.openalex_mailto)
+    if radar_config_value(args.crossref_mailto):
+        settings["crossref_mailto"] = radar_config_value(args.crossref_mailto)
+    if radar_config_value(args.unpaywall_email):
+        settings["unpaywall_email"] = radar_config_value(args.unpaywall_email)
     settings = apply_team_radar_source_preset(settings, selected_source_preset)
+    if settings.get("seed_paper_ids") and not any(source in settings["sources"] for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
+        settings["sources"].append("semantic_scholar_recommendations")
+    if settings.get("semantic_scholar_author_ids") and "semantic_scholar_authors" not in settings["sources"]:
+        settings["sources"].append("semantic_scholar_authors")
+    if settings.get("dblp_author_pids") and "dblp_authors" not in settings["sources"]:
+        settings["sources"].append("dblp_authors")
+    if settings.get("openalex_author_ids") and "openalex_authors" not in settings["sources"]:
+        settings["sources"].append("openalex_authors")
+    if settings.get("venue_profiles") and not any(source in settings["sources"] for source in {"dblp_venues", "openalex_venues"}):
+        settings["sources"].append("dblp_venues")
     if settings.get("openreview_invitations") and "openreview" not in settings["sources"]:
         settings["sources"].append("openreview")
     if settings.get("openreview_venue_profiles") and "openreview_venues" not in settings["sources"]:
         settings["sources"].append("openreview_venues")
     if settings.get("official_accepted_pages") and "official_accepted_pages" not in settings["sources"]:
         settings["sources"].append("official_accepted_pages")
+    if "arxiv" in settings["sources"] and not settings.get("arxiv_categories"):
+        settings["arxiv_categories"] = list(DEFAULT_ARXIV_CATEGORIES)
     return settings
+
+
+def build_team_literature_radar_source_validation_payload(
+    database: TeamResearchDatabase,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    settings = radar_settings_from_cli_args(database, args)
+    settings_payload = build_literature_radar_settings_payload(database, settings=settings)
+    plan = settings_payload.get("source_validation_plan") if isinstance(settings_payload, dict) else {}
+    guidance = settings_payload.get("source_validation_guidance") if isinstance(settings_payload, dict) else {}
+    source_stats: list[dict[str, Any]] = []
+    source_errors: list[dict[str, Any]] = []
+    check_results: list[dict[str, Any]] = []
+    live = bool(getattr(args, "live", False))
+    validation_max_results = max(1, int(getattr(args, "validation_max_results", 1) or 1))
+    query_terms = list(getattr(args, "query_term", []) or []) or team_radar_query_terms(database)
+    collection_config = radar_settings_collection_config(settings)
+    if live:
+        collect_team_radar_candidates(
+            sources=list(settings.get("sources") or []),
+            query_terms=query_terms,
+            max_results=validation_max_results,
+            semantic_scholar_api_key=getattr(args, "semantic_scholar_api_key", None),
+            seed_paper_ids=list(settings.get("seed_paper_ids") or []) or None,
+            negative_seed_paper_ids=list(settings.get("negative_seed_paper_ids") or []) or None,
+            openalex_mailto=str(settings.get("openalex_mailto") or settings.get("source_contact_email") or "") or None,
+            openreview_invitations=list(settings.get("openreview_invitations") or []) or None,
+            crossref_mailto=str(settings.get("crossref_mailto") or settings.get("source_contact_email") or "") or None,
+            unpaywall_email=str(settings.get("unpaywall_email") or settings.get("source_contact_email") or "") or None,
+            semantic_scholar_author_ids=list(settings.get("semantic_scholar_author_ids") or []) or None,
+            dblp_author_pids=list(settings.get("dblp_author_pids") or []) or None,
+            openalex_author_ids=list(settings.get("openalex_author_ids") or []) or None,
+            arxiv_categories=list(settings.get("arxiv_categories") or []) or None,
+            conference_year=settings.get("conference_year") or None,
+            dblp_venue_profiles=list(settings.get("venue_profiles") or []) or None,
+            openreview_venue_profiles=list(settings.get("openreview_venue_profiles") or []) or None,
+            openreview_accepted_only=not bool(settings.get("include_openreview_unaccepted")),
+            usenix_security_cycles=list(settings.get("usenix_security_cycles") or []) or None,
+            official_accepted_pages=list(settings.get("official_accepted_pages") or []) or None,
+            source_errors=source_errors,
+            source_stats=source_stats,
+            collection_config=collection_config,
+        )
+        check_results = radar_source_validation_results_from_stats(source_stats, source_errors)
+    result = build_radar_source_validation_result(plan, check_results)
+    return {
+        "success": True,
+        "kind": "team_literature_radar_source_validation",
+        "live": live,
+        "validation_max_results": validation_max_results,
+        "query_terms": query_terms,
+        "settings": settings_payload,
+        "source_validation_plan": plan,
+        "source_validation_guidance": guidance if isinstance(guidance, dict) else {},
+        "source_validation_result": result,
+        "source_stats": source_stats,
+        "source_errors": source_errors,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1147,6 +1771,13 @@ def main(argv: list[str] | None = None) -> int:
             summarize=args.summarize or bool(saved_defaults.get("summarize")) or summary_provider == "openrouter",
             summary_provider=summary_provider,
             summary_limit=args.summary_limit,
+            summary_min_score=args.summary_min_score
+            if args.summary_min_score is not None
+            else saved_radar_int(
+                saved_defaults,
+                "summary_min_score",
+                RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+            ),
             import_results=args.import_results,
             import_limit=args.import_limit,
             min_import_score=args.min_score,
@@ -1165,6 +1796,10 @@ def main(argv: list[str] | None = None) -> int:
             or saved_source_contact_email,
             openalex_author_ids=args.openalex_author_id
             or saved_radar_list(saved_defaults, "openalex_author_ids")
+            or None,
+            arxiv_categories=args.arxiv_category
+            or saved_radar_list(saved_defaults, "arxiv_categories")
+            or radar_env_list("RADAR_ARXIV_CATEGORIES")
             or None,
             openreview_invitations=args.openreview_invitation
             or saved_radar_list(saved_defaults, "openreview_invitations")
@@ -1235,12 +1870,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "radar-queue":
+        settings_payload = build_literature_radar_settings_payload(database)
         result = build_team_literature_radar_queue_payload(
             database,
             limit=args.limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             triage_action=args.triage_action,
             recent_days=args.recent_days,
+            configured_primary_source_coverage=settings_payload.get("primary_source_coverage")
+            if isinstance(settings_payload, dict)
+            else {},
         )
         if args.json:
             print_json(result)
@@ -1264,6 +1903,39 @@ def main(argv: list[str] | None = None) -> int:
             print_radar_queue_import(result)
         return 0
 
+    if args.command == "radar-review-queue":
+        try:
+            result = review_literature_radar_queue_usefulness_cli(
+                database,
+                run_id=args.run_id,
+                usefulness=args.usefulness,
+                reviewer=args.reviewer,
+                note=args.note,
+                limit=args.limit,
+                freshness_max_age_hours=args.freshness_max_age_hours,
+                triage_action=args.triage_action,
+                recent_days=args.recent_days,
+            )
+        except ValueError as error:
+            message = str(error)
+            payload = {
+                "success": False,
+                "kind": "team_literature_radar_queue_review",
+                "reason": "queue_review_unavailable",
+                "run_id": args.run_id or "",
+                "error": message,
+            }
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"Radar queue review failed: {message}", file=sys.stderr)
+            return 1
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_queue_review(result)
+        return 0
+
     if args.command == "radar-status":
         args.use_saved_defaults = not args.ignore_saved_defaults
         result = build_literature_radar_status_payload(
@@ -1274,8 +1946,13 @@ def main(argv: list[str] | None = None) -> int:
             settings=radar_settings_from_cli_args(database, args),
             triage_action=args.triage_action,
             recent_days=args.recent_days,
+            source_validation_result=read_source_validation_result(args.source_validation_json),
+            source_validation_path=args.source_validation_json,
+            relevance_evaluation=read_relevance_evaluation(args.relevance_evaluation_json) or None,
         )
-        if args.json:
+        if args.setup_env:
+            print("\n".join(format_radar_mvp_setup_env_file(result.get("mvp_setup_actions"), product="team")))
+        elif args.json:
             print_json(result)
         else:
             print_radar_status(result)
@@ -1292,13 +1969,44 @@ def main(argv: list[str] | None = None) -> int:
             print_radar_settings(result)
         return 0
 
+    if args.command == "radar-evaluate-relevance":
+        result = build_team_literature_radar_relevance_evaluation_payload(database)
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_relevance_evaluation(result)
+        return 0
+
+    if args.command == "radar-validate-sources":
+        result = build_team_literature_radar_source_validation_payload(database, args)
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_source_validation(result)
+        return 0
+
     if args.command == "radar-review":
-        record = database.mark_literature_radar_paper_review(
-            args.dedupe_key,
-            status=args.status,
-            actor=args.actor,
-            reason=args.reason,
-        )
+        try:
+            record = database.mark_literature_radar_paper_review(
+                args.dedupe_key,
+                status=args.status,
+                actor=args.actor,
+                reason=args.reason,
+            )
+        except KeyError as error:
+            message = str(error).strip("'")
+            payload = {
+                "success": False,
+                "kind": "team_literature_radar_paper_review",
+                "reason": "paper_not_found",
+                "dedupe_key": args.dedupe_key,
+                "error": message,
+            }
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"Radar paper review failed: {message}", file=sys.stderr)
+            return 1
         if args.json:
             print_json(record)
         else:
@@ -1321,9 +2029,20 @@ def main(argv: list[str] | None = None) -> int:
         run = database.get_literature_radar_run(args.run_id)
         if not run:
             selected = args.run_id or "latest"
-            raise KeyError(f"Unknown Literature Radar run: {selected}")
+            message = f"Unknown Literature Radar run: {selected}"
+            payload = {
+                "success": False,
+                "reason": "run_not_found",
+                "run_id": args.run_id or "",
+                "error": message,
+            }
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"Radar report failed: {message}", file=sys.stderr)
+            return 1
         recommendations = database.list_literature_radar_recommendations(run["id"])
-        result = {"run": run, "recommendations": recommendations}
+        result = {"success": True, "run": run, "recommendations": recommendations}
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(run.get("report") or "", encoding="utf-8")
@@ -1334,7 +2053,53 @@ def main(argv: list[str] | None = None) -> int:
             print_radar_report(run, recommendations)
         return 0
 
+    if args.command == "radar-backfill-pipeline":
+        try:
+            result = database.backfill_literature_radar_run_pipeline_trace(
+                args.run_id,
+                force=args.force,
+            )
+        except KeyError as error:
+            message = str(error).strip("'")
+            payload = {
+                "success": False,
+                "updated": False,
+                "reason": "run_not_found",
+                "run_id": args.run_id or "",
+                "error": message,
+            }
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"Radar pipeline backfill failed: {message}", file=sys.stderr)
+            return 1
+        pipeline_summary = radar_pipeline_trace_summary(result.get("pipeline_trace"))
+        payload = {
+            "success": True,
+            "updated": bool(result.get("updated")),
+            "reason": result.get("reason") or "",
+            "run_id": (result.get("run") or {}).get("id") or "",
+            "collected_count": int(result.get("collected_count") or 0),
+            "recommendation_count": int(result.get("recommendation_count") or 0),
+            "pipeline_summary": pipeline_summary,
+            "backfill": (result.get("run") or {}).get("pipeline_trace_backfill") or {},
+        }
+        if args.json:
+            print_json(payload)
+        else:
+            print(
+                "Radar pipeline backfill: "
+                f"run={payload['run_id']} updated={payload['updated']} reason={payload['reason']}"
+            )
+            print(
+                f"Records: collected={payload['collected_count']} "
+                f"recommendations={payload['recommendation_count']}"
+            )
+            print(format_radar_pipeline_summary(pipeline_summary))
+        return 0
+
     if args.command == "radar-brief":
+        settings_payload = build_literature_radar_settings_payload(database)
         result = build_team_literature_radar_brief_payload(
             database,
             days=args.days,
@@ -1342,6 +2107,9 @@ def main(argv: list[str] | None = None) -> int:
             run_limit=args.run_limit,
             freshness_max_age_hours=args.freshness_max_age_hours,
             queue_recent_days=args.queue_recent_days,
+            configured_primary_source_coverage=settings_payload.get("primary_source_coverage")
+            if isinstance(settings_payload, dict)
+            else {},
         )
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

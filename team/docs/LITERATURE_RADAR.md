@@ -72,16 +72,20 @@ The page is review-first:
    or dismiss with an optional note, add one paper to the library, or import the
    visible queue above a chosen score threshold without starting collectors or
    AI;
-4. the Radar Papers page exposes deduplicated collected-paper history, including
+4. after scanning the queue, a team member may optionally record queue-level
+   usefulness as useful, partly useful, not useful, or needs review with a short
+   note. This gives the system feedback about whether the daily queue is
+   helping research work without making review a mandatory responsibility;
+5. the Radar Papers page exposes deduplicated collected-paper history, including
    papers that have not been imported, and can promote a stored paper into the
    Team library;
-5. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
+6. a team member filters the Radar Papers page by `unreviewed`, `watch`, or
    `dismissed`, uses the review counts to see queue size, and marks Radar
    papers without importing them into the main library;
-6. a team member clicks `Add to Library` for one paper, or `Import ... Candidates`
+7. a team member clicks `Add to Library` for one paper, or `Import ... Candidates`
    on the Queue page for the visible high-priority lane, only for papers worth
    tracking;
-7. imported papers appear in Latest Papers with the normal tag, relevance,
+8. imported papers appear in Latest Papers with the normal tag, relevance,
    importance, comment, soft-remove, and recovery controls, plus a compact
    Radar insight block with the stored summary, relevance reason, matched
    interests, relationship to existing team context, release date, current
@@ -156,19 +160,32 @@ queue review, and weekly briefs. When source metadata includes publication or
 note timestamps, Radar stores a normalized `release_date`, shows it in reports,
 and uses it to prefer newer papers when relevance scores tie.
 The main Latest Papers page repeats those queue counts in a compact Radar Queue
-with the current priority candidates. Each candidate shows the same signal
-lines as the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the
-answer to "why should the team read this?" consistent across ad hoc runs, daily
-queue review, and weekly briefs. The queue also shows paper links, PDF
+with the current priority candidates. It includes the same compact `Daily
+guidance` row as the dedicated queue page, so the first daily page shows the
+next lane, active count, review counts, PDF availability, and freshness before a
+team member opens the full queue. Each candidate shows the same signal lines as
+the queue: `Signal`, `Why`, `Context`, and `Matched`. This keeps the answer to
+"why should the team read this?" consistent across ad hoc runs, daily queue
+review, and weekly briefs. The queue also shows paper links, PDF
 policy/access-kind status, stored review notes, the stored recommended action,
 the shared triage hint, triage lane chips, plus watch, dismiss, and
 add-to-library actions that return to the daily page.
 For focused daily review, `/radar/queue?limit=20` shows the same active queue as
 a dedicated page and is available from the Team Side-Brain sidebar as `Queue`.
+The top of that page includes a compact `Daily guidance` row derived from stored
+queue state: active candidate count, current next lane, unreviewed/watch counts,
+downloadable PDF count, and latest-run freshness. A neighboring `Source health`
+row shows the latest source-health next action, such as expanding primary
+sources or inspecting source coverage. This keeps the daily review surface
+focused on the current action without requiring team members to inspect queue
+JSON first.
 Use the queue's `Recent` chips, `/radar/queue?recent_days=7`, or
 `radar-queue --recent-days 7` to narrow daily review to papers released or
 newly seen inside a recent window while leaving the stored history intact.
-Its actions return to that queue. The queue-level import form promotes the
+Its actions return to that queue and preserve the active limit, triage lane,
+and recent-window filters after watch, dismiss, clear, or add-to-library
+actions. The weekly/daily Brief page also preserves its queue recent-window
+preview after inline review and import actions. The queue-level import form promotes the
 currently visible queue records into Latest Papers, skips candidates below the
 chosen score threshold, and reuses the same per-paper dedupe, provenance, audit,
 and library-entry logic as one-click `Add to Library`. `/radar/queue.json` keeps
@@ -179,17 +196,27 @@ Literature Radar activity. The `/radar` page shows a compact Recent Activity
 feed so team members can see the latest triage, import, and feedback decisions
 without opening the database.
 If the latest scheduled run produced no stored papers but did fail or complete,
-the same panel still shows latest-run health, counts, and source-error status so
-an empty queue is not confused with a healthy run that simply found nothing.
+the same panel still shows latest-run health, counts, source-error status, and
+the shared `health_action` reason/message so an empty queue is not confused
+with a healthy run that simply found nothing.
 The same active queue is available as local JSON at `/radar/queue.json?limit=20`
 for self-hosted scripts, dashboards, or future notifications. That endpoint only
 reads stored Radar state; it does not collect sources, download PDFs, or call AI.
 The payload includes `review_counts`, active-queue `access_summary`,
-`provenance_summary`, `triage_summary`,
+`provenance_summary`, `triage_summary`, structured `daily_guidance` and
+`daily_source_health`, structured `daily_review_plan`,
 `latest_run` health, freshness, and source stats, the active paper records,
 persisted signal lines, normalized identifiers, source link maps, best paper
 links, `triage_hint` reviewer guidance, and links back to the HTML review
-surfaces.
+surfaces. `daily_guidance` is the shared Team/Personal queue contract behind
+the rendered Daily guidance row; it records the next action source, active
+candidate count, unreviewed/watch counts, downloadable count, top triage lane,
+and freshness status. `daily_source_health` is the shared source-health
+next-action contract behind the rendered Source health row; it records the
+latest source-health action, reason, coverage/readiness/OA status, and affected
+sources. `daily_review_plan` is the shared "start here" contract
+behind the rendered Daily plan row; it names the first paper to handle, the
+suggested action, score, release date, reason, and follow-up steps.
 Completed runs also store a recommendation-level `provenance_summary`, exposed
 again under `latest_run.provenance_summary` for dashboards and health checks.
 Stored daily or weekly briefs are also available as local JSON at
@@ -197,11 +224,13 @@ Stored daily or weekly briefs are also available as local JSON at
 the HTML brief and CLI `radar-brief --json`; it does not collect sources,
 download PDFs, or call AI. The payload includes the Markdown brief, `latest_run`
 health and freshness, limits, run count, review counts, the active queue preview
-with PDF access summary, structured `source_readiness`, `pipeline_summary`,
+with PDF access summary, `daily_guidance`, `daily_source_health`,
+`daily_review_plan`, structured `source_readiness`, `pipeline_summary`,
 `oa_enrichment`, aggregate `provenance_summary`, recent team Radar activity from
 the audit log, and links back to the Team Radar pages. The Markdown brief
 includes source readiness, pipeline trace, OA enrichment readiness, an overall
-triage plan, per-paper triage next-step lines, and a Team Activity section when
+triage plan, the same Source Health and Daily Review Plan start-here sections as
+the queue, per-paper triage next-step lines, and a Team Activity section when
 watch, dismiss, clear, or import decisions occurred inside the requested window.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
 recommendations; selecting references or citations uses the same positive seed
@@ -233,19 +262,36 @@ by Personal Radar and the CLI.
 The Radar Profile block also shows pre-run source readiness for the saved form
 settings. It flags missing required inputs such as seed paper IDs or OpenReview
 invitation IDs before a team member starts a run, and it shows recommended
-configuration such as OpenAlex or Crossref contact mail. The same block shows
-read-only Interest Match Terms for the current team sliders, including expanded
-shared-core aliases that match a paper and warning terms that dampen relevance,
-so team members can see what the run will consider relevant before spending API
-or AI calls.
+configuration such as OpenAlex or Crossref contact mail. It also shows
+primary-source coverage for the objective's required families, so saved settings
+cannot silently omit arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref,
+OpenReview, USENIX Security, NDSS, or Unpaywall OA enrichment. The active Team
+MVP target is the `thin_mvp_readiness` daily queue loop. The stricter
+`mvp_readiness` payload remains for compatibility, but the web UI presents it
+as beta/backlog readiness so source coverage, live validation, and operations
+hardening do not redefine the current MVP. It also shows a
+no-network live validation plan with the next setup action, API-source count,
+official-page count, blocked checks, and warning checks; this is a preflight
+checklist for source validation, not a metadata collection run. The same block
+shows read-only Interest Match Terms for the current team sliders, including
+expanded shared-core aliases that match a paper and warning terms that dampen
+relevance, so team members can see what the run will consider relevant before
+spending API or AI calls.
 The same read-only settings and readiness contract is available as local JSON at
 `/radar/settings.json`, so automation can verify source selection and readiness
 without starting collectors, downloading PDFs, or calling AI. The JSON also
 includes the current Team Interest scoring profile and a compact
 `scoring_profile_summary`, so operators can confirm which weighted interests
 will drive relevance before a scheduled run spends API calls. It also reports
+`primary_source_coverage` for required-family coverage and
 `oa_enrichment` for Unpaywall so operators can see whether legal OA PDF/license
-resolution is ready for DOI-capable source selections. When DBLP,
+resolution is ready for DOI-capable source selections, plus
+`source_validation_plan` with `network_performed=false` so automation can decide
+whether to configure missing source inputs, add recommended contact/API details,
+or proceed to a live collector run. `source_validation_guidance` turns that plan
+into an operator checklist with blocked required inputs, API-key/contact
+warnings, the recommended one-result live validation sample size, and compact
+`Next:` action lines on the Radar Profile page. When DBLP,
 OpenAlex, or OpenReview venue profile selectors are configured, the payload also
 includes `venue_profile_summary` with the expanded top-conference profiles that
 will be queried. The DBLP/OpenAlex section includes `required_coverage` so the
@@ -253,7 +299,11 @@ Radar page, CLI settings output, and automation can show how many required
 security, systems, PL/memory-safety, and software-engineering top venues are
 covered by the current selectors. Optional trend-signal sources such as Hugging
 Face Papers are reported in `trend_signal_options` as read-only, not-yet-runnable
-signals rather than authoritative bibliographic collectors. The `links` block includes `/radar`, `/radar/queue?limit=20`,
+signals rather than authoritative bibliographic collectors. Queue evidence
+readiness also verifies that each recommendation carries an existing-work or
+context relation plus the legal PDF-policy record, including source URL, access
+date, OA status, license field, download/no-download reason, and cached local
+path when a PDF was downloaded. The `links` block includes `/radar`, `/radar/queue?limit=20`,
 `/radar/queue.json?limit=20`, and `/radar/brief.json?days=7&limit=20` so local
 dashboards and operators can jump from readiness checks to the daily review
 surface.
@@ -266,6 +316,10 @@ The current runnable Team entry point is:
 python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --output team/logs/literature-radar.md
 python team/research_cli.py radar-settings
 python team/research_cli.py radar-settings --json
+python team/research_cli.py radar-validate-sources --use-saved-defaults
+python team/research_cli.py radar-validate-sources --use-saved-defaults --live --json
+python team/research_cli.py radar-evaluate-relevance
+python team/research_cli.py radar-evaluate-relevance --json
 ```
 
 `radar-settings` is a read-only preflight command. It prints the saved Team
@@ -273,10 +327,129 @@ Radar defaults, selected sources, active Team Interest scoring profile, source
 policy, expanded venue profile summary, and pre-run readiness without starting
 collectors, downloading PDFs, or calling AI. Use it before enabling a
 cron/systemd job or after changing `/radar` defaults, Team Interest weights, or
-venue selectors.
+venue selectors. The default direct source set includes OpenReview venue
+profiles with ICLR, NeurIPS, and ICML accepted-paper profiles; Unpaywall still
+requires contact email before legal OA/PDF enrichment is considered ready.
+`radar-evaluate-relevance` is also read-only and offline. It runs the shared
+golden relevance cases that match the current Team Interest weights, covering
+active system-security, memory-safety, agentic-security, and negative/noise
+cases without forcing inactive topics to pass. Use it after changing
+`/interests` weights or shared match/dampen terms, before spending source API
+or AI calls.
+`radar-validate-sources` uses the same saved/default settings and turns the
+preflight plan into a source-validation result. By default it is a dry run: it
+does not call source APIs and reports pending or blocked checks from the plan.
+Passing `--live` performs a small metadata-only validation through the existing
+collectors, using `--validation-max-results 1` by default, then reports
+succeeded, failed, blocked, or skipped source checks. It does not import papers,
+download PDFs, or call AI. The output also prints validation guidance for
+missing required source inputs, Semantic Scholar API keys, OpenAlex/Crossref
+contact mail, and Unpaywall OA-enrichment contact setup. A source can be
+reported as `skipped` when live validation was run but the source was not called
+because recommended setup such as Unpaywall email/contact is missing. When live validation
+does fail, the result includes `result_guidance` that classifies likely rate
+limits, transient service-unavailable responses, auth/access failures, network
+issues, parser/response-shape failures, blocked config, skipped samples, and
+successful-but-empty zero-sample responses into concrete next actions. The text
+output prints compact `Next:` lines for those actions so operators do not need
+to inspect JSON for the immediate fix. JSON settings, status, and validation
+payloads expose the same strings as `action_lines` for dashboards and scripts.
 `radar-status` is also read-only. It combines the saved-defaults settings
 preflight with the latest stored queue health in one payload for server checks,
-dashboards, and status scripts without collecting sources.
+dashboards, and status scripts without collecting sources. The payload includes
+`thin_mvp_readiness`, the daily-use MVP signal for the narrow paper-review
+loop: runnable sources, Team Interests, a recent run, a visible queue, and
+enough reason/source/PDF-policy evidence to review candidates. Team status also
+exposes optional queue-level usefulness feedback when it exists, so the system
+can learn whether the queue is helping without blocking the automated MVP gate. The same payload
+also includes `mvp_readiness`, a compatibility-named beta-readiness checklist
+over source settings, primary-source coverage, live validation, relevance
+checks, latest-run freshness, the active review queue, recommendation evidence
+quality, engineering guardrails, and operations readiness. This strict checklist
+is intentionally broader than the thin daily-use MVP: operations backup evidence
+full live-source coverage, and missing recommended API/contact metadata are
+beta-hardening gates, not blockers for manually trying the Radar Queue and
+Brief. Its `next_action` is the safest
+single next step for getting the Team Radar into unattended daily use, such as
+`configure_blocked_sources`, `expand_primary_sources`,
+`run_live_source_validation`, `improve_recommendation_evidence`,
+`inspect_guardrail_evidence`, `configure_backup_policy`, or
+`review_daily_queue`. Plain-text status output prints `thin_mvp_readiness`
+first, then the stricter beta/backlog readiness stages as one-line checklist
+entries plus progress, remaining-stage count, and a conservative remaining-day estimate, so
+`literature-radar-status-latest.txt` is enough for daily readiness review when
+JSON is not needed.
+The same payload includes `mvp_setup_actions`, an ordered beta/backlog operator
+action plan for stricter deployment gates. It folds source-validation guidance,
+missing or misconfigured primary-source requirements, live-validation commands,
+and backup/operations readiness into compact steps. If the source families are
+selected but Unpaywall/contact setup is missing, the plan reports
+`configure_primary_source_requirements` rather than a generic source-expansion
+step. Source metadata actions include `env_vars` and `example_env` hints such
+as `SEMANTIC_SCHOLAR_API_KEY=api-key` or
+`RADAR_SOURCE_CONTACT_EMAIL=you@example.org`. Actions that require networked source
+APIs, such as live validation, are marked with `external_api=true` so dev
+snapshots can separate local setup from API calls.
+The JSON plan also includes `setup_env_block.lines` and `setup_env_block.text`
+with the de-duplicated fill-in examples and required backup-target
+placeholders. Plain-text `radar-status` output prints the same examples as a
+`Beta/backlog setup env block` when local setup is missing. The Team web UI links the
+same safe fragment at `/radar/setup-env.txt`, and the settings/status JSON
+payloads expose it as `links.setup_env_text`. `python
+team/research_cli.py radar-status --setup-env` prints the same examples as a
+local env-file fragment with backup-target and optional OpenRouter
+placeholders plus the dry-run validation, live validation, backup dry-run, and
+cycle-rehearsal commands to run after filling values, so operators can prepare
+local configuration without committing credentials. Generated placeholders such
+as `api-key`,
+`you@example.org`, and `replace-with-openrouter-key` are ignored by source
+readiness and collector configuration until they are replaced with real local
+values. Backup-target placeholders such as `/absolute/path/to/...` are also
+ignored by operations readiness until replaced with a real absolute local path.
+Relative backup targets are reported as not ready so scheduled backups do not
+write archives into the workspace by mistake, and status text reports the
+invalid-target count. The same status payload includes `mvp_setup_env_audit`,
+which checks only variable names and placeholder/missing state, never secret
+values, before a live validation run.
+The same status payload includes `guardrail_readiness`, a no-network check for
+active recommendation source traces, Team Radar audit-event observability,
+human-review boundaries, shared-core product boundaries, private-data policy
+boundaries, and the Personal memory boundary that keeps Personal Side-Brain
+write policy outside Team-owned Radar state.
+It also includes `schema_migrations`, a SQLite migration ledger status with the
+current and expected local schema versions. The Radar Profile and
+`radar-status` text surface the same version check so local Team deployment
+schema drift is visible before scheduled collection.
+Team Interest scoring profiles include `profile_version_id` and `profile_hash`
+from the persisted Team interest profile-version ledger, so stored Radar runs
+and settings snapshots can be traced to the exact keyword weights used for
+relevance scoring. Team `radar-status` text and the Radar Profile also surface
+the current interest profile version for quick operator checks.
+Stored queue records are enriched at read time before those checks run. If an
+older Radar paper has links, source IDs, PDF policy, or recommendation metadata
+but lacks the newer normalized provenance or summary trace fields, the shared
+queue builder derives source provenance and adds a deterministic non-AI
+`source_trace` for the queue payload. Real local/OpenRouter summary traces are
+preserved when present; the fallback only documents that the daily queue
+evidence was reconstructed from stored metadata.
+It also includes `source_validation_commands` with dry-run and one-sample live
+validation commands, and the Radar Profile renders those commands so the server
+operator can move from readiness review to live validation without reconstructing
+CLI flags from the docs.
+`source_validation_evidence` records whether the current status was built from
+missing, dry-run, or live validation evidence, plus the attached validation JSON
+path when available. This makes it clear whether `mvp_readiness` is still asking
+for a real live check or already reflects one; the same evidence is embedded in
+the MVP `live_source_validation` stage. The evidence also carries validation
+coverage counts, succeeded or incomplete source IDs, and required
+primary-source-family coverage, so partial live checks are visible even when the
+status snapshot has a validation result attached. The MVP
+`live_source_validation` stage only passes when that live evidence has complete
+selected-source coverage and complete primary-source-family coverage.
+When DOI-bearing sources are selected but Unpaywall contact is missing,
+settings/status text prefers the exact `RADAR_SOURCE_CONTACT_EMAIL` setup
+action needed for legal OA/PDF enrichment. Service-specific Unpaywall variables
+remain supported as fallbacks.
 It accepts the same source, venue, author, seed, contact, summary, and PDF-cache
 preflight overrides as `radar-settings`; use `--recommendation-limit` there
 because `radar-status --limit` controls the queue size.
@@ -292,7 +465,20 @@ Useful options:
   Radar page.
 - `--summary-provider local|openrouter`: use local metadata summaries or
   OpenRouter structured summaries. OpenRouter requires `OPENROUTER_API_KEY`.
+  If an OpenRouter call fails, it is retried once before the run keeps going
+  with a local metadata summary. Unusable structured responses fall back
+  immediately. Fallback and attempt details are recorded in
+  `summary.source_trace`. The OpenRouter prompt payload is compacted before the
+  call: long abstracts, source records, context matches, and free-text reasons
+  are capped while preserving bibliographic links, relevance reasons, PDF policy,
+  and top context signals. Obvious non-paper records, such as calls for papers,
+  schedules, program pages, announcements, slides, videos, and proceedings
+  front matter, are filtered before relevance scoring and before OpenRouter is
+  called.
 - `--summary-limit`: cap how many ranked recommendations are summarized.
+- `--summary-min-score`: minimum local relevance score for OpenRouter
+  summaries; defaults to `70`, the `highly_relevant` threshold, so lower-score
+  candidates do not spend AI tokens unless explicitly allowed.
 - `--import-results`: import high-scoring recommendations into the Team library.
 - `--import-limit`: cap imported recommendations.
 - `--min-score`: minimum score required before import.
@@ -352,8 +538,9 @@ Useful options:
 
 OpenReview has two modes. Use `openreview` for an explicit invitation ID when
 you know the venue schema. Use `openreview_venues` for configured venue presets
-that default to accepted-only filtering from OpenReview `venueid` or decision
-metadata. Examples:
+that default to accepted-only collection through the public OpenReview notes API
+and the preset `content.venueid` values, falling back to decision metadata only
+when unaccepted submissions are explicitly included. Examples:
 
 ```bash
 python team/research_cli.py radar-run --source openreview --openreview-invitation ICLR.cc/2026/Conference/-/Submission
@@ -386,6 +573,7 @@ Example OpenRouter summaries:
 
 ```bash
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
+python team/research_cli.py radar-run --source arxiv --summary-provider openrouter --summary-limit 3 --summary-min-score 70
 ```
 
 Example top-conference DBLP metadata:
@@ -414,6 +602,7 @@ python team/research_cli.py radar-status --json
 python team/research_cli.py radar-queue                # active review queue by score
 python team/research_cli.py radar-queue --freshness-max-age-hours 24
 python team/research_cli.py radar-queue --recent-days 7
+python team/research_cli.py radar-review-queue --usefulness useful --reviewer alice
 python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers               # deduplicated paper history
 python team/research_cli.py radar-papers --review watch
@@ -476,7 +665,15 @@ priority rules as the Latest Papers Radar Queue. These queues exclude dismissed
 papers and papers already imported into the library. Queue JSON records expose
 normalized `release_date` directly for scripts, and the text output includes
 release date, stored signal lines, and an attention summary for why a paper is
-relevant now, how it relates to existing context, and which interests matched. Use
+relevant now, how it relates to existing context, and which interests matched.
+If the latest queue usefulness has not been recorded, `radar-queue` also prints
+`Queue usefulness: not reviewed yet`, the optional feedback step, and the exact
+terminal command for recording feedback after the user scans the queue. Use
+`radar-review-queue --usefulness useful --reviewer alice` after scanning the
+active queue to record whether the latest run was useful, partly useful, not
+useful, or still needs review. The command writes the same queue usefulness
+activity as the web form and prints the updated thin-MVP readiness, so terminal
+feedback can preserve review context without opening the browser. Use
 `radar-import-queue --limit 20 --min-score 35` to promote the active terminal
 queue into the Team library with the same dedupe, provenance, audit, and
 library-entry behavior as the web Queue import form. Use `radar-settings` to
@@ -561,10 +758,10 @@ venue profiles, seed counts, and whether summaries, PDF caching, or auto-import
 were enabled.
 The same stored-run brief is available from the Radar page through `Weekly
 Brief`. The browser brief shows a compact health summary before the Markdown:
-latest-run freshness, source coverage, source readiness, pipeline phase status,
-OA enrichment readiness, review queue counts, source provenance, and PDF access
-for the active queue. Its form controls the history window, recommendation
-count, and number of stored runs to scan. It also renders structured top
+latest-run freshness, source coverage, primary-source coverage, source
+readiness, pipeline phase status, OA enrichment readiness, review queue counts,
+source provenance, and PDF access for the active queue. Its form controls the
+history window, recommendation count, and number of stored runs to scan. It also renders structured top
 recommendation cards with
 rank, score, review state, triage hint, release date, matched terms, attention
 reasoning, relationship to interests, relationship to existing work, PDF policy,
@@ -588,12 +785,15 @@ team/scripts/build_literature_radar_brief.sh
 ```
 
 The cycle script is the recommended team-facing scheduled command. It runs a
-collection pass and then immediately builds a stored-run brief. By default it
-sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse the sources, limits,
-authors, positive and negative seed papers, venue profiles, summary settings,
-source contact email, and PDF-cache settings
+readiness check, then a collection pass, then immediately builds a stored-run
+brief. By default it sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse
+the sources, limits, authors, positive and negative seed papers, venue profiles,
+summary settings, source contact email, and PDF-cache settings
 saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
 should ignore web-saved defaults and use only explicit environment variables.
+The readiness phase writes status/settings/queue/source-validation/relevance
+snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness` unless
+`RADAR_STATUS_OUTPUT_DIR` is set.
 Queue import remains off by default. Set `RADAR_CYCLE_IMPORT_QUEUE=1` to have
 the cycle run `radar-import-queue` after collection and before the brief. Use
 `RADAR_IMPORT_QUEUE_MIN_SCORE`, `RADAR_IMPORT_QUEUE_LIMIT`,
@@ -611,9 +811,13 @@ plus explicit environment overrides passed to the scheduled run. It also writes
 text and JSON `literature-radar-queue-*` snapshots
 for the active review queue unless `RADAR_WRITE_QUEUE=0`; the text snapshot
 includes latest-run health/freshness, source-error counts, pipeline phase
-status, source readiness, Unpaywall OA enrichment readiness, PDF access summary,
-stored summary, relevance/context signal, and matched interests for daily
-review. The JSON snapshot uses the same queue payload as `radar-queue --json`,
+status, primary-source coverage, source readiness, Unpaywall OA enrichment
+readiness, PDF access summary, stored summary, relevance/context signal, and
+matched interests for daily review. When a run has recommendations but misses
+required source families, health action becomes
+`review_queue_and_expand_sources`: review the current queue, then expand the
+configured sources before trusting scheduled coverage. The JSON snapshot uses
+the same queue payload as `radar-queue --json`,
 including `latest_run` health, `pipeline_summary`, source readiness, OA
 enrichment readiness, `access_summary`, `provenance_summary`, plus per-paper
 `signal_lines`. The run script also writes combined
@@ -660,31 +864,82 @@ paper sources, use:
 team/scripts/check_literature_radar_status.sh
 ```
 
-The status script runs only `radar-settings` and `radar-queue`, writes
-timestamped plus `latest` status/settings/queue snapshots under `team/logs/`.
+The status script runs `radar-settings`, `radar-queue`,
+`radar-validate-sources`, and `radar-evaluate-relevance`, writing timestamped
+plus `latest` status/settings/queue/validation/relevance-evaluation snapshots
+under `team/logs/`.
 It also writes combined `literature-radar-status-*.json` snapshots from
-`radar-status`. It does not download PDFs or call AI. Its settings preflight and
+`radar-status`. Source validation is a dry run by default and does not contact
+source APIs unless `RADAR_STATUS_VALIDATE_SOURCES_LIVE=1` is set. It does not
+download PDFs or call AI. The relevance evaluation is also offline; it checks
+the current Team Interest weights against active-interest shared golden cases
+so scorer changes can be caught before scheduled collection. The validation text snapshots
+preserve the same `Next:` source-fix lines printed by
+`radar-validate-sources`. The final combined status snapshot folds the generated
+validation result and relevance evaluation into `mvp_readiness`, so
+`literature-radar-status-latest.json` reports whether live validation and
+offline relevance checks have passed in the same next-action summary as source
+coverage and queue health. It also includes `operations_readiness`, a no-network
+check over the cycle/status/brief/backup/restore/prune/rehearsal scripts, log
+and readiness paths, PDF cache configuration, `RADAR_BACKUP_TARGETS`, and local
+operations evidence. The evidence check looks for latest status, validation,
+relevance-evaluation, brief, cycle-rehearsal, and backup-manifest outputs, so a
+deployment is not marked operationally ready only because the scripts exist. A
+missing backup target or missing required evidence is reported as an operations
+warning so daily runs are not mistaken for a complete beta deployment. Its
+settings preflight, validation payload, and
 combined status payload accept the same `RADAR_SOURCE_PRESET`, `RADAR_SOURCES`,
-venue, author, seed, official-page, API-etiquette, OA-enrichment, PDF-cache, and
-summary environment variables as the scheduled collection script, so
+venue, author, seed, official-page, API-etiquette, OA-enrichment, PDF-cache,
+and summary environment variables as the scheduled collection script, so
 `.env`-driven deployments can validate their run configuration without
-collecting sources. See the commented Literature Radar section in `.env.example`
-for a server-friendly starting template.
+collecting sources. See the commented Literature Radar section in
+`.env.example` for a server-friendly starting template.
+
+To answer the narrower daily-use question, "is the current Team Radar thin MVP
+ready?", use:
+
+```bash
+team/scripts/check_literature_radar_thin_mvp.sh
+```
+
+This command refreshes the same no-network status snapshots by default, then
+extracts `thin_mvp_readiness` into concise
+`literature-radar-thin-mvp-*.json` and `.txt` evidence under `team/logs/`.
+Exit code `0` means the thin MVP is ready, `2` means the queue is usable but
+still needs required evidence or minor setup, and `3` means the gate is blocked or
+the status evidence is missing. The gate output includes the cycle run command,
+the `/radar/queue` review URL, and the terminal queue-review command. It also
+renders the queue review scope, a small visible-paper sample, and a
+`Daily workflow` section. The JSON summary exposes the same ordered loop as
+`daily_workflow.steps` with `current` markers for remaining stages. For the current MVP validation loop, run a real Radar collection with
+the server `.env`, review `/radar/queue`, optionally record queue usefulness with the web form or
+`python team/research_cli.py radar-review-queue --usefulness useful`, then
+rerun this command. Override the displayed commands with
+`RADAR_THIN_MVP_RUN_COMMAND`, `RADAR_THIN_MVP_REVIEW_URL`, and
+`RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND` when a deployment uses a different
+wrapper, host path, or environment prefix. The MVP is proven when it reports
+`ready`.
 It reads `.env` first and supports these optional variables:
 
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
   `/radar` form, then let explicit environment variables override them.
+- `RADAR_CYCLE_CHECK_READINESS=0`: skip the offline readiness phase in
+  `run_literature_radar_cycle.sh`. By default the cycle runs
+  `check_literature_radar_status.sh` before collection and writes readiness
+  snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness`.
 - `RADAR_CYCLE_RUN_COLLECTION=0`: skip collection when using
   `run_literature_radar_cycle.sh`.
 - `RADAR_CYCLE_BUILD_BRIEF=0`: skip brief generation when using
   `run_literature_radar_cycle.sh`.
 - `RADAR_SOURCES`: space-separated sources. Default:
-  `arxiv dblp semantic_scholar openalex crossref usenix_security ndss`.
+  `arxiv dblp semantic_scholar openalex crossref openreview_venues usenix_security ndss`.
   Optional seed-based sources include `semantic_scholar_recommendations`,
   `semantic_scholar_references`, and `semantic_scholar_citations`; author
   tracking uses `semantic_scholar_authors`, `dblp_authors`, or
   `openalex_authors`; venue cross-checking can use `openalex_venues`;
   OpenReview venue presets use `openreview_venues`.
+- `RADAR_ARXIV_CATEGORIES`: optional arXiv category scope. Default:
+  `cs.CR cs.PL cs.SE cs.AI cs.LG cs.CL`.
 - `RADAR_SOURCE_PRESET`: named source bundle for scheduled runs. Use
   `team_security_daily` for the current team workflow, `broad_daily` for the
   broad metadata default, or `top_venues` for a proceedings-focused sweep.
@@ -703,17 +958,44 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_STATUS_OUTPUT_DIR`: output directory for
   `check_literature_radar_status.sh`; defaults to `RADAR_OUTPUT_DIR` or
   `team/logs`.
+- `RADAR_REHEARSAL_OUTPUT_DIR`: output directory for cycle rehearsal snapshots;
+  defaults to `${RADAR_OUTPUT_DIR:-team/logs}/rehearsal`.
+- `RADAR_LOG_RETENTION_DAYS`: age threshold for pruning timestamped Team Radar
+  snapshots; defaults to `30`.
+- `RADAR_LOG_PRUNE_DRY_RUN=1`: print prunable timestamped snapshots without
+  deleting them. Set to `0` only after reviewing dry-run output.
 - `RADAR_STATUS_QUEUE_LIMIT`: active queue size for status snapshots; defaults
   to `RADAR_QUEUE_LIMIT` or `20`.
 - `RADAR_STATUS_QUEUE_TRIAGE_ACTION`: active queue triage-action filter for
   status snapshots; defaults to `RADAR_QUEUE_TRIAGE_ACTION` when set.
 - `RADAR_STATUS_QUEUE_RECENT_DAYS`: active queue recent-window filter for status
   snapshots; defaults to `RADAR_QUEUE_RECENT_DAYS` when set.
+- `RADAR_BACKUP_TARGETS`: optional comma- or space-separated absolute backup
+  destinations for the Team database, logs, and status snapshots. Status JSON
+  reports a warning when this is not configured or only relative paths are set.
+  `TEAM_RADAR_BACKUP_TARGETS` is accepted as a Team-specific alias, but
+  `RADAR_BACKUP_TARGETS` is the canonical name.
+- `RADAR_BACKUP_DRY_RUN=1`: print backup targets and inputs without creating
+  an archive. Dry-runs write a latest manifest under
+  `${RADAR_BACKUP_EVIDENCE_DIR:-${RADAR_OUTPUT_DIR:-team/logs}/backup}` for
+  operations-readiness evidence.
+- `RADAR_BACKUP_EVIDENCE_DIR`: optional directory for backup dry-run manifests;
+  defaults to `${RADAR_OUTPUT_DIR:-team/logs}/backup`.
+- `RADAR_BACKUP_INCLUDE_PDF_CACHE=1`: include the legal PDF cache in backup
+  archives. The default excludes cached PDFs.
+- `RADAR_RESTORE_TARGET_ROOT`: default target root for restore rehearsals.
+- `RADAR_RESTORE_DRY_RUN=1`: print restore members without extracting.
 - `RADAR_STATUS_FRESHNESS_MAX_AGE_HOURS`: freshness threshold for status queue
   health; defaults to `RADAR_FRESHNESS_MAX_AGE_HOURS` or `36`.
+- `RADAR_STATUS_VALIDATE_SOURCES_LIVE=1`: make the status script run live
+  metadata-only source validation through `radar-validate-sources --live`.
+  Default is dry-run validation with no source API calls.
+- `RADAR_STATUS_VALIDATION_MAX_RESULTS`: per-source sample size for live status
+  validation; defaults to `RADAR_SOURCE_VALIDATION_MAX_RESULTS`, then the CLI
+  default of `1`.
 - `RADAR_STATUS_USE_SAVED_DEFAULTS=0`: make the status settings preflight ignore
   saved `/radar` defaults; explicit `RADAR_*` source/settings environment
-  variables are still applied to the preflight snapshot.
+variables are still applied to the preflight snapshot.
 - `RADAR_QUEUE_LIMIT`: maximum active queue papers in the scheduled queue
   snapshot; default `3`.
 - `RADAR_QUEUE_TRIAGE_ACTION`: optional scheduled queue triage-action filter,
@@ -728,7 +1010,7 @@ It reads `.env` first and supports these optional variables:
   default `50`.
 - `RADAR_IMPORT_RESULTS=1`, plus `RADAR_IMPORT_LIMIT` and `RADAR_MIN_SCORE`.
 - `RADAR_SUMMARIZE=1`, `RADAR_SUMMARY_PROVIDER=local|openrouter`,
-  `RADAR_SUMMARY_LIMIT`.
+  `RADAR_SUMMARY_LIMIT`, `RADAR_SUMMARY_MIN_SCORE`.
 - `RADAR_CONFERENCE_YEAR`, `RADAR_USENIX_CYCLES`.
 - `RADAR_OFFICIAL_ACCEPTED_PAGES`: newline-delimited official accepted-paper
   page specs, one per line, using
@@ -743,12 +1025,13 @@ It reads `.env` first and supports these optional variables:
   `dblp_authors` source.
 - `RADAR_OPENALEX_AUTHOR_IDS`: space-separated OpenAlex author IDs for the
   `openalex_authors` source.
-- `RADAR_OPENALEX_MAILTO`: Team-specific OpenAlex contact email for polite-pool
-  requests; generic `OPENALEX_MAILTO` is accepted as a fallback.
-- `RADAR_CROSSREF_MAILTO`: Team-specific Crossref contact email; generic
-  `CROSSREF_MAILTO` is accepted as a fallback.
-- `RADAR_UNPAYWALL_EMAIL`: Team-specific Unpaywall email for legal OA/PDF and
-  license enrichment; generic `UNPAYWALL_EMAIL` is accepted as a fallback.
+- `RADAR_SOURCE_CONTACT_EMAIL`: preferred Team contact email for OpenAlex
+  polite-pool requests, Crossref polite-pool requests, and Unpaywall legal
+  OA/PDF and license enrichment.
+- `RADAR_OPENALEX_MAILTO`, `RADAR_CROSSREF_MAILTO`, and
+  `RADAR_UNPAYWALL_EMAIL`: optional Team-specific overrides when a provider
+  needs a different address; generic `OPENALEX_MAILTO`, `CROSSREF_MAILTO`, and
+  `UNPAYWALL_EMAIL` are accepted as fallbacks.
 - `RADAR_OPENREVIEW_VENUES`: space-separated OpenReview venue profile/group
   selectors for the `openreview_venues` source.
 - `RADAR_OPENREVIEW_INVITATIONS`: space-separated explicit OpenReview
@@ -770,10 +1053,12 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_BRIEF_OUTPUT_DIR`: brief output directory; default `team/logs`.
 - `RADAR_FRESHNESS_MAX_AGE_HOURS`: latest-run freshness threshold for queue and
   brief snapshots; default `36`.
-- API etiquette/config: `SEMANTIC_SCHOLAR_API_KEY`,
-  `RADAR_SOURCE_CONTACT_EMAIL`, `RADAR_OPENALEX_MAILTO`,
+- API etiquette/config: prefer `SEMANTIC_SCHOLAR_API_KEY` and
+  `RADAR_SOURCE_CONTACT_EMAIL`; use `RADAR_OPENALEX_MAILTO`,
   `RADAR_CROSSREF_MAILTO`, `RADAR_UNPAYWALL_EMAIL`, `OPENALEX_MAILTO`,
-  `CROSSREF_MAILTO`, `UNPAYWALL_EMAIL`, `OPENREVIEW_INVITATIONS`.
+  `CROSSREF_MAILTO`, or `UNPAYWALL_EMAIL` only as service-specific contact
+  overrides. `OPENREVIEW_INVITATIONS` remains the shared OpenReview invitation
+  fallback.
 
 ### Daily Team Operating Loop
 
@@ -786,20 +1071,79 @@ For a server deployment, the intended daily path is:
    Confirm `literature-radar-status-settings-latest.txt` does not show blocked
    required sources, and use warnings for missing contact/API settings as
    operator actions rather than team-member review work.
-3. Enable or manually run `team/scripts/run_literature_radar_cycle.sh`; it
-   collects papers, writes stable `literature-radar-latest.*`,
-   `literature-radar-queue-latest.*`, `literature-radar-status-latest.*`, and
-   `literature-radar-brief-latest.*` snapshots, then builds the stored brief.
+3. Run `team/scripts/rehearse_literature_radar_cycle.sh` once. It exercises the
+   same cycle wrapper with source collection, queue import, AI summarization,
+   and PDF caching disabled, writing rehearsal snapshots under
+   `${RADAR_REHEARSAL_OUTPUT_DIR:-${RADAR_OUTPUT_DIR:-team/logs}/rehearsal}`.
+4. Enable or manually run `team/scripts/run_literature_radar_cycle.sh`; it
+   first writes offline readiness snapshots under
+   `${RADAR_OUTPUT_DIR:-team/logs}/readiness`, then collects papers, writes
+   stable `literature-radar-latest.*`, `literature-radar-queue-latest.*`,
+   `literature-radar-status-latest.*`, and `literature-radar-brief-latest.*`
+   snapshots, then builds the stored brief.
    If `RADAR_CYCLE_IMPORT_QUEUE=1`, it also writes
    `literature-radar-queue-import-latest.*` after promoting the active queue.
-4. Team members review `/radar/queue?limit=20` for the active daily queue, or
+5. Team members review `/radar/queue?limit=20` for the active daily queue, or
    open `/radar/brief` for a weekly-style roll-up. From those pages they can
    watch, dismiss, or add papers to the main Team library without reading raw
    log files.
-5. If the queue is empty or stale, inspect `/radar/status.json?limit=20` or the
+6. If the queue is empty or stale, inspect `/radar/status.json?limit=20` or the
    latest status text file first. The status payload separates source
    readiness, latest-run freshness, source errors, OA/PDF enrichment, and queue
-   counts so operational problems do not look like low research signal.
+   counts so operational problems do not look like low research signal. It also
+   shows `operations_readiness`; configure `RADAR_BACKUP_TARGETS` before
+   treating the scheduled deployment as a reliable team beta.
+
+Before enabling an unattended timer, dry-run the Team backup procedure:
+
+```bash
+RADAR_BACKUP_DRY_RUN=1 team/scripts/backup_literature_radar.sh
+```
+
+The dry-run writes a durable backup rehearsal manifest at
+`${RADAR_BACKUP_EVIDENCE_DIR:-${RADAR_OUTPUT_DIR:-team/logs}/backup}/team-literature-radar-backup-dry-run-latest.manifest.txt`.
+`operations_readiness` accepts this dry-run manifest, or a real backup manifest
+under `RADAR_BACKUP_TARGETS`, as backup evidence.
+
+After `RADAR_BACKUP_TARGETS` points at a server-local backup directory, create
+an archive with:
+
+```bash
+team/scripts/backup_literature_radar.sh
+```
+
+The backup includes the Team Radar SQLite database and logs/readiness snapshots.
+It does not include `.env` credentials, and it excludes cached PDFs unless
+`RADAR_BACKUP_INCLUDE_PDF_CACHE=1` is set. Rehearse restore into a temporary
+directory first:
+
+```bash
+team/scripts/restore_literature_radar_backup.sh --dry-run --target-root /tmp/team-radar-restore /path/to/team-literature-radar-YYYYmmddTHHMMSSZ.tar.gz
+team/scripts/restore_literature_radar_backup.sh --target-root /tmp/team-radar-restore /path/to/team-literature-radar-YYYYmmddTHHMMSSZ.tar.gz
+```
+
+The restore script only extracts whitelisted Team Radar paths. For a live
+restore, stop the web service or timer, inspect the manifest and temporary
+restore output, then copy the restored `team/data/research/team_research.sqlite3`
+and `team/logs/` paths back into the repo. Direct extraction into the live repo
+requires `RADAR_RESTORE_ALLOW_LIVE=1`.
+
+To keep timestamped status, queue, validation, relevance, report, and brief
+snapshots bounded, dry-run log retention first:
+
+```bash
+RADAR_LOG_PRUNE_DRY_RUN=1 team/scripts/prune_literature_radar_logs.sh
+```
+
+After the selected files look correct, prune old timestamped snapshots with:
+
+```bash
+RADAR_LOG_RETENTION_DAYS=30 RADAR_LOG_PRUNE_DRY_RUN=0 team/scripts/prune_literature_radar_logs.sh
+```
+
+The prune script only targets timestamped `literature-radar-*` JSON/text/Markdown
+snapshots under the configured output directory and preserves `*-latest.*`
+snapshots and unrelated logs.
 
 Example cron entry for 07:30 daily:
 
@@ -812,10 +1156,11 @@ User-level systemd timer templates are also available under
 daily timer is `ai-side-brain-team-literature-radar-cycle.timer`. It runs
 `team/scripts/run_literature_radar_cycle.sh` with `RADAR_USE_SAVED_DEFAULTS=1`,
 so it can reuse the source/author/seed defaults saved from the `/radar` page,
-refresh queue snapshots, and build the stored brief in one scheduled job. Do
-not enable it together with `ai-side-brain-team-literature-radar.timer`, because
-both run Team collection. Use the separate Team collection and Team brief timers
-only when those phases need independent schedules. Install the recommended Team
+run offline readiness, refresh queue snapshots, and build the stored brief in
+one scheduled job. Do not enable it together with
+`ai-side-brain-team-literature-radar.timer`, because both run Team collection.
+Use the separate Team collection and Team brief timers only when those phases
+need independent schedules. Install the recommended Team
 timer with:
 
 ```bash
@@ -842,14 +1187,14 @@ Current implemented shared collectors:
 - Semantic Scholar Recommendations API seed-paper expansion;
 - OpenAlex Works API collector;
 - Crossref Works metadata collector;
-- OpenReview API v2 notes collector for configured invitations;
-- OpenReview venue-profile collector with accepted-only filtering for configured
-  presets;
+- OpenReview public notes API collector for configured invitations;
+- OpenReview venue-profile collector with accepted-only `content.venueid`
+  queries for configured presets;
 - USENIX Security accepted-paper page collector;
 - NDSS accepted-paper page collector;
 - Unpaywall DOI OA/PDF enrichment.
 
-Recommended next MVP order:
+Recommended post-thin-MVP backlog order:
 
 1. direct accepted-paper page collectors for more venues where stable official
    pages exist; new wrappers can reuse the shared

@@ -43,8 +43,17 @@ systemctl --user enable --now ai-side-brain-team-literature-radar-cycle.timer
 ```
 
 The Team cycle timer runs `team/scripts/run_literature_radar_cycle.sh`, which
-collects with the saved `/radar` defaults, refreshes the active queue snapshots,
-and builds the stored brief. Do not enable both
+first runs the offline readiness check, then collects with the saved `/radar`
+defaults, refreshes the active queue snapshots, and builds the stored brief.
+Before enabling the timer for daily use, run
+`RADAR_BACKUP_DRY_RUN=1 team/scripts/backup_literature_radar.sh` and configure
+`RADAR_BACKUP_TARGETS` so `operations_readiness` does not warn about missing
+backups. Rehearse a restore with
+`team/scripts/restore_literature_radar_backup.sh --dry-run --target-root /tmp/team-radar-restore ARCHIVE.tar.gz`.
+Then run `team/scripts/rehearse_literature_radar_cycle.sh` to exercise the same
+daily wrapper with collection, queue import, AI summarization, and PDF caching
+disabled.
+Do not enable both
 `ai-side-brain-team-literature-radar-cycle.timer` and
 `ai-side-brain-team-literature-radar.timer`, because both run Team collection.
 
@@ -97,13 +106,19 @@ team/scripts/check_literature_radar_status.sh
 scripts/check_personal_literature_radar_status.sh
 ```
 
-These write timestamped and `latest` status/settings/queue snapshots under
-`team/logs/` and `memory/06_Logs/` by default. They run settings and queue
-commands only, so they do not call paper sources, download PDFs, or call AI.
+These write timestamped and `latest` status/settings/queue/source-validation/
+relevance-evaluation snapshots under `team/logs/` and `memory/06_Logs/` by
+default. Source validation is dry-run unless the matching live-validation
+environment variable is set. Relevance evaluation is offline. The scripts do
+not collect paper sources, download PDFs, or call AI.
 The Team script also writes combined `literature-radar-status-*.json` snapshots
 from `python team/research_cli.py radar-status --json`; the Personal script
 writes combined `personal-literature-radar-status-*.json` snapshots from
 `python scripts/personal_literature_radar.py status --json`.
+If a legacy Personal run exists but the status output reports missing pipeline
+phase evidence, run `python scripts/personal_literature_radar.py backfill-pipeline --json`
+before enabling the timer. The repair is local-only: it rebuilds phase evidence
+from `indexes/literature-radar-runs.json` and `indexes/literature-radar-papers.json`.
 
 The Team cycle and Team collection services set `RADAR_USE_SAVED_DEFAULTS=1`,
 so scheduled runs start from the defaults saved in `/radar`. Environment
@@ -130,13 +145,20 @@ aliases, or notification jobs. Set `RADAR_WRITE_LATEST=0` or
 `PERSONAL_RADAR_WRITE_LATEST=0` to keep only timestamped history.
 
 For a simpler cron-style setup, `team/scripts/run_literature_radar_cycle.sh`
-runs Team collection and then builds the Team brief in one command. It defaults
-to `RADAR_USE_SAVED_DEFAULTS=1`, so it is usually the right command for a
-single daily team job. `scripts/run_personal_literature_radar_cycle.sh` does the
-same for Personal Literature Radar, using `PERSONAL_RADAR_CYCLE_RUN_COLLECTION`
-and `PERSONAL_RADAR_CYCLE_BUILD_BRIEF` as optional phase toggles. The separate
-systemd units above keep collection and weekly brief generation on independent
-schedules.
+runs Team readiness, collection, and then the Team brief in one command. It
+defaults to `RADAR_USE_SAVED_DEFAULTS=1`, so it is usually the right command for
+a single daily team job. Its readiness phase writes to
+`${RADAR_OUTPUT_DIR:-team/logs}/readiness` by default so pre-collection
+snapshots do not overwrite post-collection status files. Set
+`RADAR_CYCLE_CHECK_READINESS=0` to skip that phase, or set
+`RADAR_STATUS_OUTPUT_DIR` to choose another readiness directory.
+`scripts/run_personal_literature_radar_cycle.sh` does the same for Personal
+Literature Radar, using `PERSONAL_RADAR_CYCLE_CHECK_READINESS`,
+`PERSONAL_RADAR_CYCLE_RUN_COLLECTION`, and
+`PERSONAL_RADAR_CYCLE_BUILD_BRIEF` as optional phase toggles. Its default
+readiness directory is `${PERSONAL_RADAR_OUTPUT_DIR:-memory/06_Logs}/readiness`.
+The separate systemd units above keep collection and weekly brief generation on
+independent schedules.
 Promotion remains opt-in for both cycle scripts. Set
 `RADAR_CYCLE_IMPORT_QUEUE=1` to import the active Team queue into the Team
 library during the cycle, or `PERSONAL_RADAR_CYCLE_INBOX_QUEUE=1` to write the
@@ -148,3 +170,26 @@ PDF caching is off by default. Set `RADAR_CACHE_PDFS=1` with
 `RADAR_PDF_CACHE_DIR=team/data/literature-radar-pdfs`, or
 `PERSONAL_RADAR_CACHE_PDFS=1` with `PERSONAL_RADAR_PDF_CACHE_DIR`, to cache only
 legally downloadable PDFs for ranked recommendations.
+
+Before enabling timers, check `operations_readiness` in the latest status JSON.
+Set `RADAR_BACKUP_TARGETS` or `PERSONAL_RADAR_BACKUP_TARGETS` to document where
+the database/indexes, status snapshots, and logs are backed up; `TEAM_RADAR_BACKUP_TARGETS`
+is also accepted as a Team-specific alias for `RADAR_BACKUP_TARGETS`. Cached PDFs are
+excluded unless the matching backup include-PDF flag is set. Missing backup
+targets are reported as operations warnings. Restore scripts are designed for
+temporary-target rehearsals first and refuse live-root extraction unless the
+matching `*_RESTORE_ALLOW_LIVE=1` override is set.
+
+Timestamped Radar snapshots can be pruned separately from collection. Dry-run
+first with `RADAR_LOG_PRUNE_DRY_RUN=1 team/scripts/prune_literature_radar_logs.sh`
+or
+`PERSONAL_RADAR_LOG_PRUNE_DRY_RUN=1 scripts/prune_personal_literature_radar_logs.sh`;
+set the matching `*_LOG_PRUNE_DRY_RUN=0` only after reviewing the selected old
+timestamped snapshots. `*-latest.*` files are preserved.
+
+For server access and timer rehearsal, run the Team and Personal rehearsal
+scripts before enabling timers:
+`team/scripts/rehearse_literature_radar_cycle.sh` and
+`scripts/rehearse_personal_literature_radar_cycle.sh`. They write to rehearsal
+output directories and skip source collection, queue promotion, AI calls, and
+PDF caching.

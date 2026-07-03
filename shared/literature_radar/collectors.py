@@ -25,7 +25,7 @@ DBLP_PERSON_URL = "https://dblp.org/pid"
 DBLP_PUBLICATION_SEARCH_URL = "https://dblp.org/search/publ/api"
 OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
-OPENREVIEW_API2_NOTES_URL = "https://api2.openreview.net/notes"
+OPENREVIEW_NOTES_URL = "https://api.openreview.net/notes"
 OPENREVIEW_WEB_URL = "https://openreview.net"
 SEMANTIC_SCHOLAR_AUTHOR_BATCH_URL = "https://api.semanticscholar.org/graph/v1/author/batch"
 SEMANTIC_SCHOLAR_PAPER_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -650,6 +650,8 @@ def parse_accepted_paper_page(
             "source_paper_id": source_paper_id,
             "source_page": page_url,
             "venue": venue,
+            "venue_year": year,
+            "release_date": str(year),
             "authors_text": authors_text,
             **(source_context or {}),
         }
@@ -662,6 +664,7 @@ def parse_accepted_paper_page(
                 abstract=abstract,
                 year=year,
                 venue=venue,
+                release_date=str(year),
                 links={"landing": link or page_url, "source_page": page_url},
                 discovered_at=collected_at,
                 source_record=source_record,
@@ -1557,11 +1560,26 @@ def collect_openreview_venue_submissions(
     selected_year = year or (now or datetime.now(timezone.utc)).year
     papers = []
     for profile in selected_profiles:
-        for invitation in openreview_profile_invitations(profile, selected_year):
-            url = build_openreview_notes_url(invitation=invitation, max_results=max_results, offset=offset)
+        if accepted_only:
+            queries = [
+                {"content_venueid": venueid}
+                for venueid in openreview_profile_accepted_venueids(profile, selected_year)
+            ]
+        else:
+            queries = [
+                {"invitation": invitation}
+                for invitation in openreview_profile_invitations(profile, selected_year)
+            ]
+        for query in queries:
+            url = build_openreview_notes_url(
+                invitation=query.get("invitation", ""),
+                content_venueid=query.get("content_venueid", ""),
+                max_results=max_results,
+                offset=offset,
+            )
             candidates = parse_openreview_notes(
                 (fetcher or fetch_url)(url),
-                invitation=invitation,
+                invitation=query.get("invitation", ""),
                 query_url=url,
                 collected_at=now,
             )
@@ -1666,6 +1684,13 @@ def openreview_profile_invitations(profile: dict[str, Any], year: int) -> list[s
     ]
 
 
+def openreview_profile_accepted_venueids(profile: dict[str, Any], year: int) -> list[str]:
+    return [
+        template.format(year=int(year))
+        for template in profile.get("accepted_venueid_templates") or []
+    ]
+
+
 def annotate_openreview_venue_paper(
     paper: dict[str, Any],
     *,
@@ -1721,17 +1746,25 @@ def openreview_paper_is_accepted(paper: dict[str, Any], profile: dict[str, Any],
 
 def build_openreview_notes_url(
     *,
-    invitation: str,
+    invitation: str = "",
+    content_venueid: str = "",
     max_results: int = 50,
     offset: int = 0,
 ) -> str:
+    selected_invitation = normalize_spaces(invitation)
+    selected_venueid = normalize_spaces(content_venueid)
+    if bool(selected_invitation) == bool(selected_venueid):
+        raise ValueError("OpenReview notes URL requires exactly one invitation or content_venueid.")
     params = {
-        "invitation": invitation,
         "limit": str(max(1, min(1000, max_results))),
         "offset": str(max(0, offset)),
         "sort": "tcdate:desc",
     }
-    return f"{OPENREVIEW_API2_NOTES_URL}?{urlencode(params, quote_via=quote_plus)}"
+    if selected_invitation:
+        params["invitation"] = selected_invitation
+    else:
+        params["content.venueid"] = selected_venueid
+    return f"{OPENREVIEW_NOTES_URL}?{urlencode(params, quote_via=quote_plus)}"
 
 
 def parse_openreview_notes(

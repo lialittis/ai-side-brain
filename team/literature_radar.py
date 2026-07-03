@@ -10,16 +10,20 @@ from typing import Any, Callable
 
 from shared.literature_radar import (
     DEFAULT_ARXIV_CATEGORIES,
+    DEFAULT_OPENREVIEW_VENUE_PROFILES,
     add_local_recommendation_summaries,
     add_recommendation_attention_summaries,
     add_recommendation_context,
     append_radar_source_errors_to_report,
     append_radar_source_coverage_to_report,
+    append_radar_primary_source_coverage_to_report,
     append_radar_source_policy_to_report,
     append_radar_source_readiness_to_report,
     append_radar_oa_enrichment_to_report,
     append_radar_source_stats_to_report,
     append_radar_context_summary_to_report,
+    append_radar_daily_review_plan_to_report,
+    append_radar_daily_source_health_to_report,
     append_radar_venue_coverage_to_report,
     assess_pdf_access,
     build_radar_brief_recommendation_records,
@@ -54,12 +58,19 @@ from shared.literature_radar import (
     radar_history_context_summary,
     radar_history_oa_enrichment_summary,
     radar_history_pipeline_summary,
+    radar_history_primary_source_coverage_summary,
     radar_history_source_readiness_summary,
     radar_history_source_policy_summary,
     radar_history_source_provenance_summary,
+    radar_daily_workflow_summary,
+    radar_daily_queue_guidance,
+    radar_daily_review_plan,
+    radar_daily_source_health,
     radar_context_summary,
+    radar_config_value,
     radar_pdf_access_summary,
     radar_pipeline_trace_summary,
+    radar_queue_evidence_summary,
     radar_source_provenance_summary,
     radar_triage_action_options,
     radar_triage_summary,
@@ -69,6 +80,7 @@ from shared.literature_radar import (
     radar_run_freshness,
     radar_run_health_action,
     radar_oa_enrichment_summary,
+    radar_primary_source_coverage_summary,
     radar_run_status_from_source_health,
     radar_source_coverage_summary,
     radar_source_blocked_readiness,
@@ -81,6 +93,7 @@ from shared.literature_radar import (
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
+from shared.literature_radar.ai import RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE
 from shared.research.core import iso_timestamp
 from team.research_adapter import TeamResearchRunResult, build_team_research_run
 from team.research_db import DEFAULT_LIBRARY_PROJECT_ID, TeamResearchDatabase
@@ -129,6 +142,7 @@ DEFAULT_RADAR_SOURCES = (
     "semantic_scholar",
     "openalex",
     "crossref",
+    "openreview_venues",
     "usenix_security",
     "ndss",
 )
@@ -194,6 +208,7 @@ def run_team_literature_radar(
     summarize: bool = False,
     summary_provider: str = "local",
     summary_limit: int | None = None,
+    summary_min_score: int | None = None,
     summary_client: Any | None = None,
     import_results: bool = False,
     import_limit: int = 5,
@@ -210,6 +225,7 @@ def run_team_literature_radar(
     semantic_scholar_author_ids: list[str] | None = None,
     dblp_author_pids: list[str] | None = None,
     openalex_author_ids: list[str] | None = None,
+    arxiv_categories: list[str] | None = None,
     conference_year: int | None = None,
     dblp_venue_profiles: list[str] | None = None,
     openreview_venue_profiles: list[str] | None = None,
@@ -224,6 +240,7 @@ def run_team_literature_radar(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_interests = database.list_team_interest_keywords()
+    selected_interest_profile_version = database.current_team_interest_profile_version(now=now)
     selected_terms = query_terms or team_radar_query_terms_from_interests(selected_interests)
     preset = team_radar_source_preset(source_preset)
     selected_sources = list((preset or {}).get("sources") or sources or DEFAULT_RADAR_SOURCES)
@@ -237,32 +254,61 @@ def run_team_literature_radar(
             selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
         if selected_usenix_security_cycles is None:
             selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
-    if seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
+    selected_seed_paper_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
+    selected_negative_seed_paper_ids = negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS")
+    selected_semantic_scholar_author_ids = semantic_scholar_author_ids or env_list("RADAR_AUTHOR_IDS")
+    selected_dblp_author_pids = dblp_author_pids or env_list("RADAR_DBLP_AUTHOR_PIDS")
+    selected_openalex_author_ids = openalex_author_ids or env_list("RADAR_OPENALEX_AUTHOR_IDS")
+    selected_arxiv_categories = arxiv_categories or env_list("RADAR_ARXIV_CATEGORIES") or None
+    selected_openreview_invitations = (
+        openreview_invitations
+        or env_list("RADAR_OPENREVIEW_INVITATIONS")
+        or env_list("OPENREVIEW_INVITATIONS")
+    )
+    if selected_dblp_venue_profiles is None:
+        selected_dblp_venue_profiles = env_list("RADAR_DBLP_VENUES")
+    if selected_openreview_venue_profiles is None:
+        selected_openreview_venue_profiles = env_list("RADAR_OPENREVIEW_VENUES")
+    if selected_seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
         selected_sources.append("semantic_scholar_recommendations")
-    if openreview_invitations and "openreview" not in selected_sources:
+    if selected_semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
+        selected_sources.append("semantic_scholar_authors")
+    if selected_dblp_author_pids and "dblp_authors" not in selected_sources:
+        selected_sources.append("dblp_authors")
+    if selected_openalex_author_ids and "openalex_authors" not in selected_sources:
+        selected_sources.append("openalex_authors")
+    if selected_dblp_venue_profiles and not any(
+        source in selected_sources for source in {"dblp_venues", "openalex_venues"}
+    ):
+        selected_sources.append("dblp_venues")
+    if selected_openreview_invitations and "openreview" not in selected_sources:
         selected_sources.append("openreview")
+    if selected_openreview_venue_profiles and "openreview_venues" not in selected_sources:
+        selected_sources.append("openreview_venues")
     collection_config = team_radar_collection_config(
         selected_sources=selected_sources,
         source_preset=(preset or {}).get("id"),
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,
-        summary_provider=summary_provider,
-        summary_limit=summary_limit,
+            summary_provider=summary_provider,
+            summary_limit=summary_limit,
+            summary_min_score=summary_min_score,
         import_results=import_results,
         import_limit=import_limit,
         min_import_score=min_import_score,
         project_id=project_id,
         semantic_scholar_api_key=semantic_scholar_api_key,
-        seed_paper_ids=seed_paper_ids,
-        negative_seed_paper_ids=negative_seed_paper_ids,
+        seed_paper_ids=selected_seed_paper_ids,
+        negative_seed_paper_ids=selected_negative_seed_paper_ids,
         openalex_mailto=openalex_mailto,
-        openreview_invitations=openreview_invitations,
+        openreview_invitations=selected_openreview_invitations,
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
-        semantic_scholar_author_ids=semantic_scholar_author_ids,
-        dblp_author_pids=dblp_author_pids,
-        openalex_author_ids=openalex_author_ids,
+        semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
+        dblp_author_pids=selected_dblp_author_pids,
+        openalex_author_ids=selected_openalex_author_ids,
+        arxiv_categories=selected_arxiv_categories,
         conference_year=conference_year,
         dblp_venue_profiles=selected_dblp_venue_profiles,
         openreview_venue_profiles=selected_openreview_venue_profiles,
@@ -278,7 +324,10 @@ def run_team_literature_radar(
         sources=selected_sources,
         query_terms=selected_terms,
         collection_config=collection_config,
-        scoring_profile=team_radar_scoring_profile(selected_interests),
+        scoring_profile=team_radar_scoring_profile(
+            selected_interests,
+            profile_version=selected_interest_profile_version,
+        ),
         now=now,
     )
     collected: list[dict[str, Any]] = []
@@ -294,15 +343,15 @@ def run_team_literature_radar(
             query_terms=selected_terms,
             max_results=max_results,
             semantic_scholar_api_key=semantic_scholar_api_key,
-            seed_paper_ids=seed_paper_ids,
-            negative_seed_paper_ids=negative_seed_paper_ids,
+            seed_paper_ids=selected_seed_paper_ids,
+            negative_seed_paper_ids=selected_negative_seed_paper_ids,
             openalex_mailto=openalex_mailto,
-            openreview_invitations=openreview_invitations,
+            openreview_invitations=selected_openreview_invitations,
             crossref_mailto=crossref_mailto,
             unpaywall_email=unpaywall_email,
-            semantic_scholar_author_ids=semantic_scholar_author_ids,
-            dblp_author_pids=dblp_author_pids,
-            openalex_author_ids=openalex_author_ids,
+            semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
+            dblp_author_pids=selected_dblp_author_pids,
+            openalex_author_ids=selected_openalex_author_ids,
             conference_year=conference_year,
             dblp_venue_profiles=selected_dblp_venue_profiles,
             openreview_venue_profiles=selected_openreview_venue_profiles,
@@ -345,6 +394,7 @@ def run_team_literature_radar(
                 recommendations,
                 provider=summary_provider,
                 limit=summary_limit,
+                min_score=summary_min_score,
                 client=summary_client,
                 query_terms=selected_terms,
                 now=now,
@@ -376,6 +426,7 @@ def run_team_literature_radar(
         report = append_radar_venue_coverage_to_report(report, venue_coverage)
         report = append_radar_context_summary_to_report(report, context_summary)
         report = append_radar_source_policy_to_report(report, selected_sources)
+        report = append_radar_primary_source_coverage_to_report(report, selected_sources, collection_config)
         report = append_radar_source_readiness_to_report(report, selected_sources, collection_config)
         report = append_radar_oa_enrichment_to_report(report, selected_sources, collection_config)
         report = append_radar_source_coverage_to_report(report, source_stats, source_errors, selected_sources)
@@ -436,6 +487,7 @@ def summarize_team_radar_recommendations(
     *,
     provider: str = "local",
     limit: int | None = None,
+    min_score: int | None = None,
     client: Any | None = None,
     query_terms: list[str] | None = None,
     now: datetime | None = None,
@@ -450,10 +502,14 @@ def summarize_team_radar_recommendations(
             for index, recommendation in enumerate(recommendations)
         ]
     if selected_provider == "openrouter":
+        selected_min_score = (
+            RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE if min_score is None else max(0, min(100, int(min_score)))
+        )
         return summarize_radar_recommendations_with_openrouter(
             recommendations,
             client=client,
             limit=limit,
+            min_score=selected_min_score,
             query_terms=query_terms or [],
             now=now,
         )
@@ -468,6 +524,7 @@ def build_team_literature_radar_queue_payload(
     freshness_max_age_hours: int = 36,
     triage_action: str = "",
     recent_days: int = 0,
+    configured_primary_source_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_limit = max(1, int(limit))
     selected_recent_days = max(0, int(recent_days or 0))
@@ -484,6 +541,33 @@ def build_team_literature_radar_queue_payload(
     )
     queue_papers = queue.get("papers") or []
     triage_summary = radar_triage_summary(queue_papers)
+    access_summary = radar_pdf_access_summary(queue_papers)
+    latest_run_summary = team_literature_radar_run_summary(
+        latest_run,
+        now=now,
+        freshness_max_age_hours=freshness_max_age_hours,
+    ) or {}
+    daily_source_health = radar_daily_source_health(
+        latest_run_summary,
+        configured_primary_source_coverage=configured_primary_source_coverage,
+    )
+    daily_guidance = radar_daily_queue_guidance(
+        queue_papers,
+        review_counts=queue.get("review_counts") or counts,
+        latest_run=latest_run_summary,
+        access_summary=access_summary,
+        triage_summary=triage_summary,
+        source_health=daily_source_health,
+    )
+    latest_run_id = str(latest_run_summary.get("id") or "")
+    latest_queue_review = database.latest_literature_radar_queue_review(latest_run_id) if latest_run_id else None
+    evidence_summary = radar_queue_evidence_summary(queue_papers)
+    daily_workflow = team_radar_daily_workflow(
+        latest_run=latest_run_summary,
+        queue_papers=queue_papers,
+        evidence_summary=evidence_summary,
+        latest_queue_review=latest_queue_review,
+    )
     return {
         "success": True,
         "kind": "team_literature_radar_queue",
@@ -491,17 +575,19 @@ def build_team_literature_radar_queue_payload(
         "triage_action": queue.get("triage_action") or "",
         "review_counts": queue.get("review_counts") or counts,
         "filtered_counts": queue.get("filtered_counts") or {},
-        "access_summary": radar_pdf_access_summary(queue_papers),
+        "access_summary": access_summary,
         "provenance_summary": radar_source_provenance_summary(queue_papers),
+        "evidence_summary": evidence_summary,
         "triage_summary": triage_summary,
+        "daily_guidance": daily_guidance,
+        "daily_source_health": daily_source_health,
+        "daily_workflow": daily_workflow,
+        "daily_review_plan": radar_daily_review_plan(queue_papers, guidance=daily_guidance),
+        "latest_queue_review": latest_queue_review or {},
         "triage_action_options": radar_triage_action_options(queue.get("triage_action") or "", triage_summary),
         "limit": selected_limit,
         "recent_days": selected_recent_days,
-        "latest_run": team_literature_radar_run_summary(
-            latest_run,
-            now=now,
-            freshness_max_age_hours=freshness_max_age_hours,
-        ),
+        "latest_run": latest_run_summary,
         "papers": queue_papers,
         "links": {
             "latest_papers": "/",
@@ -534,6 +620,78 @@ def team_radar_queue_link(path: str, limit: int, triage_action: str = "", *, rec
     return path + suffix
 
 
+def team_radar_queue_review_context(
+    queue_payload: dict[str, Any],
+    *,
+    limit: int,
+    triage_action: str = "",
+    recent_days: int = 0,
+    sample_limit: int = 5,
+) -> dict[str, Any]:
+    papers = queue_payload.get("papers") if isinstance(queue_payload.get("papers"), list) else []
+    filtered_counts = queue_payload.get("filtered_counts") if isinstance(queue_payload.get("filtered_counts"), dict) else {}
+    try:
+        active_count = int(filtered_counts.get("after_recent_filter") if filtered_counts else len(papers))
+    except (TypeError, ValueError):
+        active_count = len(papers)
+    sample = []
+    for record in papers[: max(0, int(sample_limit))]:
+        if not isinstance(record, dict):
+            continue
+        triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
+        reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+        source_ids = record.get("source_ids") if isinstance(record.get("source_ids"), list) else []
+        sample.append(
+            {
+                "dedupe_key": str(record.get("dedupe_key") or ""),
+                "title": str(record.get("title") or ""),
+                "link": str(record.get("link") or ""),
+                "release_date": str(record.get("release_date") or ""),
+                "source_ids": [str(source_id) for source_id in source_ids[:5] if str(source_id).strip()],
+                "triage_action": str(triage.get("action") or ""),
+                "triage_label": str(triage.get("label") or ""),
+                "reason": str(reason.get("headline") or triage.get("reason") or ""),
+            }
+        )
+    return {
+        "limit": max(1, int(limit or 20)),
+        "triage_action": str(triage_action or ""),
+        "recent_days": max(0, int(recent_days or 0)),
+        "active_count": max(0, active_count),
+        "visible_count": len(papers),
+        "review_counts": dict(queue_payload.get("review_counts") or {}),
+        "filtered_counts": dict(filtered_counts),
+        "sample": sample,
+    }
+
+
+def team_radar_daily_workflow(
+    *,
+    latest_run: dict[str, Any] | None,
+    queue_papers: list[dict[str, Any]],
+    evidence_summary: dict[str, Any],
+    latest_queue_review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    remaining: list[str] = []
+    run = latest_run if isinstance(latest_run, dict) else {}
+    if not run.get("id"):
+        remaining.append("latest_run")
+    if not queue_papers:
+        remaining.append("review_queue")
+    if str(evidence_summary.get("status") or "") != "passed":
+        remaining.append("recommendation_evidence")
+    return radar_daily_workflow_summary(
+        {"remaining_stage_ids": remaining},
+        run_command=os.environ.get("RADAR_THIN_MVP_RUN_COMMAND", "team/scripts/run_literature_radar_cycle.sh"),
+        review_url=os.environ.get("RADAR_THIN_MVP_REVIEW_URL", "/radar/queue"),
+        queue_review_command=os.environ.get(
+            "RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND",
+            "python team/research_cli.py radar-review-queue --usefulness useful",
+        ),
+        queue_review_optional=True,
+    )
+
+
 def build_team_literature_radar_brief_payload(
     database: TeamResearchDatabase,
     *,
@@ -543,6 +701,7 @@ def build_team_literature_radar_brief_payload(
     now: datetime | None = None,
     freshness_max_age_hours: int = 36,
     queue_recent_days: int = 0,
+    configured_primary_source_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_days = max(1, int(days))
     selected_limit = max(1, int(limit))
@@ -580,13 +739,44 @@ def build_team_literature_radar_brief_payload(
         recommendation_limit=selected_limit,
     )
     top_triage_summary = radar_triage_summary(top_recommendations)
+    latest_run_summary = team_literature_radar_run_summary(
+        runs[0] if runs else None,
+        now=selected_now,
+        freshness_max_age_hours=freshness_max_age_hours,
+    ) or {}
+    latest_run_id = str(latest_run_summary.get("id") or "")
+    latest_queue_review = database.latest_literature_radar_queue_review(latest_run_id) if latest_run_id else None
     activity = team_literature_radar_activity_digest(
         database,
         since=selected_now - timedelta(days=selected_days),
         limit=20,
     )
     brief = append_team_literature_radar_activity_to_brief(brief, activity)
+    brief = append_team_literature_radar_queue_usefulness_to_brief(brief, latest_queue_review)
     triage_summary = radar_triage_summary(queue_papers)
+    access_summary = radar_pdf_access_summary(queue_papers)
+    daily_source_health = radar_daily_source_health(
+        latest_run_summary,
+        configured_primary_source_coverage=configured_primary_source_coverage,
+    )
+    daily_guidance = radar_daily_queue_guidance(
+        queue_papers,
+        review_counts=review_counts,
+        latest_run=latest_run_summary,
+        access_summary=access_summary,
+        triage_summary=triage_summary,
+        source_health=daily_source_health,
+    )
+    daily_review_plan = radar_daily_review_plan(queue_papers, guidance=daily_guidance)
+    evidence_summary = radar_queue_evidence_summary(queue_papers)
+    daily_workflow = team_radar_daily_workflow(
+        latest_run=latest_run_summary,
+        queue_papers=queue_papers,
+        evidence_summary=evidence_summary,
+        latest_queue_review=latest_queue_review,
+    )
+    brief = append_radar_daily_source_health_to_report(brief, daily_source_health)
+    brief = append_radar_daily_review_plan_to_report(brief, daily_review_plan)
     brief_query = f"days={selected_days}&limit={selected_limit}&run_limit={selected_run_limit}"
     if selected_queue_recent_days:
         brief_query += f"&queue_recent_days={selected_queue_recent_days}"
@@ -603,6 +793,11 @@ def build_team_literature_radar_brief_payload(
             "triage_action_options": radar_triage_action_options("", top_triage_summary),
         },
         "source_coverage": radar_history_source_coverage_summary(
+            runs,
+            generated_at=selected_now,
+            days=selected_days,
+        ),
+        "primary_source_coverage": radar_history_primary_source_coverage_summary(
             runs,
             generated_at=selected_now,
             days=selected_days,
@@ -637,23 +832,26 @@ def build_team_literature_radar_brief_payload(
             generated_at=selected_now,
             days=selected_days,
         ),
+        "daily_source_health": daily_source_health,
+        "daily_workflow": daily_workflow,
         "queue": {
             "review": queue.get("review") or "",
             "recent_days": selected_queue_recent_days,
             "filtered_counts": queue.get("filtered_counts") or {},
-            "access_summary": radar_pdf_access_summary(queue_papers),
+            "access_summary": access_summary,
             "provenance_summary": radar_source_provenance_summary(queue_papers),
             "triage_summary": triage_summary,
+            "daily_guidance": daily_guidance,
+            "daily_source_health": daily_source_health,
+            "daily_workflow": daily_workflow,
+            "daily_review_plan": daily_review_plan,
+            "latest_queue_review": latest_queue_review or {},
             "triage_action_options": radar_triage_action_options("", triage_summary),
             "papers": queue_papers,
         },
         "activity": activity,
         "top_recommendations": top_recommendations,
-        "latest_run": team_literature_radar_run_summary(
-            runs[0] if runs else None,
-            now=selected_now,
-            freshness_max_age_hours=freshness_max_age_hours,
-        ),
+        "latest_run": latest_run_summary,
         "brief": brief,
         "links": {
             "radar": "/radar",
@@ -705,11 +903,21 @@ def team_literature_radar_activity_digest(
     since: datetime | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    events = database.list_audit_events(
-        limit=limit,
-        object_type_prefix="literature_radar_paper",
-        since=since,
-    )
+    selected_limit = max(1, int(limit or 20))
+    events = [
+        *database.list_audit_events(
+            limit=selected_limit,
+            object_type_prefix="literature_radar_paper",
+            since=since,
+        ),
+        *database.list_audit_events(
+            limit=selected_limit,
+            object_type_prefix="literature_radar_queue",
+            since=since,
+        ),
+    ]
+    events.sort(key=lambda event: str(event.get("created_at") or ""), reverse=True)
+    events = events[:selected_limit]
     return [team_literature_radar_activity_record(event) for event in events]
 
 
@@ -718,11 +926,15 @@ def team_literature_radar_activity_record(event: dict[str, Any]) -> dict[str, An
     before = event.get("before") if isinstance(event.get("before"), dict) else {}
     action = str(event.get("action") or "")
     status = str(after.get("review_status") or "").strip()
+    queue_review = after.get("review") if isinstance(after.get("review"), dict) else {}
     imported_item_id = str(after.get("imported_item_id") or "").strip()
-    return {
+    record = {
         "action": action,
-        "action_label": team_literature_radar_activity_label(action, status),
-        "status": status,
+        "action_label": team_literature_radar_activity_label(
+            action,
+            str(queue_review.get("usefulness") or status),
+        ),
+        "status": str(queue_review.get("usefulness") or status),
         "actor": str(event.get("actor") or "team-member"),
         "created_at": str(event.get("created_at") or ""),
         "dedupe_key": str(event.get("object_id") or after.get("dedupe_key") or before.get("dedupe_key") or ""),
@@ -732,11 +944,19 @@ def team_literature_radar_activity_record(event: dict[str, Any]) -> dict[str, An
         "imported_item_id": imported_item_id,
         "reason": team_literature_radar_activity_detail(after, before=before, action=action),
     }
+    if isinstance(queue_review.get("queue_context"), dict):
+        record["queue_context"] = dict(queue_review["queue_context"])
+    return record
 
 
 def team_literature_radar_activity_title(record: dict[str, Any]) -> str:
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    if review.get("run_id"):
+        return f"Radar queue {review.get('run_id')}"
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
-    return str(record.get("title") or paper.get("title") or "").strip()
+    recommendation = record.get("recommendation") if isinstance(record.get("recommendation"), dict) else {}
+    recommendation_paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+    return str(record.get("title") or paper.get("title") or recommendation_paper.get("title") or "").strip()
 
 
 def team_literature_radar_activity_label(action: str, status: str) -> str:
@@ -751,6 +971,9 @@ def team_literature_radar_activity_label(action: str, status: str) -> str:
         return "Updated relevance"
     if action == "literature_radar_paper_importance_updated":
         return "Updated importance"
+    if action == "literature_radar_queue_usefulness_reviewed":
+        selected_status = status.replace("_", " ") if status else "reviewed"
+        return f"Reviewed queue as {selected_status}"
     return action.replace("_", " ").title()
 
 
@@ -763,6 +986,9 @@ def team_literature_radar_activity_detail(
     comment = record.get("comment") if isinstance(record.get("comment"), dict) else {}
     if comment.get("content"):
         return str(comment.get("content") or "").strip()
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    if review.get("note"):
+        return str(review.get("note") or "").strip()
     if action == "literature_radar_paper_relevance_updated":
         prior = before or {}
         return (
@@ -788,6 +1014,29 @@ def append_team_literature_radar_activity_to_brief(brief: str, activity: list[di
         if event.get("reason"):
             detail += f" - {event['reason']}"
         lines.append(detail)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def append_team_literature_radar_queue_usefulness_to_brief(
+    brief: str,
+    review: dict[str, Any] | None,
+) -> str:
+    record = review if isinstance(review, dict) else {}
+    if not record:
+        return brief
+    usefulness = str(record.get("usefulness") or "needs_review").replace("_", " ")
+    reviewer = str(record.get("reviewer") or record.get("actor") or "team-member")
+    created_at = str(record.get("created_at") or "")
+    note = str(record.get("note") or "").strip()
+    lines = [
+        brief.rstrip(),
+        "",
+        "## Queue Usefulness",
+        "",
+        f"- Latest queue review: {usefulness} by {reviewer}{f' at {created_at}' if created_at else ''}.",
+    ]
+    if note:
+        lines.append(f"- Note: {note}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -825,6 +1074,7 @@ def team_literature_radar_run_summary(
         "pipeline_summary": radar_pipeline_trace_summary(pipeline_trace),
         "source_readiness": radar_source_readiness_summary(sources, collection_config),
         "oa_enrichment": radar_oa_enrichment_summary(sources, collection_config),
+        "primary_source_coverage": radar_primary_source_coverage_summary(sources, collection_config),
         "source_coverage": radar_source_coverage_summary(
             source_stats,
             source_errors,
@@ -1014,8 +1264,12 @@ def team_radar_query_terms_from_interests(interests: list[dict[str, Any]], *, li
     return fallback_terms[:limit]
 
 
-def team_radar_scoring_profile(interests: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def team_radar_scoring_profile(
+    interests: list[dict[str, Any]],
+    *,
+    profile_version: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    profile = {
         "type": "team_interests",
         "id": "team-interests",
         "name": "Team Interests",
@@ -1030,6 +1284,11 @@ def team_radar_scoring_profile(interests: list[dict[str, Any]]) -> dict[str, Any
             and clean_interest_weight(interest.get("weight")) > 0
         ],
     }
+    if isinstance(profile_version, dict) and profile_version.get("id"):
+        profile["profile_version_id"] = str(profile_version["id"])
+        profile["profile_hash"] = str(profile_version.get("profile_hash") or "")
+        profile["profile_version_created_at"] = str(profile_version.get("created_at") or "")
+    return profile
 
 
 def team_radar_collection_config(
@@ -1041,6 +1300,7 @@ def team_radar_collection_config(
     summarize: bool,
     summary_provider: str,
     summary_limit: int | None,
+    summary_min_score: int | None,
     import_results: bool,
     import_limit: int,
     min_import_score: int,
@@ -1055,6 +1315,7 @@ def team_radar_collection_config(
     semantic_scholar_author_ids: list[str] | None,
     dblp_author_pids: list[str] | None,
     openalex_author_ids: list[str] | None,
+    arxiv_categories: list[str] | None,
     conference_year: int | None,
     dblp_venue_profiles: list[str] | None,
     openreview_venue_profiles: list[str] | None,
@@ -1073,11 +1334,12 @@ def team_radar_collection_config(
         summarize=summarize,
         summary_provider=summary_provider,
         summary_limit=summary_limit,
+        summary_min_score=summary_min_score,
         import_results=import_results,
         import_limit=import_limit if import_results else None,
         min_import_score=min_import_score if import_results else None,
         project_id=project_id if import_results else None,
-        arxiv_categories=list(DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
+        arxiv_categories=list(arxiv_categories or DEFAULT_ARXIV_CATEGORIES) if "arxiv" in selected_sources else None,
         conference_year=conference_year or radar_year(now),
         dblp_venue_profiles=resolved_source_list(
             selected_sources,
@@ -1090,7 +1352,8 @@ def team_radar_collection_config(
             {"openreview_venues"},
             openreview_venue_profiles,
             "RADAR_OPENREVIEW_VENUES",
-        ),
+        )
+        or (list(DEFAULT_OPENREVIEW_VENUE_PROFILES) if "openreview_venues" in selected_sources else []),
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=(usenix_security_cycles or [1]) if "usenix_security" in selected_sources else None,
         official_accepted_pages=official_accepted_pages if "official_accepted_pages" in selected_sources else None,
@@ -1128,11 +1391,10 @@ def team_radar_collection_config(
             selected_sources,
             {"openreview"},
             openreview_invitations,
+            "RADAR_OPENREVIEW_INVITATIONS",
             "OPENREVIEW_INVITATIONS",
         ),
-        semantic_scholar_api_key_configured=bool(
-            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-        ),
+        semantic_scholar_api_key_configured=bool(team_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(team_openalex_mailto(openalex_mailto)),
         crossref_mailto_configured=bool(team_crossref_mailto(crossref_mailto)),
         unpaywall_email_configured=bool(team_unpaywall_email(unpaywall_email)),
@@ -1146,24 +1408,35 @@ def resolved_source_list(
     selected_sources: list[str],
     relevant_sources: set[str],
     values: list[str] | None,
-    env_name: str,
+    *env_names: str,
 ) -> list[str]:
     if not any(source in selected_sources for source in relevant_sources):
         return []
-    return values or env_list(env_name)
+    if values:
+        return values
+    for env_name in env_names:
+        env_values = env_list(env_name)
+        if env_values:
+            return env_values
+    return []
 
 
 def team_contact_value(*values: str | None) -> str | None:
     for value in values:
-        text = str(value or "").strip()
+        text = radar_config_value(value)
         if text:
             return text
     return None
 
 
+def team_semantic_scholar_api_key(value: str | None = None) -> str | None:
+    return team_contact_value(value, os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
+
+
 def team_openalex_mailto(value: str | None = None) -> str | None:
     return team_contact_value(
         value,
+        os.environ.get("RADAR_OPENALEX_MAILTO"),
         os.environ.get("OPENALEX_MAILTO"),
         os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
     )
@@ -1172,6 +1445,7 @@ def team_openalex_mailto(value: str | None = None) -> str | None:
 def team_crossref_mailto(value: str | None = None) -> str | None:
     return team_contact_value(
         value,
+        os.environ.get("RADAR_CROSSREF_MAILTO"),
         os.environ.get("CROSSREF_MAILTO"),
         os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
     )
@@ -1180,6 +1454,7 @@ def team_crossref_mailto(value: str | None = None) -> str | None:
 def team_unpaywall_email(value: str | None = None) -> str | None:
     return team_contact_value(
         value,
+        os.environ.get("RADAR_UNPAYWALL_EMAIL"),
         os.environ.get("UNPAYWALL_EMAIL"),
         os.environ.get(TEAM_RADAR_SOURCE_CONTACT_ENV),
     )
@@ -1339,11 +1614,10 @@ def collect_team_radar_candidates(
             sources,
             {"openreview"},
             openreview_invitations,
+            "RADAR_OPENREVIEW_INVITATIONS",
             "OPENREVIEW_INVITATIONS",
         ),
-        semantic_scholar_api_key_configured=bool(
-            semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
-        ),
+        semantic_scholar_api_key_configured=bool(team_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(selected_openalex_mailto),
         crossref_mailto_configured=bool(selected_crossref_mailto),
         unpaywall_email_configured=bool(selected_unpaywall_email),
@@ -1373,7 +1647,14 @@ def collect_team_radar_candidates(
         )
 
     if "arxiv" in sources:
-        collect_source("arxiv", lambda: collect_arxiv(query_terms=query_terms, max_results=max_results))
+        collect_source(
+            "arxiv",
+            lambda: collect_arxiv(
+                query_terms=query_terms,
+                categories=list(readiness_config.get("arxiv_categories") or DEFAULT_ARXIV_CATEGORIES),
+                max_results=max_results,
+            ),
+        )
     if "crossref" in sources:
         collect_source(
             "crossref",
@@ -1415,7 +1696,7 @@ def collect_team_radar_candidates(
             lambda: collect_semantic_scholar_search(
                 query_terms=query_terms,
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=team_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_authors" in sources:
@@ -1424,7 +1705,7 @@ def collect_team_radar_candidates(
             lambda: collect_semantic_scholar_author_papers(
                 author_ids=required_semantic_scholar_author_ids(semantic_scholar_author_ids),
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=team_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_references" in sources:
@@ -1434,7 +1715,7 @@ def collect_team_radar_candidates(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="references",
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=team_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_citations" in sources:
@@ -1444,7 +1725,7 @@ def collect_team_radar_candidates(
                 paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 relation="citations",
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=team_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "semantic_scholar_recommendations" in sources:
@@ -1454,7 +1735,7 @@ def collect_team_radar_candidates(
                 positive_paper_ids=required_semantic_scholar_seed_ids(seed_paper_ids),
                 negative_paper_ids=negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS"),
                 max_results=max_results,
-                api_key=semantic_scholar_api_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY"),
+                api_key=team_semantic_scholar_api_key(semantic_scholar_api_key),
             ),
         )
     if "openalex" in sources:
@@ -1584,14 +1865,17 @@ def required_openalex_author_ids(author_ids: list[str] | None = None) -> list[st
 
 
 def required_openreview_invitations(invitations: list[str] | None = None) -> list[str]:
-    selected_invitations = invitations or env_list("OPENREVIEW_INVITATIONS")
+    selected_invitations = invitations or env_list("RADAR_OPENREVIEW_INVITATIONS") or env_list("OPENREVIEW_INVITATIONS")
     if not selected_invitations:
-        raise ValueError("OpenReview source requires --openreview-invitation or OPENREVIEW_INVITATIONS.")
+        raise ValueError(
+            "OpenReview source requires --openreview-invitation, RADAR_OPENREVIEW_INVITATIONS, "
+            "or OPENREVIEW_INVITATIONS."
+        )
     return selected_invitations
 
 
 def env_list(name: str) -> list[str]:
-    return [part.strip() for part in os.environ.get(name, "").split(",") if part.strip()]
+    return [part for part in re.split(r"[\s,]+", os.environ.get(name, "").strip()) if part]
 
 
 def radar_year(now: datetime | None = None) -> int:

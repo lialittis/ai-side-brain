@@ -24,12 +24,20 @@ SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-status-settings-$STAMP.json"
 SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-settings-$STAMP.txt"
 QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-status-queue-$STAMP.json"
 QUEUE_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-queue-$STAMP.txt"
+VALIDATION_JSON_PATH="$OUTPUT_DIR/literature-radar-status-validation-$STAMP.json"
+VALIDATION_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-validation-$STAMP.txt"
+RELEVANCE_JSON_PATH="$OUTPUT_DIR/literature-radar-status-relevance-evaluation-$STAMP.json"
+RELEVANCE_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-relevance-evaluation-$STAMP.txt"
 LATEST_STATUS_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-latest.txt"
 LATEST_STATUS_JSON_PATH="$OUTPUT_DIR/literature-radar-status-latest.json"
 LATEST_SETTINGS_JSON_PATH="$OUTPUT_DIR/literature-radar-status-settings-latest.json"
 LATEST_SETTINGS_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-settings-latest.txt"
 LATEST_QUEUE_JSON_PATH="$OUTPUT_DIR/literature-radar-status-queue-latest.json"
 LATEST_QUEUE_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-queue-latest.txt"
+LATEST_VALIDATION_JSON_PATH="$OUTPUT_DIR/literature-radar-status-validation-latest.json"
+LATEST_VALIDATION_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-validation-latest.txt"
+LATEST_RELEVANCE_JSON_PATH="$OUTPUT_DIR/literature-radar-status-relevance-evaluation-latest.json"
+LATEST_RELEVANCE_TEXT_PATH="$OUTPUT_DIR/literature-radar-status-relevance-evaluation-latest.txt"
 mkdir -p "$OUTPUT_DIR"
 
 USE_SAVED_DEFAULTS="${RADAR_STATUS_USE_SAVED_DEFAULTS:-${RADAR_USE_SAVED_DEFAULTS:-1}}"
@@ -53,6 +61,7 @@ STATUS_ARGS=(
   "--limit" "$QUEUE_LIMIT"
   "--freshness-max-age-hours" "$FRESHNESS_MAX_AGE_HOURS"
 )
+RELEVANCE_ARGS=("team/research_cli.py" "radar-evaluate-relevance")
 
 if [[ "$USE_SAVED_DEFAULTS" == "1" ]]; then
   SETTINGS_ARGS+=("--use-saved-defaults")
@@ -66,6 +75,7 @@ if [[ -n "${RADAR_DB_PATH:-}" ]]; then
   QUEUE_ARGS+=("--db-path" "$RADAR_DB_PATH")
   QUEUE_TEXT_ARGS+=("--db-path" "$RADAR_DB_PATH")
   STATUS_ARGS+=("--db-path" "$RADAR_DB_PATH")
+  RELEVANCE_ARGS+=("--db-path" "$RADAR_DB_PATH")
 fi
 if [[ -n "${RADAR_SOURCE_PRESET:-}" ]]; then
   SETTINGS_ARGS+=("--source-preset" "$RADAR_SOURCE_PRESET")
@@ -80,10 +90,17 @@ if [[ -n "${RADAR_RECOMMENDATION_LIMIT:-}" ]]; then
   SETTINGS_TEXT_ARGS+=("--limit" "$RADAR_RECOMMENDATION_LIMIT")
 fi
 if [[ -n "${RADAR_SOURCES:-}" || ( "$USE_SAVED_DEFAULTS" != "1" && -z "${RADAR_SOURCE_PRESET:-}" ) ]]; then
-  read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+  read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref openreview_venues usenix_security ndss}"
   for source in "${SOURCES[@]}"; do
     SETTINGS_ARGS+=("--source" "$source")
     SETTINGS_TEXT_ARGS+=("--source" "$source")
+  done
+fi
+if [[ -n "${RADAR_ARXIV_CATEGORIES:-}" ]]; then
+  read -r -a ARXIV_CATEGORIES <<< "$RADAR_ARXIV_CATEGORIES"
+  for category in "${ARXIV_CATEGORIES[@]}"; do
+    SETTINGS_ARGS+=("--arxiv-category" "$category")
+    SETTINGS_TEXT_ARGS+=("--arxiv-category" "$category")
   done
 fi
 if [[ -n "${RADAR_CONFERENCE_YEAR:-}" ]]; then
@@ -196,6 +213,10 @@ if [[ -n "${RADAR_SUMMARY_LIMIT:-}" ]]; then
   SETTINGS_ARGS+=("--summary-limit" "$RADAR_SUMMARY_LIMIT")
   SETTINGS_TEXT_ARGS+=("--summary-limit" "$RADAR_SUMMARY_LIMIT")
 fi
+if [[ -n "${RADAR_SUMMARY_MIN_SCORE:-}" ]]; then
+  SETTINGS_ARGS+=("--summary-min-score" "$RADAR_SUMMARY_MIN_SCORE")
+  SETTINGS_TEXT_ARGS+=("--summary-min-score" "$RADAR_SUMMARY_MIN_SCORE")
+fi
 if [[ "${RADAR_CACHE_PDFS:-0}" == "1" ]]; then
   SETTINGS_ARGS+=("--cache-pdfs")
   SETTINGS_TEXT_ARGS+=("--cache-pdfs")
@@ -242,6 +263,26 @@ done
 "$PYTHON_BIN" "${SETTINGS_TEXT_ARGS[@]}" > "$SETTINGS_TEXT_PATH"
 "$PYTHON_BIN" "${QUEUE_ARGS[@]}" --json > "$QUEUE_JSON_PATH"
 "$PYTHON_BIN" "${QUEUE_TEXT_ARGS[@]}" > "$QUEUE_TEXT_PATH"
+VALIDATION_ARGS=("${SETTINGS_ARGS[@]}")
+VALIDATION_ARGS[1]="radar-validate-sources"
+if [[ "${RADAR_STATUS_VALIDATE_SOURCES_LIVE:-${RADAR_VALIDATE_SOURCES_LIVE:-0}}" == "1" ]]; then
+  VALIDATION_ARGS+=("--live")
+fi
+VALIDATION_MAX_RESULTS="${RADAR_STATUS_VALIDATION_MAX_RESULTS:-${RADAR_SOURCE_VALIDATION_MAX_RESULTS:-}}"
+if [[ -n "$VALIDATION_MAX_RESULTS" ]]; then
+  VALIDATION_ARGS+=("--validation-max-results" "$VALIDATION_MAX_RESULTS")
+fi
+"$PYTHON_BIN" "${VALIDATION_ARGS[@]}" --json > "$VALIDATION_JSON_PATH"
+"$PYTHON_BIN" "${VALIDATION_ARGS[@]}" > "$VALIDATION_TEXT_PATH"
+"$PYTHON_BIN" "${RELEVANCE_ARGS[@]}" --json > "$RELEVANCE_JSON_PATH"
+"$PYTHON_BIN" "${RELEVANCE_ARGS[@]}" > "$RELEVANCE_TEXT_PATH"
+STATUS_ARGS+=(
+  "--source-validation-json" "$VALIDATION_JSON_PATH"
+  "--relevance-evaluation-json" "$RELEVANCE_JSON_PATH"
+)
+export RADAR_STATUS_EVIDENCE_PATH="$STATUS_JSON_PATH"
+export RADAR_VALIDATION_EVIDENCE_PATH="$VALIDATION_JSON_PATH"
+export RADAR_RELEVANCE_EVIDENCE_PATH="$RELEVANCE_JSON_PATH"
 "$PYTHON_BIN" "${STATUS_ARGS[@]}" --json > "$STATUS_JSON_PATH"
 "$PYTHON_BIN" "${STATUS_ARGS[@]}" > "$STATUS_TEXT_PATH"
 
@@ -252,15 +293,23 @@ if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
   cp "$SETTINGS_TEXT_PATH" "$LATEST_SETTINGS_TEXT_PATH"
   cp "$QUEUE_JSON_PATH" "$LATEST_QUEUE_JSON_PATH"
   cp "$QUEUE_TEXT_PATH" "$LATEST_QUEUE_TEXT_PATH"
+  cp "$VALIDATION_JSON_PATH" "$LATEST_VALIDATION_JSON_PATH"
+  cp "$VALIDATION_TEXT_PATH" "$LATEST_VALIDATION_TEXT_PATH"
+  cp "$RELEVANCE_JSON_PATH" "$LATEST_RELEVANCE_JSON_PATH"
+  cp "$RELEVANCE_TEXT_PATH" "$LATEST_RELEVANCE_TEXT_PATH"
 fi
 
 echo "Literature Radar status: $STATUS_TEXT_PATH"
 echo "Literature Radar status JSON: $STATUS_JSON_PATH"
 echo "Literature Radar status settings JSON: $SETTINGS_JSON_PATH"
 echo "Literature Radar status queue JSON: $QUEUE_JSON_PATH"
+echo "Literature Radar status validation JSON: $VALIDATION_JSON_PATH"
+echo "Literature Radar status relevance evaluation JSON: $RELEVANCE_JSON_PATH"
 if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
   echo "Literature Radar latest status: $LATEST_STATUS_TEXT_PATH"
   echo "Literature Radar latest status JSON: $LATEST_STATUS_JSON_PATH"
   echo "Literature Radar latest status settings JSON: $LATEST_SETTINGS_JSON_PATH"
   echo "Literature Radar latest status queue JSON: $LATEST_QUEUE_JSON_PATH"
+  echo "Literature Radar latest status validation JSON: $LATEST_VALIDATION_JSON_PATH"
+  echo "Literature Radar latest status relevance evaluation JSON: $LATEST_RELEVANCE_JSON_PATH"
 fi

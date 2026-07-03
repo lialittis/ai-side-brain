@@ -70,9 +70,16 @@ elif [[ "$USE_SAVED_DEFAULTS" != "1" ]]; then
 fi
 
 if [[ -n "${RADAR_SOURCES:-}" || ( "$USE_SAVED_DEFAULTS" != "1" && -z "${RADAR_SOURCE_PRESET:-}" ) ]]; then
-  read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+  read -r -a SOURCES <<< "${RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref openreview_venues usenix_security ndss}"
   for source in "${SOURCES[@]}"; do
     ARGS+=("--source" "$source")
+  done
+fi
+
+if [[ -n "${RADAR_ARXIV_CATEGORIES:-}" ]]; then
+  read -r -a ARXIV_CATEGORIES <<< "$RADAR_ARXIV_CATEGORIES"
+  for category in "${ARXIV_CATEGORIES[@]}"; do
+    ARGS+=("--arxiv-category" "$category")
   done
 fi
 
@@ -169,6 +176,9 @@ if [[ -n "${RADAR_SUMMARY_PROVIDER:-}" ]]; then
 fi
 if [[ -n "${RADAR_SUMMARY_LIMIT:-}" ]]; then
   ARGS+=("--summary-limit" "$RADAR_SUMMARY_LIMIT")
+fi
+if [[ -n "${RADAR_SUMMARY_MIN_SCORE:-}" ]]; then
+  ARGS+=("--summary-min-score" "$RADAR_SUMMARY_MIN_SCORE")
 fi
 if [[ "${RADAR_CACHE_PDFS:-0}" == "1" ]]; then
   ARGS+=("--cache-pdfs")

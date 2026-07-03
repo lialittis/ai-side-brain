@@ -22,6 +22,7 @@ from team.research_web import (
     add_team_interest,
     build_literature_radar_settings_payload,
     build_literature_radar_status_payload,
+    build_team_literature_radar_operations_readiness,
     canonical_pdf_url,
     render_interests_page,
     render_latest_papers_page,
@@ -32,15 +33,19 @@ from team.research_web import (
     remove_paper_tag,
     remove_team_interest,
     radar_brief_path_from_fields,
+    radar_queue_path_from_fields,
     radar_settings_from_fields,
     import_radar_recommendation_to_library,
     import_radar_paper_to_library,
     import_radar_queue_to_library,
     make_handler,
+    radar_queue_review_notice,
+    review_radar_queue_usefulness,
     review_radar_paper,
     run_literature_radar_from_web,
     save_team_interest,
     submit_research_item,
+    team_radar_source_validation_args,
     update_paper_tag,
     update_paper_importance,
     update_paper_interactions,
@@ -50,11 +55,92 @@ from team.research_web import (
     render_literature_radar_brief_page,
     render_literature_radar_queue_page,
     render_literature_radar_papers_page,
+    render_latest_radar_queue_item,
+    render_radar_paper_history_item,
     render_radar_links,
 )
 
 
 class TeamResearchWebTest(unittest.TestCase):
+    def test_radar_web_cards_recover_stale_queue_metadata(self) -> None:
+        record = {
+            "dedupe_key": "title:prompt-injection-defenses-for-ai-agent-security:2026",
+            "title": "Prompt Injection Defenses for AI Agent Security",
+            "seen_count": 1,
+            "review_status": "unreviewed",
+            "latest_seen_at": "2026-07-02T12:00:00+00:00",
+            "release_date": "1970-01-01",
+            "paper": {
+                "title": "Prompt Injection Defenses for AI Agent Security",
+                "year": 2026,
+                "source_id": "ndss",
+            },
+            "latest_recommendation": {"score": 0, "label": "needs_review"},
+            "source_provenance": {
+                "source_id": "ndss",
+                "source_class": "official_accepted_page",
+                "authoritative_metadata": True,
+                "source_url": "https://www.ndss-symposium.org/ndss2026/accepted-papers/",
+            },
+        }
+
+        queue_html = render_latest_radar_queue_item(record, review_filter="unreviewed")
+        history_html = render_radar_paper_history_item(record)
+
+        for html in (queue_html, history_html):
+            self.assertIn("Prompt Injection Defenses for AI Agent Security", html)
+            self.assertIn(">ndss</span>", html)
+            self.assertIn("possibly_relevant", html)
+            self.assertIn("Score: 54", html)
+            self.assertIn("AI agent security", html)
+            self.assertIn("prompt injection", html)
+            self.assertNotIn("needs_review", html)
+            self.assertNotIn("Score: 0", html)
+
+        self.assertIn("Action: Skim metadata", queue_html)
+        self.assertIn("Triage: Skim", queue_html)
+        self.assertIn("source: ndss", history_html)
+
+    def test_radar_web_cards_show_configured_official_accepted_page_source(self) -> None:
+        record = {
+            "dedupe_key": "title:official-page-runtime-hardening:2026",
+            "title": "Official Page Runtime Hardening",
+            "seen_count": 1,
+            "review_status": "unreviewed",
+            "latest_seen_at": "2026-07-02T12:00:00+00:00",
+            "paper": {
+                "title": "Official Page Runtime Hardening",
+                "year": 2026,
+                "source_id": "official_accepted_pages",
+                "source_records": [
+                    {
+                        "source_id": "official_accepted_pages",
+                        "configured_source_id": "ieee_sp",
+                        "venue_profile_id": "ieee_sp",
+                        "venue_group": "security",
+                        "source_page": "https://www.ieee-security.org/accepted-papers.html",
+                    }
+                ],
+            },
+            "latest_recommendation": {"score": 72, "label": "highly_relevant"},
+            "source_provenance": {
+                "source_id": "official_accepted_pages",
+                "configured_source_id": "ieee_sp",
+                "venue_profile_id": "ieee_sp",
+                "source_class": "official_accepted_page",
+                "authoritative_metadata": True,
+                "source_url": "https://www.ieee-security.org/accepted-papers.html",
+            },
+        }
+
+        queue_html = render_latest_radar_queue_item(record, review_filter="unreviewed")
+        history_html = render_radar_paper_history_item(record)
+
+        for html in (queue_html, history_html):
+            self.assertIn("Source: ieee_sp via official_accepted_pages", html)
+            self.assertIn("configured source: ieee_sp", html)
+            self.assertIn(">ieee_sp</span>", html)
+
     def test_radar_link_renderer_uses_enriched_queue_record_links(self) -> None:
         html = render_radar_links(
             {
@@ -176,6 +262,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Latest run: 2026-07-01 07:30", html)
             self.assertIn("Status: failed", html)
             self.assertIn("Action: inspect failed run", html)
+            self.assertIn("run failed", html)
+            self.assertIn("The latest Radar run failed before producing a usable result.", html)
             self.assertIn("Freshness:", html)
             self.assertIn("Policy: 1 authoritative / 0 trend", html)
             self.assertIn("Coverage: failed", html)
@@ -235,6 +323,14 @@ class TeamResearchWebTest(unittest.TestCase):
                 ],
                 now=datetime(2026, 7, 1, 8, 11, tzinfo=timezone.utc),
             )
+            database.add_literature_radar_queue_review(
+                run_id=run["id"],
+                usefulness="useful",
+                reviewer="Alice",
+                note="First-page queue is useful for daily review.",
+                queue_counts={"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0},
+                now=datetime(2026, 7, 1, 8, 12, tzinfo=timezone.utc),
+            )
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(database))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -288,6 +384,13 @@ class TeamResearchWebTest(unittest.TestCase):
                     status_payload = json.loads(response.read().decode("utf-8"))
                     status_content_type = response.headers.get("Content-Type")
                     status_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/radar/setup-env.txt",
+                    timeout=5,
+                ) as response:
+                    setup_env_text = response.read().decode("utf-8")
+                    setup_env_content_type = response.headers.get("Content-Type")
+                    setup_env_status = response.status
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -305,6 +408,26 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["triage_summary"]["top_action"], "import_to_library")
             self.assertEqual(queue_payload["triage_action_options"][0]["label"], "Import")
             self.assertEqual(queue_payload["triage_action_options"][0]["count"], 1)
+            self.assertEqual(queue_payload["daily_guidance"]["next_action"], "import_to_library")
+            self.assertEqual(queue_payload["daily_guidance"]["active_count"], 1)
+            self.assertEqual(queue_payload["daily_guidance"]["downloadable_count"], 1)
+            self.assertEqual(
+                queue_payload["daily_guidance"]["freshness_status"],
+                queue_payload["latest_run"]["freshness"]["status"],
+            )
+            self.assertEqual(queue_payload["daily_review_plan"]["status"], "active")
+            self.assertEqual(queue_payload["latest_queue_review"]["usefulness"], "useful")
+            self.assertEqual(queue_payload["latest_queue_review"]["reviewer"], "Alice")
+            self.assertEqual(queue_payload["latest_queue_review"]["note"], "First-page queue is useful for daily review.")
+            self.assertEqual(queue_payload["daily_workflow"]["current_step_ids"], [])
+            self.assertEqual(
+                queue_payload["daily_review_plan"]["headline"],
+                "Start with Route Verified Radar Queue Paper.",
+            )
+            self.assertEqual(
+                queue_payload["daily_review_plan"]["primary"]["action"],
+                queue_payload["papers"][0]["triage_hint"]["action"],
+            )
             self.assertEqual(filtered_queue_payload["triage_action"], "import_to_library")
             self.assertEqual(filtered_queue_payload["links"]["json"], "/radar/queue.json?limit=1&triage_action=import_to_library")
             self.assertEqual(filtered_queue_payload["papers"][0]["title"], "Route Verified Radar Queue Paper")
@@ -313,6 +436,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(queue_payload["latest_run"]["source_coverage"]["status"], "succeeded")
             self.assertEqual(queue_payload["latest_run"]["source_coverage"]["failed_count"], 0)
+            self.assertEqual(queue_payload["latest_run"]["primary_source_coverage"]["status"], "partial")
+            self.assertEqual(queue_payload["latest_run"]["primary_source_coverage"]["covered_primary_source_ids"], ["arxiv"])
             self.assertEqual(queue_payload["latest_run"]["source_readiness"]["status"], "ready")
             self.assertEqual(queue_payload["latest_run"]["oa_enrichment"]["status"], "not_applicable")
             self.assertEqual(queue_payload["latest_run"]["source_stats"][0]["source_id"], "arxiv")
@@ -323,6 +448,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["papers"][0]["link"], "https://arxiv.org/abs/2601.00051")
             self.assertEqual(queue_payload["papers"][0]["triage_hint"]["action"], "import_to_library")
             self.assertEqual(queue_payload["papers"][0]["triage_hint"]["label"], "Import")
+            self.assertEqual(
+                queue_payload["daily_source_health"]["next_action"],
+                "run_saved_defaults_and_configure_primary_sources",
+            )
+            self.assertIn("reason_to_read", queue_payload["papers"][0])
+            self.assertIn("headline", queue_payload["papers"][0]["reason_to_read"])
             self.assertIn(
                 "Signal: A queued paper exposed through the JSON route.",
                 queue_payload["papers"][0]["signal_lines"],
@@ -334,10 +465,24 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_html_content_type, "text/html; charset=utf-8")
             self.assertIn("Radar Queue", queue_html)
             self.assertIn("Daily Review", queue_html)
+            self.assertIn("Daily guidance:", queue_html)
+            self.assertIn("Source health:", queue_html)
+            self.assertIn("Daily workflow:", queue_html)
+            self.assertIn("Queue usefulness:", queue_html)
+            self.assertIn("last: useful; by Alice", queue_html)
+            self.assertIn("thin MVP review recorded", queue_html)
+            self.assertIn("First-page queue is useful for daily review.", queue_html)
+            self.assertIn("source action: run saved defaults and configure primary sources", queue_html)
+            self.assertIn("Daily plan:", queue_html)
+            self.assertIn("Start with Route Verified Radar Queue Paper.", queue_html)
+            self.assertIn("next: Import to library", queue_html)
+            self.assertIn("active: 1", queue_html)
+            self.assertIn("downloadable: 1", queue_html)
             self.assertIn("Route Verified Radar Queue Paper", queue_html)
+            self.assertIn("Reason to read:", queue_html)
             self.assertIn("Pipeline: 10/10", queue_html)
             self.assertIn("OA: not applicable", queue_html)
-            self.assertIn("top: import_to_library", queue_html)
+            self.assertIn("top: Import to library", queue_html)
             self.assertIn("triage_action=import_to_library", queue_html)
             self.assertIn("Triage lanes:", queue_html)
             self.assertIn(">Import 1</a>", queue_html)
@@ -368,6 +513,19 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["queue"]["access_summary"]["downloadable"], 1)
             self.assertEqual(brief_payload["queue"]["access_summary"]["kinds"], {"arxiv_pdf": 1})
             self.assertEqual(brief_payload["queue"]["triage_summary"]["top_action"], "import_to_library")
+            self.assertEqual(brief_payload["queue"]["daily_guidance"]["next_action"], "import_to_library")
+            self.assertEqual(
+                brief_payload["queue"]["daily_review_plan"]["headline"],
+                "Start with Route Verified Radar Queue Paper.",
+            )
+            self.assertEqual(
+                brief_payload["queue"]["daily_review_plan"]["primary"]["action"],
+                brief_payload["queue"]["papers"][0]["triage_hint"]["action"],
+            )
+            self.assertEqual(brief_payload["queue"]["latest_queue_review"]["usefulness"], "useful")
+            self.assertEqual(brief_payload["queue"]["latest_queue_review"]["reviewer"], "Alice")
+            self.assertEqual(brief_payload["daily_workflow"]["current_step_ids"], [])
+            self.assertEqual(brief_payload["queue"]["daily_workflow"]["current_step_ids"], [])
             self.assertEqual(brief_payload["triage_plan"]["summary"]["top_action"], "import_to_library")
             self.assertEqual(brief_payload["triage_plan"]["triage_action_options"][0]["count"], 1)
             self.assertEqual(brief_payload["queue"]["triage_action_options"][0]["label"], "Import")
@@ -383,7 +541,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["top_recommendations"][0]["import_result"], {})
             self.assertEqual(brief_payload["top_recommendations"][0]["triage_hint"]["action"], "import_to_library")
             self.assertEqual(brief_payload["queue"]["papers"][0]["release_date"], "2026-06-27")
-            self.assertEqual(brief_payload["activity"], [])
+            self.assertEqual(brief_payload["activity"][0]["action"], "literature_radar_queue_usefulness_reviewed")
+            self.assertEqual(brief_payload["activity"][0]["status"], "useful")
+            self.assertEqual(brief_payload["activity"][0]["reason"], "First-page queue is useful for daily review.")
             self.assertEqual(brief_payload["latest_run"]["id"], run["id"])
             self.assertEqual(brief_payload["latest_run"]["freshness"]["max_age_hours"], 12)
             self.assertEqual(brief_payload["source_coverage"]["run_count"], 1)
@@ -399,12 +559,25 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(settings_content_type, "application/json")
             self.assertTrue(settings_payload["success"])
             self.assertEqual(settings_payload["links"]["html"], "/radar")
+            self.assertEqual(settings_payload["links"]["setup_env_text"], "/radar/setup-env.txt")
             self.assertEqual(settings_payload["links"]["activity_json"], "/radar/activity.json?days=7&limit=50")
             self.assertEqual(settings_payload["supported_source_ids"], radar_supported_source_ids())
             self.assertEqual(status_status, 200)
             self.assertEqual(status_content_type, "application/json")
             self.assertTrue(status_payload["success"])
             self.assertEqual(status_payload["kind"], "team_literature_radar_status")
+            self.assertEqual(setup_env_status, 200)
+            self.assertEqual(setup_env_content_type, "text/plain; charset=utf-8")
+            self.assertIn("# Team Literature Radar MVP local setup", setup_env_text)
+            self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", setup_env_text)
+            self.assertIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", setup_env_text)
+            self.assertIn("RADAR_BACKUP_TARGETS=/absolute/path/to/team-radar-backups", setup_env_text)
+            self.assertIn("radar-validate-sources", setup_env_text)
+            self.assertIn("--source-preset team_security_daily", setup_env_text)
+            self.assertIn("--venue-profile security", setup_env_text)
+            self.assertIn("--openreview-venue-profile iclr", setup_env_text)
+            self.assertIn("--usenix-cycle 1", setup_env_text)
+            self.assertIn("--live --validation-max-results 1 --json", setup_env_text)
             self.assertEqual(status_payload["settings"]["kind"], "team_literature_radar_settings")
             self.assertEqual(status_payload["queue"]["kind"], "team_literature_radar_queue")
             self.assertEqual(status_payload["queue"]["limit"], 1)
@@ -416,6 +589,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(status_payload["queue"]["papers"][0]["link"], "https://arxiv.org/abs/2601.00051")
             self.assertEqual(status_payload["latest_run"]["id"], run["id"])
             self.assertEqual(status_payload["links"]["status_json"], "/radar/status.json?limit=1")
+            self.assertEqual(status_payload["links"]["setup_env_text"], "/radar/setup-env.txt")
             self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
             self.assertEqual(settings_payload["trend_signal_options"][0]["collector_status"], "not_implemented")
             self.assertEqual(settings_payload["source_readiness"]["status"], "ready_with_warnings")
@@ -423,7 +597,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(brief_payload["source_policy"]["authoritative_count"], 1)
             self.assertEqual(brief_payload["source_policy"]["trend_signal_count"], 0)
             self.assertIn("Team Literature Radar Brief", brief_payload["brief"])
+            self.assertIn("Daily Review Plan", brief_payload["brief"])
+            self.assertIn("Start with Route Verified Radar Queue Paper.", brief_payload["brief"])
             self.assertIn("Route Verified Radar Queue Paper", brief_payload["brief"])
+            self.assertIn("## Queue Usefulness", brief_payload["brief"])
+            self.assertIn("Latest queue review: useful by Alice", brief_payload["brief"])
+            self.assertIn("First-page queue is useful for daily review.", brief_payload["brief"])
             self.assertEqual(brief_payload["links"]["radar"], "/radar")
             self.assertEqual(
                 brief_payload["links"]["json"],
@@ -435,8 +614,166 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(activity_payload["kind"], "team_literature_radar_activity")
             self.assertEqual(activity_payload["days"], 7)
             self.assertEqual(activity_payload["limit"], 5)
-            self.assertEqual(activity_payload["activity"], [])
+            self.assertEqual(activity_payload["activity"][0]["action"], "literature_radar_queue_usefulness_reviewed")
+            self.assertEqual(activity_payload["activity"][0]["action_label"], "Reviewed queue as useful")
+            self.assertEqual(activity_payload["activity"][0]["title"], f"Radar queue {run['id']}")
+            self.assertEqual(activity_payload["activity"][0]["reason"], "First-page queue is useful for daily review.")
             self.assertEqual(activity_payload["links"]["radar"], "/radar")
+
+    def test_radar_queue_usefulness_review_is_saved_as_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                now=datetime(2026, 7, 1, 9, 1, tzinfo=timezone.utc),
+            )
+
+            result = review_radar_queue_usefulness(
+                database,
+                {
+                    "run_id": run["id"],
+                    "usefulness": "partly_useful",
+                    "reviewer": "Bob",
+                    "note": "Needs better ranking for tomorrow.",
+                    "queue_limit": "7",
+                    "queue_triage_action": "import",
+                    "queue_recent_days": "3",
+                    "return_to": "latest",
+                },
+            )
+            queue_payload = build_team_literature_radar_queue_payload(database, limit=7)
+            activity = build_team_literature_radar_activity_payload(database, days=7, limit=5)
+
+        self.assertEqual(result["review"]["usefulness"], "partly_useful")
+        self.assertEqual(result["limit"], 7)
+        self.assertEqual(result["triage_action"], "import_to_library")
+        self.assertEqual(result["recent_days"], 3)
+        self.assertEqual(result["return_to"], "latest")
+        self.assertEqual(queue_payload["latest_queue_review"]["reviewer"], "Bob")
+        self.assertEqual(queue_payload["latest_queue_review"]["note"], "Needs better ranking for tomorrow.")
+        self.assertEqual(activity["activity"][0]["action"], "literature_radar_queue_usefulness_reviewed")
+        self.assertEqual(activity["activity"][0]["action_label"], "Reviewed queue as partly useful")
+        self.assertEqual(activity["activity"][0]["reason"], "Needs better ranking for tomorrow.")
+
+    def test_radar_queue_usefulness_review_renders_quick_decision_buttons(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                now=datetime(2026, 7, 1, 9, 1, tzinfo=timezone.utc),
+            )
+
+            html = render_literature_radar_queue_page(database, limit=20)
+
+        self.assertIn("Queue usefulness:", html)
+        self.assertIn("not reviewed yet", html)
+        self.assertIn("review scope: 0 visible / 0 active", html)
+        self.assertIn("optional queue feedback", html)
+        self.assertIn("optional feedback: Queue usefulness review", html)
+        self.assertIn('role="group" aria-label="Queue usefulness decision"', html)
+        self.assertIn('placeholder="Name (optional)" aria-label="Reviewer name"', html)
+        self.assertNotIn('aria-label="Reviewer name" required', html)
+        self.assertIn('name="usefulness" value="useful">Useful</button>', html)
+        self.assertIn('name="usefulness" value="partly_useful">Partly useful</button>', html)
+        self.assertIn('name="usefulness" value="not_useful">Not useful</button>', html)
+        self.assertIn('name="usefulness" value="needs_review">Needs review</button>', html)
+        self.assertNotIn('<select name="usefulness"', html)
+
+    def test_radar_queue_usefulness_review_renders_recorded_thin_mvp_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                now=datetime(2026, 7, 1, 9, 1, tzinfo=timezone.utc),
+            )
+            database.add_literature_radar_queue_review(
+                run_id=run["id"],
+                usefulness="partly_useful",
+                reviewer="Alice",
+                note="Good enough for daily triage.",
+                queue_counts={"all": 0, "unreviewed": 0, "watch": 0, "dismissed": 0},
+                now=datetime(2026, 7, 1, 9, 2, tzinfo=timezone.utc),
+            )
+
+            html = render_literature_radar_queue_page(database, limit=20)
+
+        self.assertIn("Queue usefulness:", html)
+        self.assertIn("last: partly useful; by Alice", html)
+        self.assertIn("review scope: 0 visible / 0 active", html)
+        self.assertIn("thin MVP review recorded", html)
+        self.assertNotIn("optional queue feedback", html)
+        self.assertNotIn("optional feedback: Queue usefulness review", html)
+
+    def test_radar_queue_usefulness_review_defaults_blank_reviewer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[],
+                recommendations=[],
+                now=datetime(2026, 7, 1, 9, 1, tzinfo=timezone.utc),
+            )
+
+            result = review_radar_queue_usefulness(
+                database,
+                {
+                    "run_id": run["id"],
+                    "usefulness": " useful ",
+                    "reviewer": "   ",
+                    "note": "  quick web decision  ",
+                },
+            )
+            queue_payload = build_team_literature_radar_queue_payload(database, limit=20)
+            activity = build_team_literature_radar_activity_payload(database, days=7, limit=5)
+
+        self.assertEqual(result["review"]["usefulness"], "useful")
+        self.assertEqual(result["review"]["reviewer"], "team-member")
+        self.assertEqual(result["review"]["note"], "quick web decision")
+        self.assertEqual(result["review"]["queue_context"]["limit"], 20)
+        self.assertEqual(result["review"]["queue_context"]["active_count"], 0)
+        self.assertEqual(result["review"]["queue_context"]["visible_count"], 0)
+        self.assertIn("status", result["thin_mvp_readiness"])
+        self.assertEqual(queue_payload["latest_queue_review"]["usefulness"], "useful")
+        self.assertEqual(queue_payload["latest_queue_review"]["reviewer"], "team-member")
+        self.assertEqual(queue_payload["latest_queue_review"]["queue_context"]["limit"], 20)
+        self.assertEqual(activity["activity"][0]["action_label"], "Reviewed queue as useful")
+        self.assertEqual(activity["activity"][0]["actor"], "team-member")
+        self.assertEqual(activity["activity"][0]["queue_context"]["active_count"], 0)
+        self.assertEqual(activity["activity"][0]["queue_context"]["visible_count"], 0)
+        self.assertIn(
+            "Thin MVP:",
+            radar_queue_review_notice(result["review"], result["thin_mvp_readiness"]),
+        )
+        self.assertEqual(
+            radar_queue_review_notice(result["review"], {"status": "ready"}),
+            "Saved queue review: useful. Thin MVP: ready.",
+        )
 
     def test_literature_radar_page_lists_stored_recommendations(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -579,6 +916,30 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("/radar/status.json?limit=20", html)
             self.assertIn("Status JSON", html)
             self.assertIn("Radar Profile", html)
+            self.assertIn("Thin MVP readiness:", html)
+            self.assertIn("active step:", html)
+            self.assertIn("Beta readiness:", html)
+            self.assertIn("Beta/backlog setup:", html)
+            self.assertIn("env block: 3 lines", html)
+            self.assertIn("Beta/Backlog Setup Env", html)
+            self.assertIn("Next Commands", html)
+            self.assertIn('href="/radar/setup-env.txt">Open Setup Env</a>', html)
+            self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", html)
+            self.assertIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", html)
+            self.assertIn("RADAR_BACKUP_TARGETS=/absolute/path/to/team-radar-backups", html)
+            self.assertIn("RADAR_BACKUP_DRY_RUN=1 team/scripts/backup_literature_radar.sh", html)
+            self.assertIn("invalid: 0", html)
+            self.assertIn("status: needs attention", html)
+            self.assertIn("progress:", html)
+            self.assertIn("remaining:", html)
+            self.assertIn("estimate:", html)
+            self.assertIn("Guardrail readiness:", html)
+            self.assertIn("Schema migrations:", html)
+            self.assertIn("version: 2/2", html)
+            self.assertIn("profile version:", html)
+            self.assertIn("Validation commands:", html)
+            self.assertIn("radar-validate-sources", html)
+            self.assertIn("Validation evidence:", html)
             self.assertIn("sources: arXiv, DBLP, Semantic Scholar +6 more", html)
             self.assertIn("max/source: 20", html)
             self.assertIn("last run: 2026-07-01 10:00", html)
@@ -615,8 +976,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Released: 2026-06-30", queue_html)
             self.assertIn("Worth team attention.", queue_html)
             self.assertIn('name="return_to" value="queue"', queue_html)
+            self.assertIn('name="queue_limit" value="20"', queue_html)
+            self.assertIn('name="queue_triage_action" value=""', queue_html)
+            self.assertIn('name="queue_recent_days" value="7"', queue_html)
             self.assertIn("Status: partial", html)
             self.assertIn("Source coverage", html)
+            self.assertIn("Primary source coverage", html)
             self.assertIn("Source readiness", html)
             self.assertIn("Context: 1 items / 1 linked", queue_html)
             self.assertIn("status: partial", html)
@@ -678,6 +1043,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("/radar/brief.json?days=7&amp;limit=20&amp;run_limit=12&amp;queue_recent_days=7", brief_html)
             self.assertIn("Brief health:", brief_html)
             self.assertIn("latest: partial", brief_html)
+            self.assertIn("Next: inspect source errors", brief_html)
+            self.assertIn("source errors present", brief_html)
+            self.assertIn("One or more selected Radar sources failed during collection. sources: dblp", brief_html)
             self.assertIn("Source coverage:", brief_html)
             self.assertIn("status: partial", brief_html)
             self.assertIn("problem sources: dblp", brief_html)
@@ -703,6 +1071,10 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Review queue:", brief_html)
             self.assertIn("activity: 0", brief_html)
             self.assertIn("PDF access:", brief_html)
+            self.assertIn("Source health:", brief_html)
+            self.assertIn("source action:", brief_html)
+            self.assertIn("Daily plan:", brief_html)
+            self.assertIn("Start with Memory Safety for Agentic Security Workflows.", brief_html)
             self.assertIn("Triage lanes:", brief_html)
             self.assertIn(">Import 1</a>", brief_html)
             self.assertIn("Top Recommendations", brief_html)
@@ -719,6 +1091,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="brief_days" value="7"', brief_html)
             self.assertIn('name="brief_limit" value="20"', brief_html)
             self.assertIn('name="brief_run_limit" value="12"', brief_html)
+            self.assertIn('name="brief_queue_recent_days" value="7"', brief_html)
             self.assertIn("Add to Library", brief_html)
             self.assertEqual(
                 radar_brief_path_from_fields(
@@ -726,6 +1099,25 @@ class TeamResearchWebTest(unittest.TestCase):
                     notice="Marked radar paper as watch.",
                 ),
                 "/radar/brief?days=7&limit=20&run_limit=12&notice=Marked+radar+paper+as+watch.",
+            )
+            self.assertEqual(
+                radar_brief_path_from_fields(
+                    {
+                        "brief_days": "7",
+                        "brief_limit": "20",
+                        "brief_run_limit": "12",
+                        "brief_queue_recent_days": "7",
+                    },
+                    notice="Marked radar paper as watch.",
+                ),
+                "/radar/brief?days=7&limit=20&run_limit=12&queue_recent_days=7&notice=Marked+radar+paper+as+watch.",
+            )
+            self.assertEqual(
+                radar_queue_path_from_fields(
+                    {"queue_limit": "20", "queue_triage_action": "import", "queue_recent_days": "7"},
+                    notice="Marked radar paper as watch.",
+                ),
+                "/radar/queue?limit=20&triage_action=import_to_library&recent_days=7&notice=Marked+radar+paper+as+watch.",
             )
             self.assertIn("Team Literature Radar Brief", brief_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", brief_html)
@@ -801,6 +1193,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "limit": "0",
                         "summarize": "1",
                         "summary_provider": "local",
+                        "summary_min_score": "80",
                         "conference_year": "2026",
                         "usenix_security_cycles": "1, 2",
                         "include_openreview_unaccepted": "1",
@@ -839,6 +1232,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(kwargs["recommendation_limit"], 1)
         self.assertTrue(kwargs["summarize"])
         self.assertEqual(kwargs["summary_provider"], "local")
+        self.assertEqual(kwargs["summary_min_score"], 80)
         self.assertEqual(kwargs["conference_year"], 2026)
         self.assertEqual(kwargs["usenix_security_cycles"], [1, 2])
         self.assertFalse(kwargs["openreview_accepted_only"])
@@ -980,6 +1374,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('name="max_results" min="1" max="100" value="7"', html)
             self.assertIn('name="limit" min="1" max="50" value="3"', html)
             self.assertIn('<option value="openrouter" selected>OpenRouter</option>', html)
+            self.assertIn('name="summary_min_score" min="0" max="100" value="70"', html)
             self.assertIn('name="conference_year" min="2000" max="2100" value="2026"', html)
             self.assertIn('name="usenix_security_cycles" placeholder="1, 2" value="1\n2"', html)
             self.assertIn('name="include_openreview_unaccepted" value="1" checked', html)
@@ -992,6 +1387,18 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn(">seed-negative</textarea>", html)
             self.assertIn('name="venue_profiles" placeholder="security, systems" value="security"', html)
             self.assertIn("Radar Profile", html)
+            self.assertIn("Thin MVP readiness:", html)
+            self.assertIn("active step:", html)
+            self.assertIn("Beta readiness:", html)
+            self.assertIn("Beta/backlog setup:", html)
+            self.assertIn("progress:", html)
+            self.assertIn("remaining:", html)
+            self.assertIn("estimate:", html)
+            self.assertIn("Guardrail readiness:", html)
+            self.assertIn("profile version:", html)
+            self.assertIn("Validation commands:", html)
+            self.assertIn("radar-validate-sources", html)
+            self.assertIn("Validation evidence:", html)
             self.assertIn("sources: OpenAlex Authors, DBLP Venues", html)
             self.assertIn("max/source: 7", html)
             self.assertIn("recommendations: 3", html)
@@ -1031,14 +1438,38 @@ class TeamResearchWebTest(unittest.TestCase):
             html = render_literature_radar_page(database)
 
         self.assertIn("Pre-run readiness:", html)
+        self.assertIn("Thin MVP readiness:", html)
+        self.assertIn("active step:", html)
+        self.assertIn("Beta readiness:", html)
+        self.assertIn("Beta/backlog setup:", html)
+        self.assertIn("env block:", html)
+        self.assertIn("RADAR_SEED_PAPER_IDS=id1 id2", html)
+        self.assertIn("Operations readiness:", html)
+        self.assertIn("invalid backup targets: 0", html)
+        self.assertIn("next: configure blocked sources", html)
+        self.assertIn("check: Source settings", html)
         self.assertIn("scoring", html)
         self.assertIn("agentic security=95", html)
         self.assertIn("OA enrichment: missing recommended, contact no", html)
+        self.assertIn("Primary sources:", html)
+        self.assertIn("covered: 3/9", html)
+        self.assertIn("missing sources: arxiv, dblp, crossref, usenix_security, ndss", html)
         self.assertIn("status: blocked", html)
+        self.assertIn("Live validation plan:", html)
+        self.assertIn("Validation guidance:", html)
+        self.assertIn("next: configure blocked sources", html)
+        self.assertIn("checks: 4", html)
+        self.assertIn("live max: 1", html)
+        self.assertIn("network: yes pending", html)
+        self.assertIn("blocked checks: semantic_scholar_recommendations, openreview", html)
         self.assertIn("blocked sources: semantic_scholar_recommendations, openreview", html)
         self.assertIn("missing: semantic_scholar_recommendations needs Semantic Scholar positive seed paper ID", html)
         self.assertIn("missing: openreview needs OpenReview invitation ID", html)
         self.assertIn("recommended: openalex uses OpenAlex mailto/contact", html)
+        self.assertIn("Next: semantic_scholar_recommendations / required_config / configure_required_source_input", html)
+        self.assertIn("Configure Semantic Scholar positive seed paper ID before running live validation", html)
+        self.assertIn("Next: openalex / contact / add_recommended_source_config", html)
+        self.assertIn("Add OpenAlex mailto/contact for OpenAlex", html)
 
     def test_literature_radar_settings_payload_is_read_only_status_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1065,17 +1496,39 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["links"]["queue_html"], "/radar/queue?limit=20")
         self.assertEqual(payload["links"]["queue_json"], "/radar/queue.json?limit=20")
         self.assertEqual(payload["links"]["status_json"], "/radar/status.json?limit=20")
-        self.assertEqual(payload["settings"]["sources"], ["semantic_scholar_recommendations", "openalex"])
+        self.assertEqual(payload["links"]["setup_env_text"], "/radar/setup-env.txt")
+        self.assertEqual(
+            payload["settings"]["sources"],
+            ["semantic_scholar_recommendations", "openalex", "openreview_venues", "dblp_venues"],
+        )
         self.assertEqual(payload["collection_config"]["seed_paper_ids"], ["seed-1"])
+        self.assertEqual(payload["collection_config"]["summary_min_score"], 70)
         self.assertTrue(payload["collection_config"]["openalex_mailto_configured"])
         self.assertEqual(payload["collection_config"]["semantic_scholar_api_key_configured"], True)
         self.assertEqual(payload["source_readiness"]["status"], "ready")
         self.assertEqual(payload["oa_enrichment"]["provider"], "unpaywall")
         self.assertEqual(payload["oa_enrichment"]["status"], "ready")
         self.assertTrue(payload["oa_enrichment"]["configured"])
-        self.assertEqual(payload["oa_enrichment"]["relevant_source_ids"], ["semantic_scholar_recommendations", "openalex"])
-        self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
+        self.assertEqual(
+            payload["oa_enrichment"]["relevant_source_ids"],
+            ["semantic_scholar_recommendations", "openalex", "dblp_venues"],
+        )
+        self.assertEqual(payload["primary_source_coverage"]["status"], "partial")
+        self.assertEqual(
+            payload["primary_source_coverage"]["missing_primary_source_ids"],
+            ["arxiv", "crossref", "usenix_security", "ndss"],
+        )
+        self.assertEqual(payload["source_validation_plan"]["status"], "ready")
+        self.assertEqual(payload["source_validation_plan"]["next_action"], "run_live_source_validation")
+        self.assertEqual(payload["source_validation_plan"]["check_count"], 5)
+        self.assertEqual(payload["source_validation_plan"]["api_source_count"], 4)
+        self.assertEqual(payload["source_validation_guidance"]["status"], "ready")
+        self.assertEqual(payload["source_validation_guidance"]["recommended_live_validation_max_results"], 1)
+        self.assertEqual(payload["source_validation_guidance"]["action_lines"], [])
+        self.assertEqual(payload["source_policy"]["authoritative_count"], 4)
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
+        self.assertEqual(payload["scoring_profile"]["profile_version_id"], payload["interest_profile_version"]["id"])
+        self.assertEqual(payload["scoring_profile"]["profile_hash"], payload["interest_profile_version"]["profile_hash"])
         self.assertGreaterEqual(payload["scoring_profile_summary"]["interest_count"], 1)
         self.assertIn(
             {"keyword": "memory safety", "weight": 85},
@@ -1100,7 +1553,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
         self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
-        self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
+        self.assertEqual(selected, ["dblp_venues", "semantic_scholar_recommendations", "openalex", "openreview_venues"])
         self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
         self.assertNotIn("secret-s2-key", json.dumps(payload))
 
@@ -1162,12 +1615,154 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["kind"], "team_literature_radar_status")
         self.assertEqual(payload["settings"]["kind"], "team_literature_radar_settings")
         self.assertEqual(payload["settings"]["settings"]["sources"], ["arxiv", "openalex"])
+        self.assertEqual(
+            payload["settings"]["settings"]["arxiv_categories"],
+            ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"],
+        )
+        self.assertEqual(payload["source_validation_guidance"]["status"], "ready")
+        self.assertEqual(payload["source_validation_guidance"]["action_lines"], [])
+        self.assertEqual(payload["source_validation_commands"]["product"], "team")
+        self.assertIn("radar-validate-sources", payload["source_validation_commands"]["live"]["argv"])
+        self.assertIn("--live", payload["source_validation_commands"]["live"]["argv"])
+        self.assertEqual(payload["source_validation_commands"]["live"]["argv"].count("--arxiv-category"), 6)
+        self.assertEqual(payload["source_validation_evidence"]["mode"], "missing")
+        self.assertFalse(payload["source_validation_evidence"]["network_performed"])
+        self.assertEqual(payload["source_validation_evidence"]["coverage"]["status"], "missing")
+        self.assertEqual(payload["source_validation_evidence"]["primary_coverage"]["status"], "missing")
+        self.assertIn(
+            "dblp",
+            payload["source_validation_evidence"]["primary_coverage"]["unvalidated_primary_source_ids"],
+        )
+        self.assertEqual(payload["relevance_evaluation"]["status"], "passed")
+        self.assertEqual(payload["mvp_readiness"]["status"], "needs_attention")
+        self.assertEqual(payload["mvp_readiness"]["next_action"], "expand_primary_sources")
+        self.assertEqual(payload["mvp_readiness"]["next_stage_id"], "primary_source_coverage")
+        self.assertEqual(payload["thin_mvp_readiness"]["scope"], "thin_daily_use_mvp")
+        self.assertIn(payload["thin_mvp_readiness"]["status"], {"ready", "usable_needs_review"})
+        self.assertIn("progress", payload["thin_mvp_readiness"])
+        self.assertEqual(
+            [step["id"] for step in payload["daily_workflow"]["steps"]],
+            ["run_cycle", "review_queue", "queue_usefulness_review"],
+        )
+        self.assertNotIn("queue_usefulness_review", payload["daily_workflow"]["current_step_ids"])
+        self.assertTrue(payload["daily_workflow"]["steps"][2]["optional"])
+        thin_stages = {stage["id"]: stage for stage in payload["thin_mvp_readiness"]["stages"]}
+        self.assertEqual(thin_stages["topic_profile"]["status"], "passed")
+        self.assertNotIn("queue_usefulness_review", thin_stages)
+        self.assertEqual(payload["mvp_setup_actions"]["status"], "needs_action")
+        self.assertIn("expand_primary_sources", [action["id"] for action in payload["mvp_setup_actions"]["actions"]])
+        self.assertIn("run_live_source_validation", [action["id"] for action in payload["mvp_setup_actions"]["actions"]])
+        self.assertEqual(payload["mvp_setup_actions"]["external_api_action_count"], 1)
+        self.assertEqual(payload["operations_readiness"]["product"], "team")
+        self.assertIn(payload["operations_readiness"]["status"], {"ready", "needs_attention"})
+        self.assertEqual(payload["operations_readiness"]["script_count"], 7)
+        self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
+        self.assertEqual(payload["schema_migrations"]["status"], "current")
+        self.assertEqual(payload["schema_migrations"]["current_version"], 2)
+        self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
+        self.assertEqual(payload["guardrail_readiness"]["product"], "team")
+        self.assertEqual(payload["guardrail_readiness"]["status"], "ready")
+        self.assertEqual(payload["guardrail_readiness"]["checks"]["source_trace"]["status"], "not_applicable")
+        self.assertEqual(payload["guardrail_readiness"]["checks"]["personal_memory_boundary"]["status"], "passed")
+        self.assertEqual(payload["mvp_readiness"]["status_counts"]["blocked"], 0)
+        readiness_stages = {stage["id"]: stage for stage in payload["mvp_readiness"]["stages"]}
+        self.assertEqual(readiness_stages["live_source_validation"]["evidence"]["evidence"]["mode"], "missing")
+        expected_operations_stage = {
+            "ready": "passed",
+            "needs_attention": "warning",
+            "blocked": "blocked",
+        }[payload["operations_readiness"]["status"]]
+        self.assertEqual(readiness_stages["operations"]["status"], expected_operations_stage)
+        self.assertEqual(readiness_stages["recommendation_evidence"]["status"], "warning")
+        self.assertEqual(
+            readiness_stages["recommendation_evidence"]["evidence"]["next_action"],
+            "collect_or_review_queue",
+        )
+        self.assertEqual(readiness_stages["engineering_guardrails"]["status"], "passed")
         self.assertEqual(payload["queue"]["kind"], "team_literature_radar_queue")
         self.assertEqual(payload["queue"]["limit"], 7)
+        self.assertEqual(payload["queue"]["evidence_summary"]["status"], "warning")
         self.assertEqual(payload["latest_run"]["id"], run["id"])
         self.assertEqual(payload["latest_run"]["freshness"]["max_age_hours"], 24)
         self.assertEqual(payload["links"]["status_json"], "/radar/status.json?limit=7")
+        self.assertEqual(payload["links"]["setup_env_text"], "/radar/setup-env.txt")
         self.assertNotIn("radar@example.org", json.dumps(payload["settings"]["collection_config"]))
+
+    def test_literature_radar_operations_readiness_accepts_team_backup_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backup_dir = Path(temp_dir) / "team-backups"
+            output_dir = Path(temp_dir) / "logs"
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "TEAM_RADAR_BACKUP_TARGETS": str(backup_dir),
+                    "RADAR_BACKUP_TARGETS": "",
+                    "RADAR_OUTPUT_DIR": str(output_dir),
+                },
+                clear=False,
+            ):
+                readiness = build_team_literature_radar_operations_readiness(
+                    {"settings": {"cache_pdfs": False}}
+                )
+
+        self.assertEqual(readiness["status"], "needs_attention")
+        self.assertEqual(readiness["next_action"], "run_operations_rehearsal")
+        self.assertTrue(readiness["backup_configured"])
+        self.assertEqual(readiness["backup_targets"], [str(backup_dir)])
+        self.assertEqual(readiness["evidence_count"], 6)
+        self.assertEqual(readiness["evidence_present_count"], 0)
+        self.assertIn("operations_evidence_missing", readiness["warnings"])
+        dry_run_manifest = (
+            output_dir / "backup" / "team-literature-radar-backup-dry-run-latest.manifest.txt"
+        )
+        dry_run_manifest.parent.mkdir(parents=True, exist_ok=True)
+        dry_run_manifest.write_text("product=team\n", encoding="utf-8")
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "TEAM_RADAR_BACKUP_TARGETS": str(backup_dir),
+                "RADAR_BACKUP_TARGETS": "",
+                "RADAR_OUTPUT_DIR": str(output_dir),
+            },
+            clear=False,
+        ):
+            dry_run_evidence_readiness = build_team_literature_radar_operations_readiness(
+                {"settings": {"cache_pdfs": False}}
+            )
+        self.assertEqual(dry_run_evidence_readiness["evidence_present_count"], 1)
+        self.assertNotIn("backup_manifest", dry_run_evidence_readiness["missing_required_evidence"])
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "RADAR_BACKUP_TARGETS": "/absolute/path/to/team-radar-backups",
+                "TEAM_RADAR_BACKUP_TARGETS": "",
+                "RADAR_OUTPUT_DIR": str(output_dir),
+            },
+            clear=False,
+        ):
+            placeholder_readiness = build_team_literature_radar_operations_readiness(
+                {"settings": {"cache_pdfs": False}}
+            )
+
+        self.assertEqual(placeholder_readiness["status"], "needs_attention")
+        self.assertFalse(placeholder_readiness["backup_configured"])
+        self.assertEqual(placeholder_readiness["backup_targets"], [])
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "RADAR_BACKUP_TARGETS": "relative/team-backups",
+                "TEAM_RADAR_BACKUP_TARGETS": "",
+                "RADAR_OUTPUT_DIR": str(output_dir),
+            },
+            clear=False,
+        ):
+            relative_readiness = build_team_literature_radar_operations_readiness(
+                {"settings": {"cache_pdfs": False}}
+            )
+
+        self.assertEqual(relative_readiness["status"], "needs_attention")
+        self.assertFalse(relative_readiness["backup_configured"])
+        self.assertEqual(relative_readiness["invalid_backup_targets"], ["relative/team-backups"])
 
     def test_literature_radar_web_run_can_save_source_preset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1248,6 +1843,66 @@ class TeamResearchWebTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             html = render_literature_radar_page(TeamResearchDatabase(Path(temp_dir) / "research.sqlite3"))
         self.assertIn("Official accepted pages", html)
+
+    def test_team_source_validation_args_preserve_source_selectors(self) -> None:
+        args = team_radar_source_validation_args(
+            {
+                "settings": {
+                    "source_preset": "custom",
+                    "sources": ["arxiv", "semantic_scholar_recommendations", "openreview"],
+                    "arxiv_categories": ["cs.CR"],
+                    "conference_year": 2026,
+                    "usenix_security_cycles": [1],
+                    "seed_paper_ids": ["seed-positive"],
+                    "negative_seed_paper_ids": ["seed-negative"],
+                    "semantic_scholar_author_ids": ["s2-author"],
+                    "dblp_author_pids": ["12/3456"],
+                    "openalex_author_ids": ["A123"],
+                    "venue_profiles": ["security"],
+                    "openreview_invitations": ["SafetyWorkshop.cc/2026/Workshop/-/Submission"],
+                    "openreview_venue_profiles": ["iclr"],
+                    "include_openreview_unaccepted": True,
+                    "official_accepted_pages": [
+                        {
+                            "source_id": "ieee_sp",
+                            "venue": "IEEE Symposium on Security and Privacy 2026",
+                            "year": 2026,
+                            "page_url": "https://www.ieee-security.org/accepted-papers.html",
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertIn("--source", args)
+        self.assertIn("semantic_scholar_recommendations", args)
+        self.assertIn("--arxiv-category", args)
+        self.assertIn("cs.CR", args)
+        self.assertIn("--conference-year", args)
+        self.assertIn("2026", args)
+        self.assertIn("--seed-paper-id", args)
+        self.assertIn("seed-positive", args)
+        self.assertIn("--negative-seed-paper-id", args)
+        self.assertIn("seed-negative", args)
+        self.assertIn("--semantic-scholar-author-id", args)
+        self.assertIn("s2-author", args)
+        self.assertIn("--dblp-author-pid", args)
+        self.assertIn("12/3456", args)
+        self.assertIn("--openalex-author-id", args)
+        self.assertIn("A123", args)
+        self.assertIn("--venue-profile", args)
+        self.assertIn("security", args)
+        self.assertIn("--openreview-invitation", args)
+        self.assertIn("SafetyWorkshop.cc/2026/Workshop/-/Submission", args)
+        self.assertIn("--openreview-venue-profile", args)
+        self.assertIn("iclr", args)
+        self.assertIn("--include-openreview-unaccepted", args)
+        self.assertIn("--official-accepted-page", args)
+        self.assertIn(
+            "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://www.ieee-security.org/accepted-papers.html",
+            args,
+        )
+        self.assertNotIn("--semantic-scholar-api-key", args)
 
     def test_literature_radar_web_run_keeps_explicit_seed_graph_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1613,10 +2268,22 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar Queue", latest_html)
             self.assertIn("1 unreviewed, 1 watch, 0 dismissed from 2 stored Radar papers.", latest_html)
+            self.assertIn("Daily guidance:", latest_html)
+            self.assertIn("Source health:", latest_html)
+            self.assertIn("Daily plan:", latest_html)
+            self.assertIn("Queue usefulness:", latest_html)
+            self.assertIn('action="/radar/queue/review"', latest_html)
+            self.assertIn('name="return_to" value="latest"', latest_html)
+            self.assertIn("not reviewed yet", latest_html)
+            self.assertIn("Start with Unreviewed Radar History Paper.", latest_html)
+            self.assertIn("Reason to read:", latest_html)
+            self.assertIn("next: Import to library", latest_html)
+            self.assertIn("active: 1", latest_html)
+            self.assertIn("downloadable: 1", latest_html)
             self.assertIn("Priority Candidates", latest_html)
             self.assertIn("Unreviewed Radar History Paper", latest_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
-            self.assertIn("Action: Review for team library.", latest_html)
+            self.assertIn("Action: Import to library", latest_html)
             self.assertIn("PDF: arxiv_or_open_repository", latest_html)
             self.assertIn("kind: arxiv_pdf", latest_html)
             self.assertIn("Source: arxiv", latest_html)
@@ -1654,7 +2321,13 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["latest_run"]["collected_count"], 1)
             self.assertEqual(queue_payload["latest_run"]["recommendation_count"], 1)
             self.assertEqual(queue_payload["latest_run"]["source_error_count"], 0)
+            self.assertEqual(queue_payload["daily_source_health"]["next_action"], "inspect_source_coverage")
             self.assertEqual(queue_payload["papers"][0]["title"], "Unreviewed Radar History Paper")
+            self.assertIn("reason_to_read", queue_payload["papers"][0])
+            self.assertEqual(
+                queue_payload["daily_review_plan"]["headline"],
+                "Start with Unreviewed Radar History Paper.",
+            )
             self.assertIn("Signal: Stored queue signal for daily radar review.", queue_payload["papers"][0]["signal_lines"])
             self.assertEqual(queue_payload["links"]["radar"], "/radar")
 
@@ -2250,7 +2923,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 },
                 analyze=False,
             )
-            now = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
             database.update_item_relevance(item_id, label="low_relevance", score=1, now=now)
             bundle = database.get_bundle(item_id)
             record = dict(bundle["team_record"])

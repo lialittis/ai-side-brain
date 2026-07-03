@@ -11,9 +11,18 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-# The cycle is the daily personal path: collect, write queue snapshots, then
-# build a review brief from stored run history. Set either flag to 0 when a
-# cron/systemd job should run only one half of the cycle.
+# The cycle is the daily personal path: check offline readiness, collect, write
+# queue snapshots, then build a review brief from stored run history. Set phase
+# flags to 0 when a cron/systemd job should run only part of the cycle.
+if [[ "${PERSONAL_RADAR_CYCLE_CHECK_READINESS:-1}" == "1" ]]; then
+  (
+    if [[ -z "${PERSONAL_RADAR_STATUS_OUTPUT_DIR:-}" ]]; then
+      export PERSONAL_RADAR_STATUS_OUTPUT_DIR="${PERSONAL_RADAR_OUTPUT_DIR:-memory/06_Logs}/readiness"
+    fi
+    scripts/check_personal_literature_radar_status.sh
+  )
+fi
+
 if [[ "${PERSONAL_RADAR_CYCLE_RUN_COLLECTION:-1}" == "1" ]]; then
   scripts/run_personal_literature_radar.sh
 fi

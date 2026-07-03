@@ -22,6 +22,8 @@ The source registry classifies authoritative metadata/API sources, official
 accepted-paper pages, OA enrichment, and optional trend-signal feeds separately.
 Trend-signal sources are modeled as secondary context, not authoritative
 bibliographic records.
+Disallowed paths such as `google_scholar` and `sci_hub` are reported explicitly
+by source-policy summaries without becoming selectable collector IDs.
 Derived collector paths such as DBLP venue profiles, Semantic Scholar
 recommendations, OpenAlex venue profiles, and OpenReview venue profiles are
 explicit registry entries so reports can name the actual source path used.
@@ -32,16 +34,52 @@ Shared source labels, option metadata, and selected-source option records are
 derived from the same registry, so Personal CLI, Team CLI, and Team web preflight
 surfaces describe sources consistently.
 The shared preflight payload builder combines selected settings, source policy,
-source readiness, supported source IDs, source option records, and read-only
-trend-signal options into one contract that product surfaces can expose before
-running collectors. Trend signals are listed separately from runnable collectors
-until their collectors are implemented.
+source readiness, `primary_source_coverage`, a no-network
+`source_validation_plan`, supported source IDs, source option records, and
+read-only trend-signal options into one contract that product surfaces can
+expose before running collectors. Primary-source coverage checks whether the
+current selection covers the objective's required source families: arXiv, DBLP,
+Semantic Scholar, OpenAlex, Crossref, OpenReview, USENIX Security, NDSS, and
+Unpaywall OA enrichment. This is separate from source validation: coverage says
+whether the required families are represented, while validation says whether
+the selected checks are ready to run. The validation plan turns
+selected API/RSS/accepted-page sources plus required/recommended config into a
+live-check checklist while recording `network_performed=false`; actual source
+calls remain owned by the run command. The shared core also provides
+`build_radar_source_validation_result(...)` and
+`radar_source_validation_results_from_stats(...)` so Team and Personal
+validation commands can fold collector outcomes into one status summary with
+failed, blocked, skipped, pending, and succeeded checks without changing the
+preflight contract. The same preflight payload includes
+`source_validation_guidance`, a compact operator checklist for required source
+inputs, recommended Semantic Scholar API keys, OpenAlex/Crossref/Unpaywall
+contact metadata, and the default one-sample live-validation limit. Trend
+signals are listed separately from runnable collectors until their collectors
+are implemented.
+Live validation results also carry `result_guidance`, which classifies failures
+such as rate limits, transient service-unavailable responses, auth/access
+errors, network failures, parser/response-shape issues, blocked configuration,
+skipped samples, and successful-but-empty zero-sample responses into concrete
+next actions. When live validation was attempted but a planned source has no
+collector result because recommended setup is missing, the result records that
+source as `skipped` instead of leaving it as a dry-run-style `not_run`.
+`format_radar_source_validation_result_actions(...)` turns those structured
+actions into compact text lines for CLI/status output, and shared guidance
+payloads include the same lines under `action_lines` for scripts and dashboards.
 The same preflight payload also reports `oa_enrichment` for Unpaywall so
 Personal and Team operators can see whether legal open-access PDF/license
 resolution is ready for DOI-capable source selections before a run starts.
 Product adapters also expose the same summary on latest-run queue payloads, so
 scheduled daily snapshots show whether the last run had legal OA/PDF enrichment
 configured.
+The shared core also exposes `radar_operations_readiness(...)`, a no-network
+status helper for product adapters to summarize their own cycle, status, brief,
+backup, restore, log-retention, and cycle-rehearsal scripts, output paths, PDF
+cache policy, backup targets, and generated operations evidence without moving
+product-specific deployment paths into shared code. Product adapters can pass
+latest status, validation, relevance-evaluation, brief, rehearsal, and backup
+manifest paths or glob patterns so readiness distinguishes "scripts exist" from
+"the operational workflow has been rehearsed and left auditable local evidence."
 Those latest-run queue payloads also include `pipeline_summary`, a compact view
 of the explicit Radar phases and their statuses for daily health checks.
 Adapters can attach scoring-profile and venue-profile summaries so operators
@@ -84,12 +122,21 @@ Team dashboards can audit whether active recommendations came from
 authoritative API/accepted-page sources or secondary signals. Queue records also
 project normalized identifiers, source link maps, and a best link so daily
 review clients can open DOI/arXiv/PDF/landing sources without parsing nested
-paper history.
+paper history. The shared queue helpers also expose `daily_guidance`, a compact
+product-neutral next-action summary built from active papers, triage summary,
+review counts, PDF access summary, and latest-run freshness, plus
+`daily_source_health`, which summarizes the latest source-health next action,
+and `daily_review_plan`, which selects the first paper to review and the
+immediate next step. Personal CLI output, Team web pages, and JSON endpoints
+render or pass through those same fields so daily review surfaces do not drift.
 Brief helpers also expose a structured top-recommendation triage plan and
 recommendation records for JSON consumers, carrying run IDs, review state,
 flat bibliographic fields, normalized identifiers, source link maps, triage
 hints, signal lines, PDF policy, source provenance, and links without parsing
-Markdown.
+Markdown. When product adapters embed a queue preview in brief payloads, the
+same `daily_guidance` and `daily_review_plan` fields can be carried into JSON
+alongside `daily_source_health` and appended to Markdown reports as Source
+Health and Daily Review Plan sections.
 Completed Personal and Team run records store the same summary for all ranked
 recommendations, so later weekly briefs and latest-run health views remain
 auditable even after the active queue changes. Stored history briefs include a
@@ -116,7 +163,25 @@ page, landing link, venue, year, and collector context provenance.
 The core also provides product-neutral recommendation summaries. The local
 summary path uses only stored metadata, scoring reasons, and PDF-access policy;
 Personal and Team adapters can optionally replace that phase with shared
-OpenRouter structured summaries.
+OpenRouter structured summaries. OpenRouter summaries validate the returned
+shape before use; failed calls are retried once, and failed calls or unusable
+responses fall back to local metadata summaries. Fallback and attempt details
+are recorded in `summary.source_trace`, so scheduled runs do not fail only
+because optional AI summarization is unavailable. The shared prompt builder caps
+long abstracts, source records, context matches, and free-text reasons before
+OpenRouter calls while preserving bibliographic links, relevance reasons, PDF
+policy, and top context signals.
+Product adapters pass a score gate into OpenRouter summaries; by default only
+recommendations scoring at least 70, the `highly_relevant` threshold, are sent
+to OpenRouter. Lower-scoring candidates stay metadata/local-summary only unless
+the caller explicitly lowers `summary_min_score`.
+Before relevance scoring or summarization, `recommend_papers(...)` also applies
+a conservative paper-likeness gate. It rejects obvious non-paper records such as
+calls for papers, conference/program pages, schedules, announcements, slides,
+videos, and proceedings/front-matter records based on normalized title prefixes
+and source metadata record types. The gate is deliberately narrow: it saves
+scoring and OpenRouter tokens on clear non-papers without trying to replace
+human review or source-specific paper classification.
 Recommendation reports can include novelty metadata supplied by Personal or
 Team storage, keeping "new this run" separate from relevance score. Collected
 papers also carry a normalized `release_date` when the source provides one
@@ -129,9 +194,9 @@ The shared brief builder can also aggregate stored daily runs into a weekly or
 daily review brief without recollecting metadata or calling external APIs, and
 it carries stored review state such as `watch` or `dismissed`, normalized
 release dates, the scoring profile snapshot, non-secret collection settings,
-source readiness, phase trace used for the run, and OA enrichment readiness for
-legal PDF/license checks. It also carries source policy and venue coverage for
-DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers are surfaced before unreviewed papers, while
+source readiness, primary-source coverage, phase trace used for the run, and OA
+enrichment readiness for legal PDF/license checks. It also carries source policy
+and venue coverage for DBLP, OpenAlex, and OpenReview venue profile runs. Brief ranking is review-aware: `watch` papers are surfaced before unreviewed papers, while
 `dismissed` papers fall behind active candidates.
 Briefs include an overall triage plan plus per-paper triage hints from the same
 shared rules as queue records, so a brief can say whether the next action is
@@ -250,14 +315,14 @@ Current implemented collectors:
 - `collect_openalex_venue_publications(...)` resolves configured venue profiles
   through OpenAlex Sources, then filters Works by source ID and publication year
   to cross-check top-conference metadata without scraping.
-- `collect_openreview_notes(...)` calls the OpenReview API v2 notes endpoint for
+- `collect_openreview_notes(...)` calls the public OpenReview notes API for
   configured invitation IDs and preserves submission title, authors, abstract,
   keywords, forum link, PDF link metadata, TL;DR, and decisions when available.
 - `collect_openreview_venue_submissions(...)` expands configured OpenReview
-  venue profiles into known invitation IDs for ICLR, NeurIPS, NeurIPS
+  venue profiles into known accepted `content.venueid` values for ICLR, NeurIPS, NeurIPS
   Evaluations/Datasets, NeurIPS Creative AI, ICML, and ICML Position Paper
-  Track presets, annotates venue context, and defaults to accepted-only
-  filtering from `venueid` or decision metadata.
+  Track presets, annotates venue context, and uses invitation IDs only when
+  unaccepted submissions are explicitly included.
 - `collect_usenix_security_accepted_papers(...)` parses official USENIX
   Security accepted-paper pages by year/cycle and stores title, authors,
   abstract text when available, and paper/source links.
@@ -271,6 +336,16 @@ Current implemented collectors:
 - `append_radar_oa_enrichment_to_report(...)` adds an `OA Enrichment` section
   to generated Markdown reports so legal OA/PDF readiness is visible alongside
   source readiness and coverage.
+- `format_radar_oa_enrichment_actions(...)` renders the exact Unpaywall contact
+  setup action for Team and Personal settings/status text when DOI-bearing
+  sources are selected but legal OA/PDF enrichment is missing contact config.
+- Queue evidence readiness verifies that each recommendation has a
+  reason-to-read, an existing-work/context relation, source links, provenance,
+  and complete PDF policy. PDF policy is complete only when the recommendation
+  records source URL, access date, OA status, license field,
+  download/no-download reason, and local PDF path when a PDF was actually
+  cached. This keeps the MVP aligned with the legal-download rule instead of
+  merely checking that a `pdf_access` object exists.
 - `collect_radar_source(...)` and the source-health report appenders keep
   collector failure accounting and Markdown report sections consistent across
   Personal and Team adapters.
@@ -287,6 +362,109 @@ Current implemented collectors:
   sources, source policy/readiness, non-secret collection config, trend-signal
   option metadata, and the active relevance scoring profile summary without
   starting collectors or calling AI.
+- `radar_queue_evidence_summary(...)` checks whether active queue papers include
+  reason-to-read text, source links, provenance, and PDF/access decisions, so a
+  daily Radar queue can be audited as actionable recommendations instead of a
+  plain paper list.
+- `build_radar_review_queue(...)` enriches stored queue records at read time
+  with normalized source provenance, PDF access, best links, reason-to-read
+  text, and a deterministic non-AI `source_trace` when older records do not
+  already carry a local/OpenRouter summary trace. This lets Team and Personal
+  status checks audit older Radar history without mutating the stored database
+  or Personal indexes.
+- `radar_guardrail_readiness(...)` exposes no-network guardrail evidence for
+  source trace metadata, Team audit-event observability, human-review
+  boundaries, product-neutral shared-core boundaries, and private-data policy
+  boundaries. It also reports a Personal memory boundary check so Team Radar
+  status can prove that Personal Side-Brain memory write policy remains outside
+  Team-owned state. Team and Personal status payloads fold this into the same
+  MVP readiness checklist.
+- `radar_source_validation_command_guidance(...)` turns the current source
+  validation plan into copyable dry-run and one-sample live-validation commands
+  for Team and Personal operators, so status output can show the exact next
+  command without contacting external APIs.
+- `radar_source_validation_evidence(...)` records whether the status payload is
+  using missing, dry-run, or live source-validation evidence, including the
+  attached validation JSON path when one was supplied. It also reports live
+  validation coverage counts and succeeded/incomplete source IDs, plus
+  required primary-source-family coverage derived from the primary source
+  requirements. The same evidence is embedded in the MVP
+  `live_source_validation` stage so the checklist carries the proof mode, not
+  only the validation status. The MVP stage only passes when live validation
+  evidence has complete selected-source coverage and complete primary-source
+  family coverage.
+- `radar_mvp_readiness_summary(...)` is compatibility-named from the first
+  implementation, but it now represents a strict beta-readiness checklist rather
+  than the thin daily-use MVP. It combines settings preflight, primary-source
+  coverage, live-validation readiness, relevance checks, latest-run freshness,
+  active queue state, recommendation evidence quality, engineering guardrails,
+  and optional operations readiness into one offline status object. Team and
+  Personal status commands use the same summary so operators can see whether the
+  next beta-readiness action is to configure blocked sources, expand primary
+  coverage, run live validation, fix operations, refresh collection, improve
+  recommendation evidence, inspect guardrails, or review the daily queue. The
+  summary also includes a progress object with passed/remaining stage counts,
+  completion percent, and a conservative remaining-day estimate derived from
+  warning or blocked stages. Text status output also renders the same stages as a compact
+  checklist, so daily operators do not need to open the JSON payload to see
+  which MVP gates are passed, warning, or blocked.
+- `radar_thin_mvp_readiness_summary(...)` is the smaller daily-use MVP signal.
+  It checks only whether the product can run the narrow paper-review loop:
+  runnable sources, topic profile, latest run, visible review queue, and
+  recommendation evidence. It intentionally excludes full primary-source
+  coverage, live-source validation coverage, backups, restore rehearsal, and
+  operations evidence; those remain beta-hardening work. Source settings that
+  are runnable but missing recommended API/contact metadata pass the thin MVP
+  with warning evidence, because those fixes are beta-readiness work. Products
+  can opt into an additional queue-usefulness stage, which passes only after a
+  reviewer records whether the latest daily queue was useful enough for review.
+  The companion `radar_thin_mvp_gate_summary(...)` wraps that readiness payload
+  into operator-facing evidence and includes `daily_workflow.steps`, an ordered
+  run, review, and usefulness-review loop with `current` markers for the
+  remaining stages.
+- `radar_mvp_setup_action_plan(...)` turns the remaining MVP gates into ordered
+  operator actions. It folds source-validation guidance, missing or
+  misconfigured primary-source requirements, live-validation commands, and
+  operations readiness into a compact `mvp_setup_actions` payload with command
+  text and an `external_api` flag for actions such as live source validation.
+  When the selected source families are already present but Unpaywall/contact
+  setup is missing, the plan reports `configure_primary_source_requirements`
+  instead of telling operators to expand sources. Source metadata actions carry
+  `env_vars` and `example_env` hints such as `SEMANTIC_SCHOLAR_API_KEY=api-key`
+  or `RADAR_SOURCE_CONTACT_EMAIL=you@example.org`. When several selected
+  sources need the same contact metadata, the setup block prefers one shared
+  contact email while the structured action still records service-specific
+  aliases as accepted fallbacks. The JSON payload also exposes those
+  de-duplicated examples plus required backup-target placeholders as
+  `setup_env_block.lines` and `setup_env_block.text`, and text status output
+  renders the same examples as an `MVP setup env block` when present.
+- `format_radar_mvp_setup_env_file(...)` renders the same setup actions as a
+  local env-file fragment with safety comments, product-specific env names,
+  backup-target placeholders, optional OpenRouter placeholder, and the next
+  dry-run validation, live validation, backup dry-run, and cycle-rehearsal
+  commands. Team and Personal status CLIs expose it through `--setup-env`
+  without writing secret-bearing files. Generated placeholders such as `api-key`,
+  `you@example.org`, and `replace-with-openrouter-key` are ignored by source
+  readiness and collector configuration until operators replace them with real
+  local values. Backup-target placeholders such as `/absolute/path/to/...` are
+  also ignored by operations readiness until replaced with a real absolute
+  local path. Relative backup targets are reported as not ready so scheduled
+  backups do not write archives into the workspace by mistake, and status text
+  reports the invalid-target count.
+- `radar_mvp_setup_env_audit(...)` checks the current local environment against
+  those setup actions without exposing values. Status payloads and text output
+  report required, present, missing, and placeholder counts so operators know
+  whether setup is ready before live validation.
+- `radar_run_health_action(...)` folds primary-source coverage into daily
+  health guidance. If a run produced recommendations while omitting required
+  source families, the next action is `review_queue_and_expand_sources` instead
+  of silently treating the run as fully healthy.
+- `evaluate_radar_relevance_cases(...)` runs offline golden relevance checks
+  for system security, memory safety, agentic security, AI safety, and known
+  negative cases. `radar_relevance_evaluation_cases_for_interests(...)` scopes
+  that set to active lightweight interests, so Team Interest weights and
+  Personal topic profiles can be checked before live source collection or AI
+  summarization without requiring inactive topics to pass.
 - `radar_topic_profile_keyword_profiles(...)` and
   `format_radar_keyword_profile(...)` expose the active match/dampen terms in a
   compact form, so Personal CLI settings and Team settings JSON can explain how

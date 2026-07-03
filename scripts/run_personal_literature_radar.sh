@@ -60,10 +60,18 @@ if [[ -n "${PERSONAL_RADAR_SOURCE_PRESET:-}" ]]; then
 fi
 
 if [[ -n "${PERSONAL_RADAR_SOURCES:-}" || -z "${PERSONAL_RADAR_SOURCE_PRESET:-}" ]]; then
-  read -r -a SOURCES <<< "${PERSONAL_RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref usenix_security ndss}"
+  read -r -a SOURCES <<< "${PERSONAL_RADAR_SOURCES:-arxiv dblp semantic_scholar openalex crossref openreview_venues usenix_security ndss}"
   for source in "${SOURCES[@]}"; do
     ARGS+=("--source" "$source")
     SETTINGS_ARGS+=("--source" "$source")
+  done
+fi
+
+if [[ -n "${PERSONAL_RADAR_ARXIV_CATEGORIES:-${RADAR_ARXIV_CATEGORIES:-}}" ]]; then
+  read -r -a ARXIV_CATEGORIES <<< "${PERSONAL_RADAR_ARXIV_CATEGORIES:-${RADAR_ARXIV_CATEGORIES:-}}"
+  for category in "${ARXIV_CATEGORIES[@]}"; do
+    ARGS+=("--arxiv-category" "$category")
+    SETTINGS_ARGS+=("--arxiv-category" "$category")
   done
 fi
 
@@ -181,6 +189,10 @@ fi
 if [[ -n "${PERSONAL_RADAR_SUMMARY_LIMIT:-}" ]]; then
   ARGS+=("--summary-limit" "$PERSONAL_RADAR_SUMMARY_LIMIT")
   SETTINGS_ARGS+=("--summary-limit" "$PERSONAL_RADAR_SUMMARY_LIMIT")
+fi
+if [[ -n "${PERSONAL_RADAR_SUMMARY_MIN_SCORE:-}" ]]; then
+  ARGS+=("--summary-min-score" "$PERSONAL_RADAR_SUMMARY_MIN_SCORE")
+  SETTINGS_ARGS+=("--summary-min-score" "$PERSONAL_RADAR_SUMMARY_MIN_SCORE")
 fi
 if [[ "${PERSONAL_RADAR_CACHE_PDFS:-0}" == "1" ]]; then
   ARGS+=("--cache-pdfs")

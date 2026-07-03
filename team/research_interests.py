@@ -235,10 +235,21 @@ def term_matches(text: str, keyword: str) -> bool:
     if not normalized_keyword:
         return False
     padded_text = f" {text} "
-    if f" {normalized_keyword} " in padded_text:
+    if f" {normalized_keyword} " in padded_text and not term_match_is_negated(text, normalized_keyword):
         return True
-    words = normalized_keyword.split()
-    return len(words) > 1 and all(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
+    return False
+
+
+def term_match_is_negated(text: str, normalized_keyword: str) -> bool:
+    padded_text = f" {text} "
+    index = padded_text.find(f" {normalized_keyword} ")
+    if index < 0:
+        return False
+    before = padded_text[:index].split()[-5:]
+    window = " ".join(before)
+    if any(signal in window for signal in ("does not", "do not", "did not", "not study", "not about")):
+        return True
+    return any(token in {"not", "no", "without", "excluding", "unrelated"} for token in before[-3:])
 
 
 def label_for_score(score: int, has_text: bool) -> str:

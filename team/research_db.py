@@ -17,6 +17,7 @@ from shared.literature_radar import (
     dedupe_key as radar_dedupe_key,
     radar_latest_signal_lines,
     paper_release_date,
+    radar_primary_source_coverage_summary,
     radar_source_policy_summary,
     radar_source_provenance_summary,
 )
@@ -39,6 +40,19 @@ from team.research_interests import (
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
+TEAM_RESEARCH_SCHEMA_MIGRATIONS = [
+    {
+        "id": "001_initial_team_research_schema",
+        "version": 1,
+        "description": "Initial Team Research and Literature Radar SQLite schema.",
+    },
+    {
+        "id": "002_team_interest_profile_versions",
+        "version": 2,
+        "description": "Persist deterministic Team interest profile versions for scoring traceability.",
+    },
+]
+TEAM_RESEARCH_SCHEMA_VERSION = TEAM_RESEARCH_SCHEMA_MIGRATIONS[-1]["version"]
 
 
 def default_db_path() -> Path:
@@ -72,6 +86,14 @@ class TeamResearchDatabase:
         with self.connect() as connection:
             connection.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL UNIQUE,
+                    description TEXT NOT NULL,
+                    applied_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS research_sources (
                     id TEXT PRIMARY KEY,
                     source_type TEXT NOT NULL,
@@ -195,6 +217,16 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS team_interest_profile_versions (
+                    id TEXT PRIMARY KEY,
+                    profile_type TEXT NOT NULL,
+                    profile_hash TEXT NOT NULL UNIQUE,
+                    interest_count INTEGER NOT NULL,
+                    interests_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS team_settings (
                     key TEXT PRIMARY KEY,
                     value_json TEXT NOT NULL,
@@ -267,6 +299,8 @@ class TeamResearchDatabase:
                     ON paper_comments(item_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_team_interest_keywords_weight
                     ON team_interest_keywords(weight DESC, keyword);
+                CREATE INDEX IF NOT EXISTS idx_team_interest_profile_versions_created
+                    ON team_interest_profile_versions(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_item
                     ON ai_analysis_runs(item_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_status
@@ -279,8 +313,44 @@ class TeamResearchDatabase:
                     ON literature_radar_recommendations(run_id, rank);
                 """
             )
+            self._record_schema_migrations(connection)
             self._ensure_default_interest_keywords(connection)
             self._sync_tag_catalog_from_item_tags(connection)
+
+    def schema_migration_status(self) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, version, description, applied_at, record_json
+                FROM schema_migrations
+                ORDER BY version
+                """
+            ).fetchall()
+        applied = [
+            {
+                "id": row["id"],
+                "version": int(row["version"]),
+                "description": row["description"],
+                "applied_at": row["applied_at"],
+            }
+            for row in rows
+        ]
+        applied_versions = {migration["version"] for migration in applied}
+        pending = [
+            dict(migration)
+            for migration in TEAM_RESEARCH_SCHEMA_MIGRATIONS
+            if int(migration["version"]) not in applied_versions
+        ]
+        return {
+            "status": "current" if not pending else "pending",
+            "current_version": max((migration["version"] for migration in applied), default=0),
+            "expected_version": TEAM_RESEARCH_SCHEMA_VERSION,
+            "applied_count": len(applied),
+            "pending_count": len(pending),
+            "applied_migrations": applied,
+            "pending_migrations": pending,
+        }
 
     def write_run(self, result: TeamResearchRunResult, *, include_library_entry: bool = False) -> dict[str, str]:
         self.initialize()
@@ -654,6 +724,114 @@ class TeamResearchDatabase:
             ).fetchall()
         return [loads(row["record_json"]) for row in rows]
 
+    def add_literature_radar_queue_review(
+        self,
+        *,
+        run_id: str,
+        usefulness: str,
+        reviewer: str,
+        note: str = "",
+        queue_counts: dict[str, Any] | None = None,
+        queue_context: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        cleaned_run_id = reflow_comment_text(run_id)
+        cleaned_usefulness = normalize_queue_usefulness(usefulness)
+        cleaned_reviewer = reflow_comment_text(reviewer)
+        cleaned_note = reflow_comment_text(note)
+        if not cleaned_run_id:
+            raise ValueError("Radar run id cannot be empty.")
+        if not cleaned_reviewer:
+            raise ValueError("Reviewer name cannot be empty.")
+        review = {
+            "id": stable_id(
+                "radar_queue_review",
+                {
+                    "run_id": cleaned_run_id,
+                    "usefulness": cleaned_usefulness,
+                    "reviewer": cleaned_reviewer,
+                    "note": cleaned_note,
+                    "created_at": timestamp,
+                },
+            ),
+            "run_id": cleaned_run_id,
+            "usefulness": cleaned_usefulness,
+            "reviewer": cleaned_reviewer,
+            "note": cleaned_note,
+            "queue_counts": dict(queue_counts or {}),
+            "queue_context": dict(queue_context or {}),
+            "created_at": timestamp,
+        }
+        with self.connect() as connection:
+            run_row = connection.execute(
+                "SELECT record_json FROM literature_radar_runs WHERE id = ?",
+                (cleaned_run_id,),
+            ).fetchone()
+            run = loads(run_row["record_json"]) if run_row else {}
+            after = {
+                "run_id": cleaned_run_id,
+                "title": f"Radar queue {cleaned_run_id}",
+                "review": review,
+                "latest_run": {
+                    "id": cleaned_run_id,
+                    "status": run.get("status") or "",
+                    "started_at": run.get("started_at") or "",
+                    "recommendation_count": run.get("recommendation_count") or len(run.get("recommendations") or []),
+                },
+            }
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=cleaned_reviewer,
+                    action="literature_radar_queue_usefulness_reviewed",
+                    object_type="literature_radar_queue_review",
+                    object_id=cleaned_run_id,
+                    before=None,
+                    after=after,
+                    now=now,
+                ),
+            )
+        return review
+
+    def latest_literature_radar_queue_review(self, run_id: str | None = None) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            if run_id:
+                row = connection.execute(
+                    """
+                    SELECT record_json
+                    FROM audit_events
+                    WHERE action = 'literature_radar_queue_usefulness_reviewed'
+                      AND object_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (run_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT record_json
+                    FROM audit_events
+                    WHERE action = 'literature_radar_queue_usefulness_reviewed'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+        if not row:
+            return None
+        event = loads(row["record_json"])
+        after = event.get("after") if isinstance(event.get("after"), dict) else {}
+        review = after.get("review") if isinstance(after.get("review"), dict) else {}
+        return {
+            **review,
+            "event_id": event.get("id") or "",
+            "actor": event.get("actor") or review.get("reviewer") or "",
+            "created_at": event.get("created_at") or review.get("created_at") or "",
+        }
+
     def list_team_interest_keywords(self) -> list[dict[str, Any]]:
         self.initialize()
         with self.connect() as connection:
@@ -665,6 +843,13 @@ class TeamResearchDatabase:
                 """
             ).fetchall()
         return [loads(row["record_json"]) for row in rows]
+
+    def current_team_interest_profile_version(self, *, now: datetime | None = None) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            record = self._current_team_interest_profile_version(connection, timestamp=timestamp)
+        return record
 
     def upsert_team_interest_keyword(
         self,
@@ -697,12 +882,15 @@ class TeamResearchDatabase:
                     existing = loads(row["record_json"])
                     record["created_at"] = existing.get("created_at") or timestamp
             self._upsert_interest_keyword(connection, record)
+            self._current_team_interest_profile_version(connection, timestamp=timestamp)
         return record
 
     def remove_team_interest_keyword(self, interest_id: str) -> None:
         self.initialize()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
         with self.connect() as connection:
             connection.execute("DELETE FROM team_interest_keywords WHERE id = ?", (interest_id,))
+            self._current_team_interest_profile_version(connection, timestamp=timestamp)
 
     def get_team_setting(self, key: str, default: Any = None) -> Any:
         self.initialize()
@@ -1292,6 +1480,10 @@ class TeamResearchDatabase:
                     "source_policy": radar_source_policy_summary(
                         run.get("sources") if isinstance(run.get("sources"), list) else []
                     ),
+                    "primary_source_coverage": radar_primary_source_coverage_summary(
+                        run.get("sources") if isinstance(run.get("sources"), list) else [],
+                        run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {},
+                    ),
                     "provenance_summary": radar_source_provenance_summary(recommendations),
                     "venue_coverage": build_venue_coverage_summary(
                         collected_papers=collected_papers,
@@ -1355,6 +1547,125 @@ class TeamResearchDatabase:
                 (run_id,),
             ).fetchall()
         return [loads(row["record_json"]) for row in rows]
+
+    def backfill_literature_radar_run_pipeline_trace(
+        self,
+        run_id: str | None = None,
+        *,
+        force: bool = False,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            if run_id:
+                row = connection.execute(
+                    "SELECT record_json FROM literature_radar_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT record_json
+                    FROM literature_radar_runs
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+            if row is None:
+                selected = run_id or "latest"
+                raise KeyError(f"Unknown literature radar run: {selected}")
+            run = loads(row["record_json"])
+            existing_trace = run.get("pipeline_trace") if isinstance(run.get("pipeline_trace"), list) else []
+            if existing_trace and not force:
+                return {
+                    "updated": False,
+                    "reason": "pipeline_trace_already_present",
+                    "run": run,
+                    "pipeline_trace": existing_trace,
+                    "recommendation_count": int(run.get("recommendation_count") or 0),
+                    "collected_count": int(run.get("collected_count") or 0),
+                }
+            recommendations = self._list_literature_radar_recommendations_for_run(connection, run["id"])
+            collected_papers = self._literature_radar_papers_for_run_backfill(connection, run, recommendations)
+            recommendation_payloads = [
+                recommendation.get("recommendation")
+                for recommendation in recommendations
+                if isinstance(recommendation.get("recommendation"), dict)
+            ]
+            trace = build_radar_pipeline_trace(
+                status=str(run.get("status") or "succeeded"),
+                collected_papers=collected_papers,
+                recommendations=recommendation_payloads,
+                imported_count=int(run.get("imported_count") or 0),
+                source_errors=run.get("source_errors") if isinstance(run.get("source_errors"), list) else [],
+                report_written=bool(run.get("report")),
+                storage_target="team_sqlite",
+            )
+            run["pipeline_trace"] = trace
+            run["pipeline_trace_backfill"] = {
+                "backfilled_at": timestamp,
+                "source": "team_sqlite_legacy_run",
+                "collected_record_count": len(collected_papers),
+                "recommendation_record_count": len(recommendation_payloads),
+                "forced": bool(force),
+            }
+            self._upsert_literature_radar_run(connection, run)
+        return {
+            "updated": True,
+            "reason": "pipeline_trace_backfilled",
+            "run": run,
+            "pipeline_trace": trace,
+            "recommendation_count": len(recommendation_payloads),
+            "collected_count": len(collected_papers),
+        }
+
+    def _list_literature_radar_recommendations_for_run(
+        self,
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT record_json
+            FROM literature_radar_recommendations
+            WHERE run_id = ?
+            ORDER BY rank ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def _literature_radar_papers_for_run_backfill(
+        self,
+        connection: sqlite3.Connection,
+        run: dict[str, Any],
+        recommendations: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        completed_at = str(run.get("completed_at") or "").strip()
+        if completed_at:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_papers
+                WHERE latest_seen_at = ?
+                ORDER BY title ASC
+                """,
+                (completed_at,),
+            ).fetchall()
+            papers = [loads(row["record_json"]) for row in rows]
+            if papers:
+                return papers
+        papers = []
+        seen: set[str] = set()
+        for recommendation in recommendations:
+            nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
+            paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
+            key = radar_paper_key(paper)
+            if paper and key not in seen:
+                papers.append(paper)
+                seen.add(key)
+        return papers
 
     def annotate_literature_radar_recommendation_novelty(
         self,
@@ -2235,6 +2546,83 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _record_schema_migrations(self, connection: sqlite3.Connection) -> None:
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        for migration in TEAM_RESEARCH_SCHEMA_MIGRATIONS:
+            record = {
+                "id": str(migration["id"]),
+                "version": int(migration["version"]),
+                "description": str(migration["description"]),
+                "applied_at": timestamp,
+            }
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations
+                (id, version, description, applied_at, record_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    record["id"],
+                    record["version"],
+                    record["description"],
+                    record["applied_at"],
+                    dumps(record),
+                ),
+            )
+
+    def _current_team_interest_profile_version(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        rows = connection.execute(
+            """
+            SELECT record_json
+            FROM team_interest_keywords
+            ORDER BY weight DESC, keyword ASC
+            """
+        ).fetchall()
+        interests = [
+            {
+                "keyword": normalize_interest_keyword(str(record.get("keyword") or "")),
+                "weight": clean_interest_weight(record.get("weight")),
+            }
+            for record in (loads(row["record_json"]) for row in rows)
+            if normalize_interest_keyword(str(record.get("keyword") or ""))
+            and clean_interest_weight(record.get("weight")) > 0
+        ]
+        profile_hash = stable_id("team-interest-profile-hash", {"interests": interests})
+        record = {
+            "id": stable_id("team-interest-profile-version", {"profile_hash": profile_hash}),
+            "profile_type": "team_interests",
+            "profile_hash": profile_hash,
+            "interest_count": len(interests),
+            "interests": interests,
+            "created_at": timestamp,
+        }
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO team_interest_profile_versions
+            (id, profile_type, profile_hash, interest_count, interests_json, created_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["profile_type"],
+                record["profile_hash"],
+                record["interest_count"],
+                dumps(record["interests"]),
+                record["created_at"],
+                dumps(record),
+            ),
+        )
+        row = connection.execute(
+            "SELECT record_json FROM team_interest_profile_versions WHERE id = ?",
+            (record["id"],),
+        ).fetchone()
+        return loads(row["record_json"]) if row else record
+
     def _ensure_tag_catalog(
         self,
         connection: sqlite3.Connection,
@@ -2336,6 +2724,7 @@ class TeamResearchDatabase:
             """,
             ("team_interest_keywords_seeded", dumps({"seeded": True}), timestamp),
         )
+        self._current_team_interest_profile_version(connection, timestamp=timestamp)
 
     def _update_library_entries_for_analysis(
         self,
@@ -2660,3 +3049,14 @@ def latest_paper_publish_sort_value(paper: dict[str, Any]) -> str:
         return f"{int(year):04d}"
     except (TypeError, ValueError):
         return str(year)
+
+
+def normalize_queue_usefulness(value: str) -> str:
+    normalized = "_".join(str(value or "").strip().lower().split())
+    allowed = {
+        "useful",
+        "partly_useful",
+        "not_useful",
+        "needs_review",
+    }
+    return normalized if normalized in allowed else "needs_review"

@@ -8,9 +8,12 @@ Personal or Team Side-Brain adapters decide where accepted candidates live.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import glob
 import hashlib
+import os
 from pathlib import Path
 import re
+import shlex
 from typing import Any, Callable
 
 from shared.research.core import iso_timestamp, stable_id
@@ -283,6 +286,29 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
     },
 ]
 
+DEFAULT_OPENREVIEW_VENUE_PROFILES = ("iclr", "neurips", "icml")
+
+RADAR_MVP_STAGE_EFFORT_DAYS: dict[str, tuple[float, float]] = {
+    "source_settings": (0.5, 1.0),
+    "primary_source_coverage": (0.5, 1.0),
+    "live_source_validation": (1.0, 2.0),
+    "relevance_profile": (1.0, 2.0),
+    "latest_run": (0.25, 0.5),
+    "review_queue": (0.25, 0.5),
+    "recommendation_evidence": (0.5, 1.0),
+    "engineering_guardrails": (0.5, 1.0),
+    "operations": (0.5, 1.0),
+}
+
+RADAR_THIN_MVP_STAGE_EFFORT_DAYS: dict[str, tuple[float, float]] = {
+    "source_settings": (0.25, 0.5),
+    "topic_profile": (0.25, 0.5),
+    "latest_run": (0.25, 0.5),
+    "review_queue": (0.25, 0.5),
+    "recommendation_evidence": (0.25, 0.5),
+    "queue_usefulness_review": (0.25, 0.5),
+}
+
 RADAR_SOURCE_PRESETS: list[dict[str, Any]] = [
     {
         "id": "broad_daily",
@@ -309,7 +335,7 @@ RADAR_SOURCE_PRESETS: list[dict[str, Any]] = [
             "ndss",
         ],
         "venue_profiles": ["security", "programming_languages_memory_safety"],
-        "openreview_venue_profiles": ["iclr", "neurips", "icml"],
+        "openreview_venue_profiles": list(DEFAULT_OPENREVIEW_VENUE_PROFILES),
         "usenix_security_cycles": [1],
     },
     {
@@ -352,6 +378,42 @@ RADAR_SOURCE_RECOMMENDED_CONFIG: dict[str, list[tuple[str, str]]] = {
     "openalex_venues": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
     "crossref": [("crossref_mailto_configured", "Crossref mailto/contact")],
 }
+RADAR_SOURCE_CONFIG_ENV_HINTS: dict[str, list[str]] = {
+    "semantic_scholar_api_key_configured": ["SEMANTIC_SCHOLAR_API_KEY"],
+    "openalex_mailto_configured": [
+        "RADAR_OPENALEX_MAILTO",
+        "PERSONAL_RADAR_OPENALEX_MAILTO",
+        "OPENALEX_MAILTO",
+        "RADAR_SOURCE_CONTACT_EMAIL",
+        "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL",
+    ],
+    "crossref_mailto_configured": [
+        "RADAR_CROSSREF_MAILTO",
+        "PERSONAL_RADAR_CROSSREF_MAILTO",
+        "CROSSREF_MAILTO",
+        "RADAR_SOURCE_CONTACT_EMAIL",
+        "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL",
+    ],
+    "unpaywall_email_configured": [
+        "RADAR_UNPAYWALL_EMAIL",
+        "PERSONAL_RADAR_UNPAYWALL_EMAIL",
+        "UNPAYWALL_EMAIL",
+        "RADAR_SOURCE_CONTACT_EMAIL",
+        "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL",
+    ],
+    "seed_paper_ids": ["RADAR_SEED_PAPER_IDS", "PERSONAL_RADAR_SEED_PAPER_IDS"],
+    "openalex_author_ids": ["RADAR_OPENALEX_AUTHOR_IDS", "PERSONAL_RADAR_OPENALEX_AUTHOR_IDS"],
+    "semantic_scholar_author_ids": [
+        "RADAR_AUTHOR_IDS",
+        "PERSONAL_RADAR_AUTHOR_IDS",
+    ],
+    "dblp_author_pids": ["RADAR_DBLP_AUTHOR_PIDS", "PERSONAL_RADAR_DBLP_AUTHOR_PIDS"],
+    "openreview_invitations": ["RADAR_OPENREVIEW_INVITATIONS", "PERSONAL_RADAR_OPENREVIEW_INVITATIONS"],
+    "official_accepted_pages": [
+        "RADAR_OFFICIAL_ACCEPTED_PAGES",
+        "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES",
+    ],
+}
 RADAR_OA_ENRICHMENT_SOURCE_IDS = {
     "dblp",
     "dblp_authors",
@@ -366,6 +428,69 @@ RADAR_OA_ENRICHMENT_SOURCE_IDS = {
     "openalex_venues",
     "crossref",
 }
+RADAR_PRIMARY_SOURCE_COVERAGE_REQUIREMENTS: list[dict[str, Any]] = [
+    {
+        "id": "arxiv",
+        "label": "arXiv",
+        "source_ids": ["arxiv"],
+        "purpose": "fast preprint discovery",
+    },
+    {
+        "id": "dblp",
+        "label": "DBLP",
+        "source_ids": ["dblp", "dblp_authors", "dblp_venues"],
+        "purpose": "CS venue, author, and publication tracking",
+    },
+    {
+        "id": "semantic_scholar",
+        "label": "Semantic Scholar",
+        "source_ids": [
+            "semantic_scholar",
+            "semantic_scholar_authors",
+            "semantic_scholar_citations",
+            "semantic_scholar_references",
+            "semantic_scholar_recommendations",
+        ],
+        "purpose": "citation graph, related papers, authors, and seed recommendations",
+    },
+    {
+        "id": "openalex",
+        "label": "OpenAlex",
+        "source_ids": ["openalex", "openalex_authors", "openalex_venues"],
+        "purpose": "large-scale metadata, topics, citations, and DOI resolution",
+    },
+    {
+        "id": "crossref",
+        "label": "Crossref",
+        "source_ids": ["crossref"],
+        "purpose": "DOI and publisher metadata",
+    },
+    {
+        "id": "openreview",
+        "label": "OpenReview",
+        "source_ids": ["openreview", "openreview_venues"],
+        "purpose": "AI/ML venue and workshop coverage",
+    },
+    {
+        "id": "usenix_security",
+        "label": "USENIX Security accepted papers",
+        "source_ids": ["usenix_security"],
+        "purpose": "top security accepted-paper tracking",
+    },
+    {
+        "id": "ndss",
+        "label": "NDSS accepted papers",
+        "source_ids": ["ndss"],
+        "purpose": "top security accepted-paper tracking",
+    },
+    {
+        "id": "unpaywall",
+        "label": "Unpaywall",
+        "source_ids": ["unpaywall"],
+        "purpose": "legal open-access PDF and license resolution for DOI-bearing candidates",
+        "coverage_kind": "oa_enrichment",
+    },
+]
 
 CONFERENCE_SOURCE_GROUPS: dict[str, list[str]] = {
     "security": ["USENIX Security", "IEEE S&P", "ACM CCS", "NDSS", "RAID", "ACSAC"],
@@ -562,6 +687,26 @@ TREND_SIGNAL_SOURCE_REGISTRY: list[dict[str, Any]] = [
     },
 ]
 TREND_SIGNAL_SOURCES = [source["name"] for source in TREND_SIGNAL_SOURCE_REGISTRY]
+DISALLOWED_SOURCE_REGISTRY: list[dict[str, Any]] = [
+    {
+        "id": "google_scholar",
+        "name": "Google Scholar",
+        "access": "unstable_web_scraping",
+        "source_class": "disallowed_source",
+        "authoritative_metadata": False,
+        "disallowed": True,
+        "reason": "Google Scholar-style scraping is intentionally out of scope; use stable APIs, feeds, or official pages.",
+    },
+    {
+        "id": "sci_hub",
+        "name": "Sci-Hub",
+        "access": "unauthorized_pdf_source",
+        "source_class": "disallowed_source",
+        "authoritative_metadata": False,
+        "disallowed": True,
+        "reason": "Unauthorized PDF sources are not allowed; use legal open-access metadata and Unpaywall checks.",
+    },
+]
 RADAR_SOURCE_LABELS: dict[str, str] = {
     "arxiv": "arXiv",
     "dblp": "DBLP",
@@ -596,7 +741,14 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
                 "operating system security",
                 "kernel security",
                 "binary analysis",
+                "threat intelligence",
                 "vulnerability detection",
+                "vulnerability-introducing commit",
+                "software supply chain security",
+                "CI/CD security",
+                "security practices in GitHub Actions",
+                "malicious traffic detection",
+                "encrypted messaging",
                 "exploit mitigation",
                 "sandboxing",
                 "software fault isolation",
@@ -631,6 +783,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
                 "agentic security",
                 "AI security",
                 "LLM security",
+                "LLM-integrated app systems",
                 "prompt injection",
                 "jailbreak",
                 "adversarial attack",
@@ -639,6 +792,7 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
                 "model stealing",
                 "data poisoning",
                 "backdoor attack",
+                "membership inference",
                 "red teaming",
                 "agent security",
                 "AI agent security",
@@ -670,6 +824,201 @@ DEFAULT_RADAR_TOPIC_PROFILE: dict[str, Any] = {
         },
     },
 }
+RADAR_RELEVANCE_LABEL_RANKS = {
+    "needs_review": 0,
+    "low_relevance": 1,
+    "possibly_relevant": 2,
+    "highly_relevant": 3,
+}
+RADAR_RELEVANCE_EVALUATION_CASES: list[dict[str, Any]] = [
+    {
+        "id": "memory_safety_uaf_agent",
+        "topic_ids": ["memory_safety", "ai_security"],
+        "paper": {
+            "id": "eval_memory_safety_uaf_agent",
+            "title": "Temporal Memory Safety for Autonomous Security Agents",
+            "abstract": (
+                "This paper studies use-after-free detection, sanitizer feedback, "
+                "LLM security, and C/C++ memory safety for LLM cyber reasoning agents."
+            ),
+            "venue": "USENIX Security",
+            "tags": ["memory safety", "agentic security"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["memory safety", "use-after-free", "LLM security"],
+    },
+    {
+        "id": "system_security_kernel_sandbox",
+        "topic_ids": ["system_security"],
+        "paper": {
+            "id": "eval_system_security_kernel_sandbox",
+            "title": "Kernel Sandboxing for Secure Systems",
+            "abstract": (
+                "We present kernel security, exploit mitigation, binary analysis, "
+                "and software fault isolation for operating system security."
+            ),
+            "venue": "IEEE Symposium on Security and Privacy",
+            "tags": ["system security"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["kernel security", "exploit mitigation", "software fault isolation"],
+    },
+    {
+        "id": "agentic_prompt_injection",
+        "topic_ids": ["ai_security"],
+        "paper": {
+            "id": "eval_agentic_prompt_injection",
+            "title": "Prompt Injection Defenses for AI Agent Security",
+            "abstract": (
+                "The work evaluates LLM security, jailbreak mitigation, and red teaming "
+                "for code generation security in agentic security workflows."
+            ),
+            "venue": "ICLR Workshop",
+            "tags": ["agentic security", "LLM security"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["agentic security", "LLM security", "prompt injection"],
+    },
+    {
+        "id": "pl_memory_safety_cheri_rust",
+        "topic_ids": ["memory_safety"],
+        "paper": {
+            "id": "eval_pl_memory_safety_cheri_rust",
+            "title": "CHERI Bounds Checking for Rust Security",
+            "abstract": (
+                "A PLDI paper on memory safety, type safety, bounds checking, "
+                "and safe systems programming for C/C++ memory safety."
+            ),
+            "venue": "PLDI",
+            "tags": ["memory safety", "CHERI", "Rust security"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["CHERI", "Rust security", "bounds checking", "type safety"],
+    },
+    {
+        "id": "security_side_channel_tee",
+        "topic_ids": ["system_security"],
+        "paper": {
+            "id": "eval_security_side_channel_tee",
+            "title": "Side Channel Hardening for Trusted Execution",
+            "abstract": (
+                "This secure systems work studies system security, side channel "
+                "analysis, trusted execution, and sandboxing for protected runtimes."
+            ),
+            "venue": "ACM CCS",
+            "tags": ["system security", "trusted execution"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["system security", "side channel", "trusted execution", "sandboxing"],
+    },
+    {
+        "id": "agentic_vulnerability_detection",
+        "topic_ids": ["ai_security"],
+        "paper": {
+            "id": "eval_agentic_vulnerability_detection",
+            "title": "Cyber Reasoning Agents for Vulnerability Detection",
+            "abstract": (
+                "The paper combines AI agent security, cyber reasoning, code generation security, "
+                "and vulnerability detection with LLMs for automated patch review."
+            ),
+            "venue": "USENIX Security",
+            "tags": ["agentic security", "AI agent security"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["AI agent security", "cyber reasoning", "code generation security"],
+    },
+    {
+        "id": "ai_safety_control_interpretability",
+        "topic_ids": ["ai_safety"],
+        "paper": {
+            "id": "eval_ai_safety_control_interpretability",
+            "title": "Mechanistic Interpretability for AI Control",
+            "abstract": (
+                "An OpenReview paper on AI safety, alignment, mechanistic interpretability, "
+                "AI control, and capability elicitation evaluations."
+            ),
+            "venue": "ICLR",
+            "tags": ["AI safety", "alignment"],
+        },
+        "expected_min_label": "highly_relevant",
+        "expected_min_score": 70,
+        "expected_positive_keywords": ["AI safety", "alignment", "mechanistic interpretability", "AI control"],
+    },
+    {
+        "id": "human_memory_negative",
+        "topic_ids": ["memory_safety"],
+        "paper": {
+            "id": "eval_human_memory_negative",
+            "title": "Human Memory Consolidation in Education",
+            "abstract": (
+                "A behavioral study of biological memory and learning interventions "
+                "for classroom education."
+            ),
+            "venue": "Cognitive Science",
+            "tags": ["human memory"],
+        },
+        "expected_max_label": "needs_review",
+        "expected_max_score": 0,
+        "expected_negative_keywords": ["biological memory", "human memory"],
+    },
+    {
+        "id": "generic_ai_recommender_negative",
+        "topic_ids": ["ai_security"],
+        "paper": {
+            "id": "eval_generic_ai_recommender_negative",
+            "title": "A Generic AI Application for Product Recommendations",
+            "abstract": (
+                "This recommendation system only optimizes click-through rate for "
+                "consumer shopping and does not study AI security."
+            ),
+            "venue": "Applied AI",
+            "tags": ["recommendation system only", "generic AI application"],
+        },
+        "expected_max_label": "needs_review",
+        "expected_max_score": 0,
+        "expected_negative_keywords": ["generic AI application", "recommendation system only"],
+    },
+    {
+        "id": "pure_crypto_blockchain_negative",
+        "topic_ids": ["system_security"],
+        "paper": {
+            "id": "eval_pure_crypto_blockchain_negative",
+            "title": "Pure Cryptography for Blockchain Finance",
+            "abstract": (
+                "A theoretical construction for pure cryptography and blockchain finance, "
+                "focused on financial protocols and distributed ledgers rather than software correctness."
+            ),
+            "venue": "Cryptography",
+            "tags": ["pure cryptography", "blockchain finance"],
+        },
+        "expected_max_label": "needs_review",
+        "expected_max_score": 0,
+        "expected_negative_keywords": ["pure cryptography", "blockchain finance"],
+    },
+    {
+        "id": "network_management_negative",
+        "topic_ids": ["system_security"],
+        "paper": {
+            "id": "eval_network_management_negative",
+            "title": "Generic Network Management for Enterprise Clouds",
+            "abstract": (
+                "This generic network management work optimizes routing dashboards "
+                "and does not study vulnerability detection or exploit mitigation."
+            ),
+            "venue": "Networking",
+            "tags": ["generic network management"],
+        },
+        "expected_max_label": "needs_review",
+        "expected_max_score": 0,
+        "expected_negative_keywords": ["generic network management"],
+    },
+]
 RADAR_TOPIC_KEYWORD_ALIASES: dict[str, list[str]] = {
     "system security": ["system_security"],
     "systems security": ["system_security"],
@@ -688,6 +1037,7 @@ RADAR_TOPIC_KEYWORD_ALIASES: dict[str, list[str]] = {
 LOCAL_RADAR_SUMMARY_PROCESSOR = "local-radar-summary-v0.1"
 LOCAL_RADAR_CONTEXT_PROCESSOR = "local-radar-context-v0.1"
 LOCAL_RADAR_ATTENTION_PROCESSOR = "local-radar-attention-v0.1"
+RADAR_QUEUE_TRACE_PROCESSOR = "radar-queue-normalizer-v0.1"
 RadarScorer = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -699,12 +1049,19 @@ def trend_signal_source_registry() -> list[dict[str, Any]]:
     return [dict(source) for source in TREND_SIGNAL_SOURCE_REGISTRY]
 
 
+def disallowed_source_registry() -> list[dict[str, Any]]:
+    return [dict(source) for source in DISALLOWED_SOURCE_REGISTRY]
+
+
 def combined_source_registry() -> list[dict[str, Any]]:
     return [*source_registry(), *trend_signal_source_registry()]
 
 
 def radar_source_policy_record(source_id: str) -> dict[str, Any]:
     selected_source_id = clean_radar_source_id(source_id)
+    disallowed_registry = {source["id"]: source for source in disallowed_source_registry()}
+    if selected_source_id in disallowed_registry:
+        return dict(disallowed_registry[selected_source_id])
     registry = {source["id"]: source for source in combined_source_registry()}
     if selected_source_id in registry:
         return dict(registry[selected_source_id])
@@ -740,17 +1097,127 @@ def radar_source_policy_summary(sources: list[str] | tuple[str, ...] | None) -> 
     authoritative_records = [record for record in records if record.get("authoritative_metadata")]
     trend_records = [record for record in records if record.get("source_class") == "trend_signal"]
     unknown_records = [record for record in records if record.get("source_class") == "unknown"]
+    disallowed_records = [record for record in records if record.get("disallowed")]
     return {
         "source_count": len(records),
         "authoritative_count": len(authoritative_records),
         "trend_signal_count": len(trend_records),
         "unknown_count": len(unknown_records),
+        "disallowed_count": len(disallowed_records),
         "class_counts": class_counts,
         "authoritative_source_ids": [record["id"] for record in authoritative_records],
         "trend_signal_source_ids": [record["id"] for record in trend_records],
         "unknown_source_ids": [record["id"] for record in unknown_records],
+        "disallowed_source_ids": [record["id"] for record in disallowed_records],
         "sources": records,
     }
+
+
+def radar_primary_source_coverage_summary(
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_sources = unique_source_ids(list(sources or []))
+    selected_source_set = set(selected_sources)
+    config = collection_config if isinstance(collection_config, dict) else {}
+    oa_enrichment = radar_oa_enrichment_summary(selected_sources, config)
+    requirements: list[dict[str, Any]] = []
+    for requirement in RADAR_PRIMARY_SOURCE_COVERAGE_REQUIREMENTS:
+        requirement_id = str(requirement["id"])
+        acceptable_source_ids = [str(source_id) for source_id in requirement.get("source_ids") or []]
+        matched_source_ids = [source_id for source_id in acceptable_source_ids if source_id in selected_source_set]
+        coverage_kind = str(requirement.get("coverage_kind") or "source_selection")
+        if coverage_kind == "oa_enrichment":
+            relevant_source_ids = (
+                oa_enrichment.get("relevant_source_ids")
+                if isinstance(oa_enrichment.get("relevant_source_ids"), list)
+                else []
+            )
+            matched_source_ids = [str(source_id) for source_id in relevant_source_ids]
+            if oa_enrichment.get("status") == "ready":
+                status = "covered"
+                next_action = "ready"
+                message = "Unpaywall is configured for DOI-bearing source enrichment."
+            elif matched_source_ids:
+                status = "missing_config"
+                next_action = "add_unpaywall_contact"
+                message = "Add Unpaywall email/contact so DOI-bearing candidates can get legal OA/PDF checks."
+            else:
+                status = "missing_sources"
+                next_action = "select_doi_metadata_source"
+                message = "Select a DOI-bearing metadata source before Unpaywall can enrich candidates."
+        elif matched_source_ids:
+            status = "covered"
+            next_action = "ready"
+            message = f"{requirement['label']} coverage is selected."
+        else:
+            status = "missing"
+            next_action = "add_primary_source_family"
+            message = f"Add {requirement['label']} to cover the objective's primary source set."
+        requirements.append(
+            {
+                "id": requirement_id,
+                "label": str(requirement["label"]),
+                "status": status,
+                "coverage_kind": coverage_kind,
+                "purpose": str(requirement.get("purpose") or ""),
+                "acceptable_source_ids": acceptable_source_ids,
+                "matched_source_ids": matched_source_ids,
+                "next_action": next_action,
+                "message": message,
+            }
+        )
+    covered = [requirement for requirement in requirements if requirement["status"] == "covered"]
+    missing = [requirement for requirement in requirements if requirement["status"] != "covered"]
+    if not selected_sources:
+        status = "empty"
+        next_action = "select_primary_sources"
+    elif not missing:
+        status = "complete"
+        next_action = "ready"
+    elif any(requirement["status"] == "missing_config" for requirement in missing):
+        status = "partial"
+        next_action = "add_required_source_config"
+    else:
+        status = "partial"
+        next_action = "add_missing_primary_sources"
+    return {
+        "status": status,
+        "next_action": next_action,
+        "required_count": len(requirements),
+        "covered_count": len(covered),
+        "missing_count": len(missing),
+        "covered_primary_source_ids": [requirement["id"] for requirement in covered],
+        "missing_primary_source_ids": [requirement["id"] for requirement in missing],
+        "missing_config_primary_source_ids": [
+            requirement["id"] for requirement in missing if requirement["status"] == "missing_config"
+        ],
+        "selected_source_ids": selected_sources,
+        "requirements": requirements,
+    }
+
+
+def format_radar_primary_source_coverage(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    missing = summary.get("missing_primary_source_ids") if isinstance(summary.get("missing_primary_source_ids"), list) else []
+    missing_config = (
+        summary.get("missing_config_primary_source_ids")
+        if isinstance(summary.get("missing_config_primary_source_ids"), list)
+        else []
+    )
+    missing_source_ids = [source_id for source_id in missing if source_id not in set(missing_config)]
+    parts = [
+        f"Primary source coverage: status={summary.get('status') or 'unknown'}",
+        f"covered={int(summary.get('covered_count') or 0)}/{int(summary.get('required_count') or 0)}",
+        f"missing={int(summary.get('missing_count') or 0)}",
+        f"next={summary.get('next_action') or 'inspect'}",
+    ]
+    if missing_source_ids:
+        parts.append(f"missing_sources={', '.join(str(source_id) for source_id in missing_source_ids[:5])}")
+    if missing_config:
+        parts.append(f"missing_config={', '.join(str(source_id) for source_id in missing_config[:5])}")
+    return " | ".join(parts)
 
 
 def format_radar_source_policy(summary: dict[str, Any]) -> str:
@@ -767,6 +1234,7 @@ def format_radar_source_policy(summary: dict[str, Any]) -> str:
         f"sources={int(summary.get('source_count') or 0)}",
         f"authoritative={int(summary.get('authoritative_count') or 0)}",
         f"trend_signals={int(summary.get('trend_signal_count') or 0)}",
+        f"disallowed={int(summary.get('disallowed_count') or 0)}",
         f"unknown={int(summary.get('unknown_count') or 0)}",
     ]
     if class_text:
@@ -784,9 +1252,39 @@ def append_radar_source_policy_to_report(
     lines = [report.rstrip(), "", "## Source Policy", "", f"- {format_radar_source_policy(summary)}"]
     if int(summary.get("trend_signal_count") or 0) > 0:
         lines.append("- Trend signal sources are secondary context, not authoritative bibliographic records.")
+    if int(summary.get("disallowed_count") or 0) > 0:
+        values = summary.get("disallowed_source_ids") if isinstance(summary.get("disallowed_source_ids"), list) else []
+        lines.append(
+            "- Disallowed source selection: "
+            + ", ".join(f"`{value}`" for value in values)
+            + ". Use API-first metadata sources, official accepted-paper pages, or legal OA enrichment instead."
+        )
     if int(summary.get("unknown_count") or 0) > 0:
         values = summary.get("unknown_source_ids") if isinstance(summary.get("unknown_source_ids"), list) else []
         lines.append(f"- Unknown source classification: {', '.join(f'`{value}`' for value in values)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def append_radar_primary_source_coverage_to_report(
+    report: str,
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> str:
+    summary = radar_primary_source_coverage_summary(sources, collection_config)
+    if summary.get("status") == "empty":
+        return report
+    lines = [
+        report.rstrip(),
+        "",
+        "## Primary Source Coverage",
+        "",
+        f"- {format_radar_primary_source_coverage(summary)}",
+    ]
+    for requirement in (summary.get("requirements") or [])[:12]:
+        if not isinstance(requirement, dict) or requirement.get("status") == "covered":
+            continue
+        lines.append(f"- {requirement.get('label')}: {requirement.get('message')}")
     lines.append("")
     return "\n".join(lines)
 
@@ -859,6 +1357,7 @@ def build_radar_preflight_payload(
 ) -> dict[str, Any]:
     selected_sources = unique_source_ids(list(sources or settings.get("sources") or []))
     selected_config = dict(collection_config or {})
+    source_validation_plan = radar_source_validation_plan(selected_sources, selected_config)
     payload: dict[str, Any] = {
         "success": True,
         "kind": kind,
@@ -873,6 +1372,9 @@ def build_radar_preflight_payload(
         "source_policy": radar_source_policy_summary(selected_sources),
         "source_readiness": radar_source_readiness_summary(selected_sources, selected_config),
         "oa_enrichment": radar_oa_enrichment_summary(selected_sources, selected_config),
+        "primary_source_coverage": radar_primary_source_coverage_summary(selected_sources, selected_config),
+        "source_validation_plan": source_validation_plan,
+        "source_validation_guidance": radar_source_validation_guidance(source_validation_plan),
     }
     if scoring_profile is not None:
         payload["scoring_profile"] = dict(scoring_profile)
@@ -884,6 +1386,3281 @@ def build_radar_preflight_payload(
     if paths is not None:
         payload["paths"] = dict(paths)
     return payload
+
+
+def radar_mvp_readiness_summary(
+    settings_payload: dict[str, Any] | None,
+    queue_payload: dict[str, Any] | None = None,
+    *,
+    source_validation_result: dict[str, Any] | None = None,
+    source_validation_evidence: dict[str, Any] | None = None,
+    relevance_evaluation: dict[str, Any] | None = None,
+    operations_readiness: dict[str, Any] | None = None,
+    guardrail_readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings = settings_payload if isinstance(settings_payload, dict) else {}
+    queue = queue_payload if isinstance(queue_payload, dict) else {}
+    stages: list[dict[str, Any]] = []
+
+    def add_stage(
+        stage_id: str,
+        label: str,
+        status: str,
+        next_action: str,
+        message: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        stages.append(
+            {
+                "id": stage_id,
+                "label": label,
+                "status": status,
+                "next_action": next_action,
+                "message": message,
+                "evidence": dict(evidence or {}),
+            }
+        )
+
+    source_policy = settings.get("source_policy") if isinstance(settings.get("source_policy"), dict) else {}
+    disallowed_source_ids = (
+        source_policy.get("disallowed_source_ids")
+        if isinstance(source_policy.get("disallowed_source_ids"), list)
+        else []
+    )
+    source_readiness = settings.get("source_readiness") if isinstance(settings.get("source_readiness"), dict) else {}
+    source_readiness_status = str(source_readiness.get("status") or "unknown")
+    if disallowed_source_ids:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "blocked",
+            "replace_disallowed_sources",
+            "Remove disallowed source paths and use API-first metadata sources, official pages, or legal OA enrichment.",
+            {
+                "status": source_readiness_status,
+                "disallowed_source_ids": disallowed_source_ids,
+                "source_policy": source_policy,
+            },
+        )
+    elif source_readiness_status in {"blocked", "no_sources"}:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "blocked",
+            "configure_blocked_sources",
+            "Configure required source inputs before scheduled collection.",
+            {
+                "status": source_readiness_status,
+                "blocked_source_ids": source_readiness.get("blocked_source_ids") or [],
+            },
+        )
+    elif source_readiness_status == "ready_with_warnings":
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "warning",
+            "add_recommended_source_metadata",
+            "Sources can run, but recommended API/contact metadata is missing.",
+            {
+                "status": source_readiness_status,
+                "warning_source_ids": source_readiness.get("warning_source_ids") or [],
+            },
+        )
+    else:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "passed",
+            "keep_saved_defaults",
+            "Required source settings are present.",
+            {"status": source_readiness_status},
+        )
+
+    primary_coverage = (
+        settings.get("primary_source_coverage")
+        if isinstance(settings.get("primary_source_coverage"), dict)
+        else {}
+    )
+    primary_status = str(primary_coverage.get("status") or "unknown")
+    if primary_status == "complete":
+        add_stage(
+            "primary_source_coverage",
+            "Primary source coverage",
+            "passed",
+            "keep_primary_sources",
+            "Saved sources cover the required primary source families.",
+            {
+                "covered_count": primary_coverage.get("covered_count") or 0,
+                "required_count": primary_coverage.get("required_count") or 0,
+            },
+        )
+    else:
+        primary_next_action = str(primary_coverage.get("next_action") or "")
+        if primary_next_action in {"add_required_source_config", "add_unpaywall_contact"}:
+            primary_stage_next_action = "add_required_source_config"
+            primary_stage_message = "Saved sources cover the source families, but required primary-source configuration is missing."
+        else:
+            primary_stage_next_action = "expand_primary_sources"
+            primary_stage_message = "Saved sources do not yet cover every required primary source family."
+        add_stage(
+            "primary_source_coverage",
+            "Primary source coverage",
+            "warning",
+            primary_stage_next_action,
+            primary_stage_message,
+            {
+                "status": primary_status,
+                "next_action": primary_next_action,
+                "missing_primary_source_ids": primary_coverage.get("missing_primary_source_ids") or [],
+                "missing_config_primary_source_ids": primary_coverage.get("missing_config_primary_source_ids") or [],
+            },
+        )
+
+    validation_result = source_validation_result if isinstance(source_validation_result, dict) else {}
+    validation_evidence = source_validation_evidence if isinstance(source_validation_evidence, dict) else {}
+    validation_plan = (
+        settings.get("source_validation_plan")
+        if isinstance(settings.get("source_validation_plan"), dict)
+        else {}
+    )
+    validation_status = str(validation_result.get("status") or validation_plan.get("status") or "unknown")
+    validation_network_performed = bool(validation_result.get("network_performed"))
+    validation_coverage = (
+        validation_evidence.get("coverage")
+        if isinstance(validation_evidence.get("coverage"), dict)
+        else {}
+    )
+    validation_coverage_status = str(validation_coverage.get("status") or "")
+    validation_coverage_complete = validation_coverage_status == "complete"
+    validation_primary_coverage = (
+        validation_evidence.get("primary_coverage")
+        if isinstance(validation_evidence.get("primary_coverage"), dict)
+        else {}
+    )
+    validation_primary_coverage_status = str(validation_primary_coverage.get("status") or "")
+    primary_validation_required = primary_status == "complete" or bool(validation_primary_coverage)
+    validation_primary_coverage_complete = (
+        not primary_validation_required or validation_primary_coverage_status == "complete"
+    )
+    if validation_status == "blocked":
+        add_stage(
+            "live_source_validation",
+            "Live source validation",
+            "blocked",
+            "configure_blocked_sources",
+            "Some selected sources cannot be live-validated until required inputs are configured.",
+            {
+                "status": validation_status,
+                "blocked_source_ids": validation_result.get("blocked_source_ids")
+                or validation_plan.get("blocked_source_ids")
+                or [],
+                "evidence": validation_evidence,
+            },
+        )
+    elif (
+        validation_status == "succeeded"
+        and validation_network_performed
+        and validation_coverage_complete
+        and validation_primary_coverage_complete
+    ):
+        add_stage(
+            "live_source_validation",
+            "Live source validation",
+            "passed",
+            "keep_live_validation_snapshot",
+            "Recent live metadata validation succeeded across the required primary source families.",
+            {
+                "status": validation_status,
+                "network_performed": validation_network_performed,
+                "evidence": validation_evidence,
+            },
+        )
+    else:
+        add_stage(
+            "live_source_validation",
+            "Live source validation",
+            "warning",
+            "run_live_source_validation",
+            "Run a small metadata-only live source validation with complete source coverage before relying on scheduled collection.",
+            {
+                "status": validation_status,
+                "network_performed": validation_network_performed,
+                "coverage_status": validation_coverage_status or "unknown",
+                "primary_coverage_status": validation_primary_coverage_status or "unknown",
+                "unvalidated_primary_source_ids": validation_primary_coverage.get("unvalidated_primary_source_ids")
+                or [],
+                "evidence": validation_evidence,
+            },
+        )
+
+    evaluation = relevance_evaluation if isinstance(relevance_evaluation, dict) else {}
+    if evaluation:
+        evaluation_status = str(evaluation.get("status") or "unknown")
+        if evaluation_status == "passed":
+            add_stage(
+                "relevance_profile",
+                "Relevance profile",
+                "passed",
+                "keep_relevance_profile",
+                "Offline golden relevance cases pass for the active profile.",
+                {
+                    "status": evaluation_status,
+                    "passed_count": evaluation.get("passed_count") or 0,
+                    "case_count": evaluation.get("case_count") or 0,
+                },
+            )
+        else:
+            add_stage(
+                "relevance_profile",
+                "Relevance profile",
+                "blocked",
+                "tune_relevance_profile",
+                "Offline golden relevance cases failed; tune the profile before scheduled runs.",
+                {
+                    "status": evaluation_status,
+                    "failed_case_ids": evaluation.get("failed_case_ids") or [],
+                },
+            )
+
+    latest_run = queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else {}
+    latest_status = str(latest_run.get("status") or "")
+    latest_freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
+    if not latest_run:
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "warning",
+            "run_first_literature_radar_cycle",
+            "No stored Literature Radar run is available yet.",
+            {},
+        )
+    elif latest_status == "failed":
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "blocked",
+            "inspect_latest_run",
+            "The latest Literature Radar run failed.",
+            {"run_id": latest_run.get("id") or "", "error": latest_run.get("error") or ""},
+        )
+    elif str(latest_freshness.get("status") or "") == "stale":
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "warning",
+            "refresh_literature_radar_run",
+            "The latest run is stale for the configured freshness window.",
+            {"run_id": latest_run.get("id") or "", "freshness": latest_freshness},
+        )
+    else:
+        pipeline_summary = radar_latest_run_pipeline_summary(latest_run)
+        if not pipeline_summary.get("complete"):
+            add_stage(
+                "latest_run",
+                "Latest run",
+                "warning",
+                "rerun_literature_radar_cycle",
+                "The latest run exists, but it does not record the separated Literature Radar pipeline phases yet.",
+                {
+                    "run_id": latest_run.get("id") or "",
+                    "status": latest_status or "unknown",
+                    "pipeline_summary": pipeline_summary,
+                },
+            )
+        else:
+            add_stage(
+                "latest_run",
+                "Latest run",
+                "passed",
+                "review_latest_run",
+                "A recent stored Literature Radar run with pipeline evidence is available.",
+                {
+                    "run_id": latest_run.get("id") or "",
+                    "status": latest_status or "unknown",
+                    "pipeline_summary": pipeline_summary,
+                },
+            )
+
+    papers = queue.get("papers") if isinstance(queue.get("papers"), list) else []
+    review_counts = queue.get("review_counts") if isinstance(queue.get("review_counts"), dict) else {}
+    active_count = len(papers)
+    if active_count:
+        add_stage(
+            "review_queue",
+            "Review queue",
+            "passed",
+            "review_daily_queue",
+            "The daily review queue has active candidates.",
+            {"active_count": active_count, "review_counts": review_counts},
+        )
+    else:
+        add_stage(
+            "review_queue",
+            "Review queue",
+            "warning",
+            "review_status_or_expand_sources",
+            "No active queue candidates are visible for the current filters.",
+            {"active_count": active_count, "review_counts": review_counts},
+        )
+
+    evidence_quality = (
+        queue.get("evidence_summary")
+        if isinstance(queue.get("evidence_summary"), dict)
+        else radar_queue_evidence_summary(papers)
+    )
+    evidence_status = str(evidence_quality.get("status") or "unknown")
+    if evidence_status == "passed":
+        add_stage(
+            "recommendation_evidence",
+            "Recommendation evidence",
+            "passed",
+            "review_reason_to_read",
+            "Active queue papers include reason-to-read, existing-work relation, source links, provenance, and PDF/access decisions.",
+            evidence_quality,
+        )
+    else:
+        add_stage(
+            "recommendation_evidence",
+            "Recommendation evidence",
+            "warning",
+            evidence_quality.get("next_action") or "improve_recommendation_evidence",
+            "Some active queue papers are missing reason-to-read, existing-work relation, source links, provenance, or PDF/access decisions.",
+            evidence_quality,
+        )
+
+    guardrails = guardrail_readiness if isinstance(guardrail_readiness, dict) else {}
+    if guardrails:
+        guardrail_status = str(guardrails.get("status") or "unknown")
+        if guardrail_status == "ready":
+            add_stage(
+                "engineering_guardrails",
+                "Engineering guardrails",
+                "passed",
+                "monitor_guardrails",
+                "Radar guardrails for source trace, audit policy, review boundaries, and product boundaries are visible.",
+                guardrails,
+            )
+        elif guardrail_status == "blocked":
+            add_stage(
+                "engineering_guardrails",
+                "Engineering guardrails",
+                "blocked",
+                guardrails.get("next_action") or "fix_guardrail_violations",
+                "Radar guardrail checks found a blocking product or data-boundary issue.",
+                guardrails,
+            )
+        else:
+            add_stage(
+                "engineering_guardrails",
+                "Engineering guardrails",
+                "warning",
+                guardrails.get("next_action") or "inspect_guardrails",
+                "Some Radar guardrail evidence is missing or not yet observable.",
+                guardrails,
+            )
+
+    operations = operations_readiness if isinstance(operations_readiness, dict) else {}
+    if operations:
+        operations_status = str(operations.get("status") or "unknown")
+        if operations_status == "blocked":
+            add_stage(
+                "operations",
+                "Operations",
+                "blocked",
+                operations.get("next_action") or "fix_operations_configuration",
+                "Scheduled operations are blocked by missing scripts, permissions, or PDF-cache configuration.",
+                {
+                    "status": operations_status,
+                    "missing_required_scripts": operations.get("missing_required_scripts") or [],
+                    "non_executable_scripts": operations.get("non_executable_scripts") or [],
+                    "pdf_cache": operations.get("pdf_cache") or {},
+                },
+            )
+        elif operations_status == "needs_attention":
+            add_stage(
+                "operations",
+                "Operations",
+                "warning",
+                operations.get("next_action") or "configure_backup_policy",
+                "Scheduled operations can run, but deployment hardening is incomplete.",
+                {
+                    "status": operations_status,
+                    "warnings": operations.get("warnings") or [],
+                    "backup_configured": bool(operations.get("backup_configured")),
+                    "missing_required_evidence": operations.get("missing_required_evidence") or [],
+                    "evidence_present_count": operations.get("evidence_present_count") or 0,
+                    "evidence_count": operations.get("evidence_count") or 0,
+                },
+            )
+        elif operations_status == "ready":
+            add_stage(
+                "operations",
+                "Operations",
+                "passed",
+                "monitor_scheduled_runs",
+                "Scheduled operations scripts, paths, PDF cache policy, and backups are configured.",
+                {
+                    "status": operations_status,
+                    "backup_configured": bool(operations.get("backup_configured")),
+                    "evidence_present_count": operations.get("evidence_present_count") or 0,
+                    "evidence_count": operations.get("evidence_count") or 0,
+                },
+            )
+
+    status_counts = {
+        "passed": sum(1 for stage in stages if stage["status"] == "passed"),
+        "warning": sum(1 for stage in stages if stage["status"] == "warning"),
+        "blocked": sum(1 for stage in stages if stage["status"] == "blocked"),
+    }
+    progress = radar_mvp_progress_summary(stages, status_counts)
+    if status_counts["blocked"]:
+        status = "blocked"
+    elif status_counts["warning"]:
+        status = "needs_attention"
+    else:
+        status = "ready"
+    next_stage = next((stage for stage in stages if stage["status"] == "blocked"), None)
+    if next_stage is None:
+        warning_stages = [stage for stage in stages if stage["status"] == "warning"]
+        next_stage = min(
+            warning_stages,
+            key=radar_mvp_warning_stage_priority,
+            default=None,
+        )
+    if next_stage is None:
+        next_stage = stages[-1] if stages else {}
+    return {
+        "status": status,
+        "next_action": next_stage.get("next_action") or "review_daily_queue",
+        "next_stage_id": next_stage.get("id") or "",
+        "stage_count": len(stages),
+        "status_counts": status_counts,
+        "progress": progress,
+        "stages": stages,
+    }
+
+
+def radar_mvp_warning_stage_priority(stage: dict[str, Any]) -> tuple[int, str]:
+    """Prioritize actionable MVP warnings without changing stage display order."""
+    stage_id = str(stage.get("id") or "")
+    action = str(stage.get("next_action") or "")
+    evidence = stage.get("evidence") if isinstance(stage.get("evidence"), dict) else {}
+    missing_config = evidence.get("missing_config_primary_source_ids")
+    only_missing_primary_config = (
+        stage_id == "primary_source_coverage"
+        and action in {"add_required_source_config", "add_unpaywall_contact"}
+        and isinstance(missing_config, list)
+        and bool(missing_config)
+    )
+    if only_missing_primary_config:
+        return (0, stage_id)
+    priority = {
+        "primary_source_coverage": 1,
+        "source_settings": 2,
+        "live_source_validation": 3,
+        "relevance_profile": 4,
+        "latest_run": 5,
+        "review_queue": 6,
+        "recommendation_evidence": 7,
+        "engineering_guardrails": 8,
+        "operations": 9,
+    }
+    return (priority.get(stage_id, 50), stage_id)
+
+
+def radar_mvp_progress_summary(
+    stages: list[dict[str, Any]],
+    status_counts: dict[str, Any] | None = None,
+    *,
+    effort_days: dict[str, tuple[float, float]] | None = None,
+) -> dict[str, Any]:
+    selected_stages = [stage for stage in stages if isinstance(stage, dict)]
+    counts = status_counts if isinstance(status_counts, dict) else {}
+    stage_count = len(selected_stages)
+    passed_count = int(counts.get("passed") or sum(1 for stage in selected_stages if stage.get("status") == "passed"))
+    remaining_stages = [stage for stage in selected_stages if stage.get("status") != "passed"]
+    effort_lookup = effort_days if isinstance(effort_days, dict) else RADAR_MVP_STAGE_EFFORT_DAYS
+    estimate_min = 0.0
+    estimate_max = 0.0
+    for stage in remaining_stages:
+        effort_min, effort_max = effort_lookup.get(str(stage.get("id") or ""), (0.5, 1.0))
+        estimate_min += effort_min
+        estimate_max += effort_max
+    completion_percent = int(round((passed_count / stage_count) * 100)) if stage_count else 0
+    return {
+        "stage_count": stage_count,
+        "passed_count": passed_count,
+        "remaining_stage_count": len(remaining_stages),
+        "completion_percent": completion_percent,
+        "remaining_stage_ids": [str(stage.get("id") or "") for stage in remaining_stages if stage.get("id")],
+        "estimated_remaining_days": {
+            "min": round(estimate_min, 2),
+            "max": round(estimate_max, 2),
+        },
+    }
+
+
+def radar_thin_mvp_readiness_summary(
+    settings_payload: dict[str, Any] | None,
+    queue_payload: dict[str, Any] | None = None,
+    *,
+    relevance_evaluation: dict[str, Any] | None = None,
+    require_queue_usefulness_review: bool = False,
+) -> dict[str, Any]:
+    settings = settings_payload if isinstance(settings_payload, dict) else {}
+    queue = queue_payload if isinstance(queue_payload, dict) else {}
+    stages: list[dict[str, Any]] = []
+
+    def add_stage(
+        stage_id: str,
+        label: str,
+        status: str,
+        next_action: str,
+        message: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        stages.append(
+            {
+                "id": stage_id,
+                "label": label,
+                "status": status,
+                "next_action": next_action,
+                "message": message,
+                "evidence": dict(evidence or {}),
+            }
+        )
+
+    source_policy = settings.get("source_policy") if isinstance(settings.get("source_policy"), dict) else {}
+    disallowed_source_ids = (
+        source_policy.get("disallowed_source_ids")
+        if isinstance(source_policy.get("disallowed_source_ids"), list)
+        else []
+    )
+    source_readiness = settings.get("source_readiness") if isinstance(settings.get("source_readiness"), dict) else {}
+    source_status = str(source_readiness.get("status") or "unknown")
+    if disallowed_source_ids:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "blocked",
+            "replace_disallowed_sources",
+            "Remove disallowed source paths before the first daily queue.",
+            {
+                "status": source_status,
+                "disallowed_source_ids": disallowed_source_ids,
+                "source_policy": source_policy,
+            },
+        )
+    elif source_status in {"blocked", "no_sources"}:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "blocked",
+            "configure_minimal_sources",
+            "Configure at least one runnable paper source before the first daily queue.",
+            {
+                "status": source_status,
+                "blocked_source_ids": source_readiness.get("blocked_source_ids") or [],
+            },
+        )
+    elif source_status == "ready_with_warnings":
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "passed",
+            "keep_saved_sources",
+            "Sources can run; missing recommended metadata can wait until beta hardening.",
+            {
+                "status": source_status,
+                "warning_source_ids": source_readiness.get("warning_source_ids") or [],
+                "non_blocking_for_thin_mvp": True,
+            },
+        )
+    else:
+        add_stage(
+            "source_settings",
+            "Source settings",
+            "passed",
+            "keep_saved_sources",
+            "A runnable source setup exists for a daily paper queue.",
+            {"status": source_status},
+        )
+
+    evaluation = relevance_evaluation if isinstance(relevance_evaluation, dict) else {}
+    if evaluation:
+        evaluation_status = str(evaluation.get("status") or "unknown")
+        if evaluation_status == "passed":
+            add_stage(
+                "topic_profile",
+                "Topic profile",
+                "passed",
+                "keep_team_interests",
+                "The current interest profile passes the offline relevance checks.",
+                {
+                    "status": evaluation_status,
+                    "passed_count": evaluation.get("passed_count") or 0,
+                    "case_count": evaluation.get("case_count") or 0,
+                },
+            )
+        else:
+            add_stage(
+                "topic_profile",
+                "Topic profile",
+                "warning",
+                "tune_team_interests",
+                "The interest profile needs tuning, but the queue can still be reviewed manually.",
+                {
+                    "status": evaluation_status,
+                    "failed_case_ids": evaluation.get("failed_case_ids") or [],
+                },
+            )
+    else:
+        add_stage(
+            "topic_profile",
+            "Topic profile",
+            "warning",
+            "review_team_interests",
+            "No relevance self-check result is attached to this status payload.",
+            {},
+        )
+
+    latest_run = queue.get("latest_run") if isinstance(queue.get("latest_run"), dict) else {}
+    latest_status = str(latest_run.get("status") or "")
+    latest_freshness = latest_run.get("freshness") if isinstance(latest_run.get("freshness"), dict) else {}
+    if not latest_run:
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "warning",
+            "run_first_literature_radar_cycle",
+            "No stored Literature Radar run is available yet.",
+            {},
+        )
+    elif latest_status == "failed":
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "blocked",
+            "inspect_latest_run",
+            "The latest Literature Radar run failed.",
+            {"run_id": latest_run.get("id") or "", "error": latest_run.get("error") or ""},
+        )
+    elif str(latest_freshness.get("status") or "") == "stale":
+        add_stage(
+            "latest_run",
+            "Latest run",
+            "warning",
+            "refresh_literature_radar_run",
+            "The latest run is stale for the configured freshness window.",
+            {"run_id": latest_run.get("id") or "", "freshness": latest_freshness},
+        )
+    else:
+        pipeline_summary = radar_latest_run_pipeline_summary(latest_run)
+        if not pipeline_summary.get("complete"):
+            add_stage(
+                "latest_run",
+                "Latest run",
+                "warning",
+                "rerun_literature_radar_cycle",
+                "The latest run exists, but it does not record the separated Literature Radar pipeline phases yet.",
+                {
+                    "run_id": latest_run.get("id") or "",
+                    "status": latest_status or "unknown",
+                    "pipeline_summary": pipeline_summary,
+                },
+            )
+        else:
+            add_stage(
+                "latest_run",
+                "Latest run",
+                "passed",
+                "review_latest_run",
+                "A recent stored Literature Radar run with pipeline evidence is available.",
+                {
+                    "run_id": latest_run.get("id") or "",
+                    "status": latest_status or "unknown",
+                    "pipeline_summary": pipeline_summary,
+                },
+            )
+
+    papers = queue.get("papers") if isinstance(queue.get("papers"), list) else []
+    review_counts = queue.get("review_counts") if isinstance(queue.get("review_counts"), dict) else {}
+    active_count = len(papers)
+    if active_count:
+        add_stage(
+            "review_queue",
+            "Review queue",
+            "passed",
+            "review_daily_queue",
+            "The paper queue has candidates that a team member can review.",
+            {"active_count": active_count, "review_counts": review_counts},
+        )
+    else:
+        add_stage(
+            "review_queue",
+            "Review queue",
+            "warning",
+            "collect_or_expand_sources",
+            "No active candidates are visible yet.",
+            {"active_count": active_count, "review_counts": review_counts},
+        )
+
+    evidence = (
+        queue.get("evidence_summary")
+        if isinstance(queue.get("evidence_summary"), dict)
+        else radar_queue_evidence_summary(papers)
+    )
+    evidence_status = str(evidence.get("status") or "unknown")
+    if evidence_status == "passed":
+        add_stage(
+            "recommendation_evidence",
+            "Recommendation evidence",
+            "passed",
+            "review_reason_to_read",
+            "Queue papers include enough reason, context, source, and PDF/access evidence for review.",
+            evidence,
+        )
+    else:
+        add_stage(
+            "recommendation_evidence",
+            "Recommendation evidence",
+            "warning",
+            evidence.get("next_action") or "improve_queue_evidence",
+            "Some queue papers need clearer reasons, source links, or PDF/access decisions.",
+            evidence,
+        )
+
+    if require_queue_usefulness_review:
+        queue_review = (
+            queue.get("latest_queue_review")
+            if isinstance(queue.get("latest_queue_review"), dict)
+            else {}
+        )
+        usefulness = str(queue_review.get("usefulness") or "").strip()
+        if usefulness in {"useful", "partly_useful"}:
+            add_stage(
+                "queue_usefulness_review",
+                "Queue usefulness review",
+                "passed",
+                "keep_reviewing_queue_usefulness",
+                "The latest Radar queue has been reviewed as useful enough for daily work.",
+                {
+                    "usefulness": usefulness,
+                    "reviewer": queue_review.get("reviewer") or queue_review.get("actor") or "",
+                    "note": queue_review.get("note") or "",
+                    "created_at": queue_review.get("created_at") or "",
+                },
+            )
+        elif usefulness == "not_useful":
+            add_stage(
+                "queue_usefulness_review",
+                "Queue usefulness review",
+                "warning",
+                "tune_sources_or_interests",
+                "The latest Radar queue was reviewed as not useful for daily work.",
+                {
+                    "usefulness": usefulness,
+                    "reviewer": queue_review.get("reviewer") or queue_review.get("actor") or "",
+                    "note": queue_review.get("note") or "",
+                    "created_at": queue_review.get("created_at") or "",
+                },
+            )
+        else:
+            add_stage(
+                "queue_usefulness_review",
+                "Queue usefulness review",
+                "warning",
+                "review_queue_usefulness",
+                "Record whether the latest Radar queue is useful enough for daily review.",
+                {},
+            )
+
+    status_counts = {
+        "passed": sum(1 for stage in stages if stage["status"] == "passed"),
+        "warning": sum(1 for stage in stages if stage["status"] == "warning"),
+        "blocked": sum(1 for stage in stages if stage["status"] == "blocked"),
+    }
+    progress = radar_mvp_progress_summary(
+        stages,
+        status_counts,
+        effort_days=RADAR_THIN_MVP_STAGE_EFFORT_DAYS,
+    )
+    if status_counts["blocked"]:
+        status = "blocked"
+    elif status_counts["warning"]:
+        status = "usable_needs_review"
+    else:
+        status = "ready"
+    next_stage = next((stage for stage in stages if stage["status"] == "blocked"), None)
+    if next_stage is None:
+        next_stage = next((stage for stage in stages if stage["status"] == "warning"), None)
+    if next_stage is None:
+        next_stage = {}
+    return {
+        "status": status,
+        "scope": "thin_daily_use_mvp",
+        "next_action": next_stage.get("next_action") or "review_daily_queue",
+        "next_stage_id": next_stage.get("id") or "",
+        "stage_count": len(stages),
+        "status_counts": status_counts,
+        "progress": progress,
+        "stages": stages,
+    }
+
+
+def format_radar_thin_mvp_readiness(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    counts = record.get("status_counts") if isinstance(record.get("status_counts"), dict) else {}
+    progress = record.get("progress") if isinstance(record.get("progress"), dict) else {}
+    estimate = (
+        progress.get("estimated_remaining_days")
+        if isinstance(progress.get("estimated_remaining_days"), dict)
+        else {}
+    )
+    return (
+        "Thin MVP readiness: "
+        f"status={record.get('status') or 'unknown'} "
+        f"next={record.get('next_action') or 'unknown'} "
+        f"passed={int(counts.get('passed') or 0)} "
+        f"warnings={int(counts.get('warning') or 0)} "
+        f"blocked={int(counts.get('blocked') or 0)} "
+        f"progress={int(progress.get('completion_percent') or 0)}% "
+        f"remaining={int(progress.get('remaining_stage_count') or 0)} "
+        f"estimate={estimate.get('min', 0)}-{estimate.get('max', 0)}d"
+    )
+
+
+def radar_latest_run_pipeline_summary(latest_run: dict[str, Any]) -> dict[str, Any]:
+    summary = latest_run.get("pipeline_summary") if isinstance(latest_run.get("pipeline_summary"), dict) else {}
+    if summary:
+        return summary
+    trace = latest_run.get("pipeline_trace") if isinstance(latest_run.get("pipeline_trace"), list) else []
+    return radar_pipeline_trace_summary(trace)
+
+
+def radar_daily_workflow_summary(
+    readiness_summary: dict[str, Any] | None,
+    *,
+    run_command: str = "",
+    review_url: str = "",
+    review_command: str = "",
+    queue_review_command: str = "",
+    queue_review_optional: bool = False,
+) -> dict[str, Any]:
+    readiness = readiness_summary if isinstance(readiness_summary, dict) else {}
+    remaining_ids = set(
+        str(stage_id)
+        for stage_id in readiness.get("remaining_stage_ids", [])
+        if str(stage_id).strip()
+    )
+    if not remaining_ids:
+        stages = readiness.get("stages") if isinstance(readiness.get("stages"), list) else []
+        remaining_ids = {
+            str(stage.get("id") or "")
+            for stage in stages
+            if isinstance(stage, dict) and str(stage.get("status") or "") != "passed"
+        }
+    steps: list[dict[str, Any]] = []
+    if run_command:
+        steps.append(
+            {
+                "id": "run_cycle",
+                "label": "Run or refresh collection",
+                "command": run_command,
+                "current": "latest_run" in remaining_ids,
+            }
+        )
+    if review_url or review_command:
+        steps.append(
+            {
+                "id": "review_queue",
+                "label": "Review queue",
+                "url": review_url,
+                "command": review_command,
+                "current": "review_queue" in remaining_ids or "recommendation_evidence" in remaining_ids,
+            }
+        )
+    if queue_review_command:
+        steps.append(
+            {
+                "id": "queue_usefulness_review",
+                "label": "Optional queue feedback" if queue_review_optional else "Record queue usefulness",
+                "command": queue_review_command,
+                "current": "queue_usefulness_review" in remaining_ids,
+                "optional": queue_review_optional,
+            }
+        )
+    return {
+        "steps": steps,
+        "current_step_ids": [step["id"] for step in steps if step.get("current")],
+    }
+
+
+def format_radar_daily_workflow(workflow: dict[str, Any] | None) -> list[str]:
+    record = workflow if isinstance(workflow, dict) else {}
+    steps = record.get("steps") if isinstance(record.get("steps"), list) else []
+    if not steps:
+        return []
+    lines = ["Daily workflow:"]
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        target = step.get("command") or step.get("url") or ""
+        marker = " [current]" if step.get("current") else ""
+        lines.append(f"{index}. {step.get('label') or step.get('id') or 'Step'}{marker}: {target}")
+    return lines
+
+
+def radar_thin_mvp_gate_summary(
+    status_payload: dict[str, Any] | None,
+    *,
+    product_label: str,
+    kind: str,
+    status_json_path: str = "",
+    run_command: str = "",
+    review_url: str = "",
+    review_command: str = "",
+    queue_review_command: str = "",
+    include_queue_review: bool = False,
+) -> dict[str, Any]:
+    payload = status_payload if isinstance(status_payload, dict) else {}
+    readiness = payload.get("thin_mvp_readiness") if isinstance(payload.get("thin_mvp_readiness"), dict) else {}
+    stages = readiness.get("stages") if isinstance(readiness.get("stages"), list) else []
+    passed: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    review_queue_evidence: dict[str, Any] = {}
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        record = {
+            "id": str(stage.get("id") or ""),
+            "label": str(stage.get("label") or stage.get("id") or ""),
+            "status": str(stage.get("status") or "unknown"),
+            "next_action": str(stage.get("next_action") or ""),
+            "message": str(stage.get("message") or ""),
+        }
+        if stage.get("id") == "review_queue":
+            evidence = stage.get("evidence")
+            if isinstance(evidence, dict):
+                review_queue_evidence = evidence
+        if record["status"] == "passed":
+            passed.append(record)
+        elif record["status"] == "blocked":
+            blocked.append(record)
+            remaining.append(record)
+        else:
+            warnings.append(record)
+            remaining.append(record)
+
+    progress = readiness.get("progress") if isinstance(readiness.get("progress"), dict) else {}
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
+    review_counts = queue.get("review_counts") if isinstance(queue.get("review_counts"), dict) else {}
+    papers = queue.get("papers") if isinstance(queue.get("papers"), list) else []
+    active_count = queue.get("active_count")
+    if active_count is None:
+        active_count = review_queue_evidence.get("active_count")
+    if active_count is None:
+        active_count = len(papers)
+    if not review_counts and isinstance(review_queue_evidence.get("review_counts"), dict):
+        review_counts = review_queue_evidence["review_counts"]
+    latest_queue_review = (
+        queue.get("latest_queue_review")
+        if isinstance(queue.get("latest_queue_review"), dict)
+        else {}
+    )
+    summary = {
+        "kind": kind,
+        "product_label": product_label,
+        "status": readiness.get("status") or "unknown",
+        "next_action": readiness.get("next_action") or "inspect_thin_mvp_status",
+        "next_stage_id": readiness.get("next_stage_id") or "",
+        "progress": progress,
+        "passed_stage_count": len(passed),
+        "remaining_stage_count": len(remaining),
+        "remaining_stage_ids": [stage["id"] for stage in remaining if stage["id"]],
+        "warning_stage_ids": [stage["id"] for stage in warnings if stage["id"]],
+        "blocked_stage_ids": [stage["id"] for stage in blocked if stage["id"]],
+        "remaining_stages": remaining,
+        "latest_run": {
+            "id": latest_run.get("id") or "",
+            "status": latest_run.get("status") or "",
+            "completed_at": latest_run.get("completed_at") or "",
+            "collected_count": latest_run.get("collected_count") or 0,
+        },
+        "queue": {
+            "active_count": active_count or 0,
+            "visible_count": len(papers),
+            "review_counts": review_counts,
+            "review_sample": radar_thin_mvp_queue_review_sample(papers),
+        },
+        "status_json_path": status_json_path,
+    }
+    if include_queue_review or latest_queue_review:
+        summary["queue"]["latest_queue_review"] = latest_queue_review
+    if include_queue_review:
+        summary["include_queue_review"] = True
+    if run_command:
+        summary["run_command"] = run_command
+    if review_url:
+        summary["review_url"] = review_url
+    if review_command:
+        summary["review_command"] = review_command
+    if queue_review_command:
+        summary["queue_review_command"] = queue_review_command
+    workflow = radar_daily_workflow_summary(
+        {**readiness, "remaining_stage_ids": summary["remaining_stage_ids"]},
+        run_command=run_command,
+        review_url=review_url,
+        review_command=review_command,
+        queue_review_command=queue_review_command,
+        queue_review_optional="queue_usefulness_review" not in summary["remaining_stage_ids"],
+    )
+    if workflow.get("steps"):
+        summary["daily_workflow"] = workflow
+    return summary
+
+
+def radar_thin_mvp_queue_review_sample(
+    papers: list[Any] | None,
+    *,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    sample: list[dict[str, Any]] = []
+    for candidate in papers or []:
+        if not isinstance(candidate, dict):
+            continue
+        paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else {}
+        title = normalize_spaces(candidate.get("title") or paper.get("title") or "Untitled paper")
+        triage = candidate.get("triage_hint") if isinstance(candidate.get("triage_hint"), dict) else {}
+        if not triage:
+            triage = radar_review_triage_hint(candidate)
+        reason = candidate.get("reason_to_read") if isinstance(candidate.get("reason_to_read"), dict) else {}
+        scoring = radar_effective_recommendation_scoring(candidate)
+        try:
+            score: int | None = int(float(scoring.get("score") or 0))
+        except (TypeError, ValueError):
+            score = None
+        source_ids = candidate.get("source_ids") if isinstance(candidate.get("source_ids"), list) else []
+        provenance = (
+            candidate.get("source_provenance")
+            if isinstance(candidate.get("source_provenance"), dict)
+            else {}
+        )
+        source = next((normalize_spaces(source_id) for source_id in source_ids if normalize_spaces(source_id)), "")
+        if not source:
+            source = normalize_spaces(
+                provenance.get("configured_source_id")
+                or provenance.get("venue_profile_id")
+                or provenance.get("source_id")
+                or paper.get("source_id")
+            )
+        release_date = radar_review_primary_release_date(candidate, paper)
+        review_item = {
+            "title": truncate_text(title, 110),
+            "action": normalize_spaces(triage.get("action") or ""),
+            "label": normalize_spaces(triage.get("label") or ""),
+            "score": score,
+            "release_date": release_date if not release_date_needs_year_recovery(release_date) else "",
+            "source": source,
+            "link": normalize_spaces(candidate.get("link") or radar_record_best_link(candidate)),
+            "reason": truncate_text(
+                normalize_spaces(reason.get("headline") or triage.get("reason") or ""),
+                180,
+            ),
+        }
+        sample.append(review_item)
+        if len(sample) >= max(0, int(limit)):
+            break
+    return sample
+
+
+def format_radar_thin_mvp_gate(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    label = str(record.get("product_label") or "Literature Radar")
+    progress = record.get("progress") if isinstance(record.get("progress"), dict) else {}
+    latest_run = record.get("latest_run") if isinstance(record.get("latest_run"), dict) else {}
+    queue = record.get("queue") if isinstance(record.get("queue"), dict) else {}
+    lines = [
+        f"{label} thin MVP: {record.get('status') or 'unknown'}",
+        f"Next action: {record.get('next_action') or 'inspect_thin_mvp_status'}",
+    ]
+    if record.get("next_stage_id"):
+        lines.append(f"Next stage: {record.get('next_stage_id')}")
+    if progress:
+        passed_count = progress.get("passed_count", record.get("passed_stage_count", 0))
+        stage_count = progress.get(
+            "stage_count",
+            int(record.get("passed_stage_count") or 0) + int(record.get("remaining_stage_count") or 0),
+        )
+        lines.append(
+            "Progress: "
+            f"{int(progress.get('completion_percent') or 0)}% "
+            f"({int(passed_count or 0)}/{int(stage_count or 0)} stages passed)"
+        )
+    remaining_stage_ids = record.get("remaining_stage_ids") if isinstance(record.get("remaining_stage_ids"), list) else []
+    if remaining_stage_ids:
+        lines.append("Remaining stages: " + ", ".join(str(stage_id) for stage_id in remaining_stage_ids))
+    has_latest_run = bool(
+        latest_run.get("id")
+        or latest_run.get("status")
+        or latest_run.get("completed_at")
+        or latest_run.get("collected_count")
+    )
+    if has_latest_run:
+        lines.append(
+            "Latest run: "
+            f"{latest_run.get('id') or 'unknown'} "
+            f"status={latest_run.get('status') or 'unknown'} "
+            f"collected={latest_run.get('collected_count') or 0}"
+        )
+    active_count = int(queue.get("active_count") or 0)
+    visible_count = int(queue.get("visible_count") or 0)
+    lines.append(f"Queue active candidates: {active_count}")
+    if record.get("include_queue_review"):
+        lines.append(f"Queue review scope: {visible_count} visible / {active_count} active")
+    if record.get("include_queue_review"):
+        latest_queue_review = (
+            queue.get("latest_queue_review")
+            if isinstance(queue.get("latest_queue_review"), dict)
+            else {}
+        )
+        if latest_queue_review:
+            lines.append(
+                "Latest queue review: "
+                f"{latest_queue_review.get('usefulness') or 'unknown'} "
+                f"by {latest_queue_review.get('actor') or latest_queue_review.get('reviewer') or 'unknown'}"
+            )
+        else:
+            lines.append("Latest queue review: missing")
+        review_sample = queue.get("review_sample") if isinstance(queue.get("review_sample"), list) else []
+        if review_sample:
+            lines.append("Queue review sample:")
+            for index, item in enumerate(review_sample, 1):
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "Untitled paper")
+                label = str(item.get("label") or item.get("action") or "").strip()
+                meta = []
+                if label:
+                    meta.append(f"action={label}")
+                if item.get("score") is not None:
+                    meta.append(f"score={int(item.get('score') or 0)}")
+                if item.get("release_date"):
+                    meta.append(f"released={item.get('release_date')}")
+                if item.get("source"):
+                    meta.append(f"source={item.get('source')}")
+                line = f"- {index}. {title}"
+                if meta:
+                    line += " (" + "; ".join(meta) + ")"
+                if item.get("link"):
+                    line += f" link={item.get('link')}"
+                lines.append(line)
+                if item.get("reason"):
+                    lines.append(f"  Why: {item.get('reason')}")
+    remaining_stages = (
+        record.get("remaining_stages")
+        if isinstance(record.get("remaining_stages"), list)
+        else []
+    )
+    if remaining_stages:
+        lines.append("Required follow-up:")
+        for stage in remaining_stages:
+            if not isinstance(stage, dict):
+                continue
+            detail = stage.get("message") or stage.get("next_action") or "Review this stage."
+            lines.append(f"- {stage.get('id') or ''}: {stage.get('status') or 'unknown'} - {detail}")
+    lines.extend(format_radar_daily_workflow(record.get("daily_workflow")))
+    if record.get("run_command"):
+        lines.append(f"Run command: {record.get('run_command')}")
+    if record.get("review_url"):
+        lines.append(f"Review URL: {record.get('review_url')}")
+    if record.get("review_command"):
+        lines.append(f"Review command: {record.get('review_command')}")
+    if record.get("queue_review_command"):
+        lines.append(f"Queue review command: {record.get('queue_review_command')}")
+    if record.get("status_json_path"):
+        lines.append(f"Status JSON: {record.get('status_json_path')}")
+    return "\n".join(lines)
+
+
+def radar_thin_mvp_gate_exit_code(summary: dict[str, Any] | None) -> int:
+    status = str((summary if isinstance(summary, dict) else {}).get("status") or "unknown")
+    if status == "ready":
+        return 0
+    if status in {"usable_needs_review", "needs_attention", "ready_with_warnings"}:
+        return 2
+    return 3
+
+
+def format_radar_mvp_readiness(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    counts = record.get("status_counts") if isinstance(record.get("status_counts"), dict) else {}
+    progress = record.get("progress") if isinstance(record.get("progress"), dict) else {}
+    estimate = (
+        progress.get("estimated_remaining_days")
+        if isinstance(progress.get("estimated_remaining_days"), dict)
+        else {}
+    )
+    return (
+        "MVP readiness: "
+        f"status={record.get('status') or 'unknown'} "
+        f"next={record.get('next_action') or 'unknown'} "
+        f"passed={int(counts.get('passed') or 0)} "
+        f"warnings={int(counts.get('warning') or 0)} "
+        f"blocked={int(counts.get('blocked') or 0)} "
+        f"progress={int(progress.get('completion_percent') or 0)}% "
+        f"remaining={int(progress.get('remaining_stage_count') or 0)} "
+        f"estimate={estimate.get('min', 0)}-{estimate.get('max', 0)}d"
+    )
+
+
+def format_radar_mvp_readiness_checklist(summary: dict[str, Any] | None) -> list[str]:
+    record = summary if isinstance(summary, dict) else {}
+    stages = record.get("stages") if isinstance(record.get("stages"), list) else []
+    lines = []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        status = str(stage.get("status") or "unknown").upper()
+        label = normalize_spaces(str(stage.get("label") or stage.get("id") or "Stage"))
+        next_action = normalize_spaces(str(stage.get("next_action") or ""))
+        message = normalize_spaces(str(stage.get("message") or ""))
+        detail = f"{status} {label}"
+        if next_action:
+            detail = f"{detail}: {next_action}"
+        if message:
+            detail = f"{detail} - {message}"
+        lines.append(detail)
+    return lines
+
+
+def radar_mvp_setup_action_plan(
+    *,
+    product: str = "",
+    mvp_readiness: dict[str, Any] | None = None,
+    source_validation_guidance: dict[str, Any] | None = None,
+    source_validation_commands: dict[str, Any] | None = None,
+    operations_readiness: dict[str, Any] | None = None,
+    primary_source_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    readiness = mvp_readiness if isinstance(mvp_readiness, dict) else {}
+    guidance = source_validation_guidance if isinstance(source_validation_guidance, dict) else {}
+    commands = source_validation_commands if isinstance(source_validation_commands, dict) else {}
+    operations = operations_readiness if isinstance(operations_readiness, dict) else {}
+    primary_coverage = primary_source_coverage if isinstance(primary_source_coverage, dict) else {}
+    stages = readiness.get("stages") if isinstance(readiness.get("stages"), list) else []
+    stage_by_id = {
+        str(stage.get("id") or ""): stage
+        for stage in stages
+        if isinstance(stage, dict) and str(stage.get("id") or "")
+    }
+    actions: list[dict[str, Any]] = []
+
+    def stage_needs_action(stage_id: str) -> bool:
+        stage = stage_by_id.get(stage_id) or {}
+        return bool(stage) and str(stage.get("status") or "") != "passed"
+
+    def add_action(
+        action_id: str,
+        label: str,
+        stage_id: str,
+        message: str,
+        *,
+        command: str = "",
+        source_ids: list[str] | None = None,
+        external_api: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        actions.append(
+            {
+                "id": action_id,
+                "label": label,
+                "stage_id": stage_id,
+                "message": normalize_spaces(message),
+                "command": command,
+                "source_ids": source_ids or [],
+                "external_api": bool(external_api),
+                "details": dict(details or {}),
+            }
+        )
+
+    if stage_needs_action("source_settings"):
+        guidance_actions = guidance.get("actions") if isinstance(guidance.get("actions"), list) else []
+        if guidance_actions:
+            source_ids = unique_source_ids(
+                [str(action.get("source_id") or "") for action in guidance_actions if isinstance(action, dict)]
+            )
+            env_vars = list(
+                dict.fromkeys(
+                    str(env_var)
+                    for action in guidance_actions
+                    if isinstance(action, dict)
+                    for env_var in (action.get("env_vars") or [])
+                    if str(env_var).strip()
+                )
+            )
+            env_vars = radar_product_env_vars(env_vars, product=product)
+            example_env = [
+                radar_product_env_example(str(action.get("example_env") or ""), product=product)
+                for action in guidance_actions
+                if isinstance(action, dict) and str(action.get("example_env") or "").strip()
+            ]
+            example_env = radar_preferred_source_setup_env_examples(
+                guidance_actions,
+                example_env,
+                product=product,
+            )
+            example_env = list(dict.fromkeys(example for example in example_env if example))
+            add_action(
+                "configure_source_metadata",
+                "Configure source metadata",
+                "source_settings",
+                "Add required or recommended API/contact metadata before scheduled collection.",
+                source_ids=source_ids,
+                details={
+                    "action_lines": guidance.get("action_lines") or [],
+                    "actions": guidance_actions,
+                    "env_vars": env_vars,
+                    "display_env_vars": [
+                        example.split("=", 1)[0]
+                        for example in example_env
+                        if isinstance(example, str) and "=" in example
+                    ],
+                    "example_env": example_env,
+                },
+            )
+        else:
+            stage = stage_by_id.get("source_settings") or {}
+            evidence = stage.get("evidence") if isinstance(stage.get("evidence"), dict) else {}
+            add_action(
+                "review_source_settings",
+                "Review source settings",
+                "source_settings",
+                stage.get("message") or "Review source readiness before scheduled collection.",
+                source_ids=evidence.get("blocked_source_ids") or evidence.get("warning_source_ids") or [],
+                details={"evidence": evidence},
+            )
+
+    if stage_needs_action("primary_source_coverage"):
+        missing = primary_coverage.get("missing_primary_source_ids")
+        if not isinstance(missing, list):
+            stage = stage_by_id.get("primary_source_coverage") or {}
+            evidence = stage.get("evidence") if isinstance(stage.get("evidence"), dict) else {}
+            missing = evidence.get("missing_primary_source_ids") if isinstance(evidence.get("missing_primary_source_ids"), list) else []
+        requirements = primary_coverage.get("requirements") if isinstance(primary_coverage.get("requirements"), list) else []
+        missing_requirements = [
+            {
+                "id": str(requirement.get("id") or ""),
+                "label": str(requirement.get("label") or requirement.get("id") or ""),
+                "status": str(requirement.get("status") or ""),
+                "coverage_kind": str(requirement.get("coverage_kind") or ""),
+                "next_action": str(requirement.get("next_action") or ""),
+                "message": str(requirement.get("message") or ""),
+                "acceptable_source_ids": requirement.get("acceptable_source_ids") or [],
+                "matched_source_ids": requirement.get("matched_source_ids") or [],
+            }
+            for requirement in requirements
+            if isinstance(requirement, dict) and str(requirement.get("status") or "") != "covered"
+        ]
+        missing_config = primary_coverage.get("missing_config_primary_source_ids") or []
+        only_missing_config = bool(missing_config) and sorted(str(source_id) for source_id in missing) == sorted(
+            str(source_id) for source_id in missing_config
+        )
+        action_id = "configure_primary_source_requirements" if only_missing_config else "expand_primary_sources"
+        action_label = "Configure primary source requirements" if only_missing_config else "Expand primary sources"
+        action_message = (
+            "Configure the selected primary source families that still need contact or API metadata."
+            if only_missing_config
+            else "Select or configure the remaining required primary source families."
+        )
+        add_action(
+            action_id,
+            action_label,
+            "primary_source_coverage",
+            action_message,
+            source_ids=[str(source_id) for source_id in missing],
+            details={
+                "missing_primary_source_ids": missing,
+                "missing_config_primary_source_ids": missing_config,
+                "missing_requirements": missing_requirements,
+            },
+        )
+
+    if stage_needs_action("live_source_validation"):
+        dry_run = commands.get("dry_run") if isinstance(commands.get("dry_run"), dict) else {}
+        live = commands.get("live") if isinstance(commands.get("live"), dict) else {}
+        validation_commands = [
+            normalize_spaces(str(dry_run.get("command") or "")),
+            normalize_spaces(str(live.get("command") or "")),
+        ]
+        validation_commands = [command for command in validation_commands if command]
+        add_action(
+            "run_live_source_validation",
+            "Run live validation",
+            "live_source_validation",
+            "Run one-sample metadata-only live validation after source metadata and primary coverage are clean.",
+            command=str(live.get("command") or ""),
+            external_api=bool(live.get("network", True)),
+            details={
+                "note": commands.get("note") or "",
+                "recommended_live_validation_max_results": commands.get("recommended_live_validation_max_results") or 1,
+                "commands": validation_commands,
+            },
+        )
+
+    if stage_needs_action("operations"):
+        product = str(operations.get("product") or "radar")
+        backup_env = "PERSONAL_RADAR_BACKUP_TARGETS" if product == "personal" else "RADAR_BACKUP_TARGETS"
+        backup_env_aliases = [] if product == "personal" else ["TEAM_RADAR_BACKUP_TARGETS"]
+        warnings = operations.get("warnings") if isinstance(operations.get("warnings"), list) else []
+        missing_scripts = operations.get("missing_required_scripts") if isinstance(operations.get("missing_required_scripts"), list) else []
+        non_executable = operations.get("non_executable_scripts") if isinstance(operations.get("non_executable_scripts"), list) else []
+        if missing_scripts or non_executable:
+            add_action(
+                "fix_operations_configuration",
+                "Fix operations scripts",
+                "operations",
+                "Restore missing required scripts or executable permissions before enabling scheduled runs.",
+                details={"missing_required_scripts": missing_scripts, "non_executable_scripts": non_executable},
+            )
+        if (
+            "backup_policy_not_configured" in warnings
+            or "backup_target_not_absolute" in warnings
+            or not operations.get("backup_configured")
+        ):
+            invalid_backup_targets = operations.get("invalid_backup_targets") or []
+            backup_configured = bool(operations.get("backup_configured"))
+            if invalid_backup_targets and backup_configured:
+                backup_message = (
+                    f"Remove or replace invalid {backup_env} entries; every backup target must be an absolute local path."
+                )
+            elif invalid_backup_targets:
+                backup_message = (
+                    f"Replace invalid {backup_env} entries with at least one absolute local backup directory."
+                )
+            else:
+                backup_message = (
+                    f"Set {backup_env} to at least one absolute local backup directory and run the backup rehearsal before unattended use."
+                )
+            operation_commands = operations.get("commands") if isinstance(operations.get("commands"), dict) else {}
+            followup_commands = [
+                normalize_spaces(str(operation_commands.get("backup_dry_run") or "")),
+                normalize_spaces(str(operation_commands.get("cycle_rehearsal") or "")),
+            ]
+            followup_commands = [command for command in followup_commands if command]
+            add_action(
+                "configure_backup_policy",
+                "Configure backup policy",
+                "operations",
+                backup_message,
+                command=followup_commands[0] if followup_commands else "",
+                details={
+                    "env_var": backup_env,
+                    "env_aliases": backup_env_aliases,
+                    "backup_targets": operations.get("backup_targets") or [],
+                    "invalid_backup_targets": invalid_backup_targets,
+                    "commands": followup_commands,
+                },
+            )
+        elif "operations_evidence_missing" in warnings or operations.get("missing_required_evidence"):
+            operation_commands = operations.get("commands") if isinstance(operations.get("commands"), dict) else {}
+            followup_commands = [
+                normalize_spaces(str(operation_commands.get("backup_dry_run") or "")),
+                normalize_spaces(str(operation_commands.get("cycle_rehearsal") or "")),
+            ]
+            followup_commands = [command for command in followup_commands if command]
+            add_action(
+                "run_operations_rehearsal",
+                "Run operations rehearsal",
+                "operations",
+                "Run the backup dry-run and cycle rehearsal so operations readiness has local evidence before unattended use.",
+                command=followup_commands[0] if followup_commands else "",
+                details={
+                    "missing_required_evidence": operations.get("missing_required_evidence") or [],
+                    "commands": followup_commands,
+                },
+            )
+
+    actions = sorted(actions, key=radar_mvp_setup_action_priority)
+    setup_env_examples = radar_mvp_setup_env_examples(actions, product=product)
+    return {
+        "status": "ready" if not actions else "needs_action",
+        "next_action": actions[0]["id"] if actions else "monitor_mvp_readiness",
+        "action_count": len(actions),
+        "external_api_action_count": sum(1 for action in actions if action.get("external_api")),
+        "setup_env_block": {
+            "status": "available" if setup_env_examples else "empty",
+            "line_count": len(setup_env_examples),
+            "lines": setup_env_examples,
+            "text": "\n".join(setup_env_examples),
+        },
+        "actions": actions,
+    }
+
+
+def radar_mvp_setup_action_priority(action: dict[str, Any]) -> tuple[int, str]:
+    stage_id = str(action.get("stage_id") or "")
+    action_id = str(action.get("id") or "")
+    if stage_id == "primary_source_coverage" and action_id == "configure_primary_source_requirements":
+        return (0, action_id)
+    priority = {
+        "primary_source_coverage": 1,
+        "source_settings": 2,
+        "live_source_validation": 3,
+        "relevance_profile": 4,
+        "latest_run": 5,
+        "review_queue": 6,
+        "recommendation_evidence": 7,
+        "engineering_guardrails": 8,
+        "operations": 9,
+    }
+    return (priority.get(stage_id, 50), action_id)
+
+
+def radar_mvp_setup_env_examples(actions: list[dict[str, Any]] | None, *, product: str = "") -> list[str]:
+    examples: list[str] = []
+    seen: set[str] = set()
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        details = action.get("details") if isinstance(action.get("details"), dict) else {}
+        for example in details.get("example_env") or []:
+            text = radar_product_env_example(normalize_spaces(str(example or "")), product=product)
+            if not text or "=" not in text or text in seen:
+                continue
+            examples.append(text)
+            seen.add(text)
+        backup_example = radar_mvp_setup_backup_action_env_line(action, product=product)
+        if backup_example and backup_example not in seen:
+            examples.append(backup_example)
+            seen.add(backup_example)
+    return examples
+
+
+def radar_preferred_source_setup_env_examples(
+    guidance_actions: list[dict[str, Any]],
+    examples: list[str],
+    *,
+    product: str = "",
+) -> list[str]:
+    contact_actions = [
+        action
+        for action in guidance_actions
+        if isinstance(action, dict)
+        and str(action.get("category") or "") == "contact"
+        and any("SOURCE_CONTACT_EMAIL" in str(env_var or "") for env_var in (action.get("env_vars") or []))
+    ]
+    if len(contact_actions) < 2:
+        return examples
+    selected_product = str(product or "").strip().lower()
+    contact_name = "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL" if selected_product == "personal" else "RADAR_SOURCE_CONTACT_EMAIL"
+    contact_example = f"{contact_name}=you@example.org"
+    filtered_examples = [
+        example
+        for example in examples
+        if not (
+            example.endswith("=you@example.org")
+            and any(
+                marker in example
+                for marker in (
+                    "OPENALEX_MAILTO=",
+                    "CROSSREF_MAILTO=",
+                    "UNPAYWALL_EMAIL=",
+                    "SOURCE_CONTACT_EMAIL=",
+                )
+            )
+        )
+    ]
+    return [*filtered_examples, contact_example]
+
+
+def radar_product_env_example(example: str, *, product: str = "") -> str:
+    text = normalize_spaces(str(example or ""))
+    if "=" not in text or str(product or "").lower() != "personal":
+        return text
+    name, value = text.split("=", 1)
+    personal_names = {
+        "RADAR_OPENALEX_MAILTO": "PERSONAL_RADAR_OPENALEX_MAILTO",
+        "RADAR_CROSSREF_MAILTO": "PERSONAL_RADAR_CROSSREF_MAILTO",
+        "RADAR_UNPAYWALL_EMAIL": "PERSONAL_RADAR_UNPAYWALL_EMAIL",
+        "RADAR_SOURCE_CONTACT_EMAIL": "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL",
+        "RADAR_SEED_PAPER_IDS": "PERSONAL_RADAR_SEED_PAPER_IDS",
+        "RADAR_OPENALEX_AUTHOR_IDS": "PERSONAL_RADAR_OPENALEX_AUTHOR_IDS",
+        "RADAR_AUTHOR_IDS": "PERSONAL_RADAR_AUTHOR_IDS",
+        "RADAR_DBLP_AUTHOR_PIDS": "PERSONAL_RADAR_DBLP_AUTHOR_PIDS",
+        "RADAR_OPENREVIEW_INVITATIONS": "PERSONAL_RADAR_OPENREVIEW_INVITATIONS",
+        "RADAR_OFFICIAL_ACCEPTED_PAGES": "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES",
+    }
+    return f"{personal_names.get(name, name)}={value}"
+
+
+def radar_product_env_vars(env_vars: list[str] | None, *, product: str = "") -> list[str]:
+    selected_product = str(product or "").strip().lower()
+    names = [normalize_spaces(str(name or "")) for name in env_vars or []]
+    names = [name for name in names if name]
+    if selected_product == "team":
+        names = [name for name in names if not name.startswith("PERSONAL_RADAR_")]
+    elif selected_product == "personal":
+        converted = []
+        for name in names:
+            if name.startswith("RADAR_"):
+                converted.append(radar_product_env_example(f"{name}=value", product="personal").split("=", 1)[0])
+            elif name.startswith("PERSONAL_RADAR_") or not name.startswith("TEAM_RADAR_"):
+                converted.append(name)
+        names = converted
+    return list(dict.fromkeys(names))
+
+
+def format_radar_mvp_setup_action_plan(plan: dict[str, Any] | None) -> list[str]:
+    record = plan if isinstance(plan, dict) else {}
+    if not record:
+        return []
+    actions = record.get("actions") if isinstance(record.get("actions"), list) else []
+    lines = [
+        "MVP setup actions: "
+        f"status={record.get('status') or 'unknown'} "
+        f"next={record.get('next_action') or 'unknown'} "
+        f"actions={int(record.get('action_count') or 0)} "
+        f"external_api={int(record.get('external_api_action_count') or 0)}"
+    ]
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        label = normalize_spaces(str(action.get("label") or action.get("id") or "Action"))
+        stage_id = normalize_spaces(str(action.get("stage_id") or ""))
+        message = normalize_spaces(str(action.get("message") or ""))
+        detail = f"- {label}"
+        if stage_id:
+            detail = f"{detail} ({stage_id})"
+        if message:
+            detail = f"{detail}: {message}"
+        details = action.get("details") if isinstance(action.get("details"), dict) else {}
+        display_env_vars = details.get("display_env_vars") if isinstance(details.get("display_env_vars"), list) else []
+        env_vars = display_env_vars or (details.get("env_vars") if isinstance(details.get("env_vars"), list) else [])
+        if env_vars:
+            detail = f"{detail} env={', '.join(str(env_var) for env_var in env_vars)}"
+        if action.get("command"):
+            detail = f"{detail} command={action['command']}"
+        lines.append(detail)
+    return lines
+
+
+def format_radar_mvp_setup_env_block(plan: dict[str, Any] | None, *, product: str = "") -> list[str]:
+    record = plan if isinstance(plan, dict) else {}
+    block = record.get("setup_env_block") if isinstance(record.get("setup_env_block"), dict) else {}
+    block_lines = block.get("lines") if isinstance(block.get("lines"), list) else []
+    examples = [
+        normalize_spaces(str(line or ""))
+        for line in block_lines
+        if normalize_spaces(str(line or "")) and "=" in normalize_spaces(str(line or ""))
+    ]
+    if not examples:
+        actions = record.get("actions") if isinstance(record.get("actions"), list) else []
+        examples = radar_mvp_setup_env_examples(actions, product=product)
+    elif product:
+        examples = [radar_product_env_example(example, product=product) for example in examples]
+    if not examples:
+        return []
+    return ["MVP setup env block:", *[f"{example}" for example in examples]]
+
+
+def format_radar_mvp_setup_env_file(
+    plan: dict[str, Any] | None,
+    *,
+    product: str = "",
+    include_optional_ai: bool = True,
+) -> list[str]:
+    record = plan if isinstance(plan, dict) else {}
+    selected_product = str(product or "").strip().lower()
+    product_label = "Personal" if selected_product == "personal" else "Team" if selected_product == "team" else "Literature"
+    lines = [
+        f"# {product_label} Literature Radar MVP local setup",
+        "# Fill in real values locally, then source this file before live validation or scheduled runs.",
+        "# Do not commit real API keys, contact emails, backup paths, or downloaded PDFs.",
+        "",
+    ]
+    env_examples = format_radar_mvp_setup_env_block(record, product=selected_product)
+    env_lines = [line for line in env_examples[1:] if "=" in line]
+    backup_line = radar_mvp_setup_backup_env_line(record, product=selected_product)
+    source_env_lines = [line for line in env_lines if line != backup_line]
+    if source_env_lines:
+        lines.append("# Source API/contact metadata")
+        lines.extend(source_env_lines)
+        lines.append("")
+    else:
+        lines.append("# Source API/contact metadata: no missing examples reported by current readiness.")
+        lines.append("")
+
+    if backup_line:
+        lines.append("# Local backup target for unattended runs")
+        lines.append(backup_line)
+        lines.append("")
+
+    if include_optional_ai:
+        lines.append("# Optional AI summaries through OpenRouter")
+        lines.append("# OPENROUTER_API_KEY=replace-with-openrouter-key")
+        lines.append("")
+
+    commands = radar_mvp_setup_followup_commands(record)
+    if commands:
+        lines.append("# After filling the values above:")
+        lines.extend(f"# {command}" for command in commands)
+    return lines
+
+
+def radar_mvp_setup_backup_env_line(plan: dict[str, Any], *, product: str = "") -> str:
+    record = plan if isinstance(plan, dict) else {}
+    actions = record.get("actions") if isinstance(record.get("actions"), list) else []
+    selected_product = str(product or "").strip().lower()
+    for action in actions:
+        backup_line = radar_mvp_setup_backup_action_env_line(action, product=selected_product)
+        if backup_line:
+            return backup_line
+    return ""
+
+
+def radar_mvp_setup_backup_action_env_line(action: dict[str, Any], *, product: str = "") -> str:
+    if not isinstance(action, dict) or action.get("id") != "configure_backup_policy":
+        return ""
+    details = action.get("details") if isinstance(action.get("details"), dict) else {}
+    selected_product = str(product or "").strip().lower()
+    env_var = normalize_spaces(str(details.get("env_var") or ""))
+    if not env_var:
+        env_var = "PERSONAL_RADAR_BACKUP_TARGETS" if selected_product == "personal" else "RADAR_BACKUP_TARGETS"
+    target_name = "personal-radar-backups" if env_var.startswith("PERSONAL_") else "team-radar-backups"
+    return f"{env_var}=/absolute/path/to/{target_name}"
+
+
+def radar_mvp_setup_followup_commands(plan: dict[str, Any]) -> list[str]:
+    record = plan if isinstance(plan, dict) else {}
+    actions = record.get("actions") if isinstance(record.get("actions"), list) else []
+    commands = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        details = action.get("details") if isinstance(action.get("details"), dict) else {}
+        detail_commands = [
+            normalize_spaces(str(detail_command or ""))
+            for detail_command in (details.get("commands") or [])
+            if normalize_spaces(str(detail_command or ""))
+        ]
+        if detail_commands:
+            commands.extend(detail_commands)
+            continue
+        command = normalize_spaces(str(action.get("command") or ""))
+        if command:
+            commands.append(command)
+    return list(dict.fromkeys(commands))
+
+
+def radar_mvp_setup_env_audit(
+    plan: dict[str, Any] | None,
+    *,
+    product: str = "",
+    environ: dict[str, str] | None = None,
+    include_optional_ai: bool = True,
+) -> dict[str, Any]:
+    record = plan if isinstance(plan, dict) else {}
+    selected_environ = environ if isinstance(environ, dict) else dict(os.environ)
+    required_names = radar_mvp_setup_required_env_names(record, product=product)
+    optional_names = ["OPENROUTER_API_KEY"] if include_optional_ai else []
+    required = [radar_mvp_setup_env_audit_record(name, selected_environ) for name in required_names]
+    optional = [radar_mvp_setup_env_audit_record(name, selected_environ) for name in optional_names]
+    missing = [record for record in required if record["status"] == "missing"]
+    placeholders = [record for record in required if record["status"] == "placeholder"]
+    invalid = [record for record in required if record["status"] == "invalid"]
+    present = [record for record in required if record["status"] == "present"]
+    if missing or placeholders or invalid:
+        status = "needs_action"
+        next_action = "fill_setup_env"
+        message = "Fill missing, placeholder, or invalid local setup environment variables before live validation."
+    elif required:
+        status = "ready"
+        next_action = "run_live_source_validation"
+        message = "Required local setup environment variables are present."
+    else:
+        status = "not_applicable"
+        next_action = "review_mvp_status"
+        message = "No required local setup environment variables are listed by current MVP setup actions."
+    return {
+        "status": status,
+        "next_action": next_action,
+        "message": message,
+        "required_count": len(required),
+        "present_count": len(present),
+        "missing_count": len(missing),
+        "placeholder_count": len(placeholders),
+        "invalid_count": len(invalid),
+        "optional_count": len(optional),
+        "optional_present_count": sum(1 for record in optional if record["status"] == "present"),
+        "required": required,
+        "optional": optional,
+    }
+
+
+def radar_mvp_setup_required_env_names(plan: dict[str, Any], *, product: str = "") -> list[str]:
+    names: list[str] = []
+    for line in format_radar_mvp_setup_env_block(plan, product=product)[1:]:
+        if "=" not in line:
+            continue
+        name = normalize_spaces(line.split("=", 1)[0])
+        if name:
+            names.append(name)
+    backup_line = radar_mvp_setup_backup_env_line(plan, product=product)
+    if backup_line and "=" in backup_line:
+        names.append(normalize_spaces(backup_line.split("=", 1)[0]))
+    return list(dict.fromkeys(names))
+
+
+def radar_mvp_setup_env_audit_record(name: str, environ: dict[str, str]) -> dict[str, Any]:
+    selected_name = normalize_spaces(str(name or ""))
+    value = str(environ.get(selected_name) or "")
+    if not selected_name:
+        status = "missing"
+    elif not value.strip():
+        status = "missing"
+    elif radar_mvp_setup_env_placeholder_value(value):
+        status = "placeholder"
+    elif selected_name.endswith("BACKUP_TARGETS") and not radar_backup_target_value_valid(value):
+        status = "invalid"
+    else:
+        status = "present"
+    return {
+        "name": selected_name,
+        "status": status,
+        "present": status == "present",
+    }
+
+
+def radar_backup_target_value_valid(value: str) -> bool:
+    targets = [
+        radar_config_value(part)
+        for part in re.split(r"[\s,]+", str(value or ""))
+        if radar_config_value(part)
+    ]
+    return bool(targets) and all(Path(str(target)).is_absolute() for target in targets)
+
+
+def radar_mvp_setup_env_placeholder_value(value: str) -> bool:
+    text = normalize_spaces(str(value or "")).strip().lower()
+    if not text:
+        return False
+    placeholder_fragments = (
+        "api-key",
+        "replace-with",
+        "you@example.org",
+        "/absolute/path/to/",
+    )
+    return any(fragment in text for fragment in placeholder_fragments)
+
+
+def radar_config_value(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text or radar_mvp_setup_env_placeholder_value(text):
+        return None
+    return text
+
+
+def format_radar_mvp_setup_env_audit(audit: dict[str, Any] | None) -> str:
+    record = audit if isinstance(audit, dict) else {}
+    if not record:
+        return "MVP setup env audit: not recorded"
+    return (
+        "MVP setup env audit: "
+        f"status={record.get('status') or 'unknown'} "
+        f"required={int(record.get('required_count') or 0)} "
+        f"present={int(record.get('present_count') or 0)} "
+        f"missing={int(record.get('missing_count') or 0)} "
+        f"placeholder={int(record.get('placeholder_count') or 0)} "
+        f"invalid={int(record.get('invalid_count') or 0)} "
+        f"next={record.get('next_action') or 'unknown'}"
+    )
+
+
+def radar_guardrail_readiness(
+    *,
+    product: str,
+    queue_records: list[dict[str, Any]] | None = None,
+    audit_event_count: int | None = None,
+    private_data_policy_configured: bool = True,
+    human_review_required: bool = True,
+    shared_core_product_neutral: bool = True,
+    personal_memory_policy_isolated: bool = True,
+) -> dict[str, Any]:
+    records = [record for record in (queue_records or []) if isinstance(record, dict)]
+    source_trace = radar_source_trace_guardrail(records)
+    audit = radar_audit_guardrail(product=product, audit_event_count=audit_event_count)
+    checks = {
+        "source_trace": source_trace,
+        "audit_events": audit,
+        "human_review_boundary": {
+            "status": "passed" if human_review_required else "blocked",
+            "required": bool(human_review_required),
+            "message": "Human review is required before Radar candidates enter libraries."
+            if human_review_required
+            else "Human review boundary is not configured.",
+        },
+        "product_boundary": {
+            "status": "passed" if shared_core_product_neutral else "blocked",
+            "product_neutral_shared_core": bool(shared_core_product_neutral),
+            "message": "Shared Radar core remains product-neutral."
+            if shared_core_product_neutral
+            else "Shared Radar core appears to own product-specific state.",
+        },
+        "private_data_policy": {
+            "status": "passed" if private_data_policy_configured else "blocked",
+            "configured": bool(private_data_policy_configured),
+            "message": "Private PDFs, credentials, and team data remain outside shared code by policy."
+            if private_data_policy_configured
+            else "Private-data boundary policy is not configured.",
+        },
+        "personal_memory_boundary": {
+            "status": "passed" if personal_memory_policy_isolated else "blocked",
+            "personal_memory_policy_isolated": bool(personal_memory_policy_isolated),
+            "message": radar_personal_memory_boundary_message(
+                product=product,
+                personal_memory_policy_isolated=bool(personal_memory_policy_isolated),
+            ),
+        },
+    }
+    status_counts = {
+        "passed": sum(1 for check in checks.values() if check["status"] == "passed"),
+        "warning": sum(1 for check in checks.values() if check["status"] == "warning"),
+        "blocked": sum(1 for check in checks.values() if check["status"] == "blocked"),
+        "not_applicable": sum(1 for check in checks.values() if check["status"] == "not_applicable"),
+    }
+    if status_counts["blocked"]:
+        status = "blocked"
+        next_action = "fix_guardrail_violations"
+    elif status_counts["warning"]:
+        status = "needs_attention"
+        next_action = "inspect_guardrail_evidence"
+    else:
+        status = "ready"
+        next_action = "monitor_guardrails"
+    return {
+        "product": product,
+        "status": status,
+        "next_action": next_action,
+        "record_count": len(records),
+        "status_counts": status_counts,
+        "checks": checks,
+    }
+
+
+def radar_personal_memory_boundary_message(*, product: str, personal_memory_policy_isolated: bool) -> str:
+    if not personal_memory_policy_isolated:
+        return "Personal memory write policy appears coupled to Team Radar state."
+    if product == "team":
+        return "Team Radar does not own or modify Personal Side-Brain memory write policy."
+    if product == "personal":
+        return "Personal Radar memory writes remain governed by Personal Side-Brain policy, outside Team state."
+    return "Personal memory write policy remains isolated from this Radar product surface."
+
+
+def radar_source_trace_guardrail(records: list[dict[str, Any]]) -> dict[str, Any]:
+    if not records:
+        return {
+            "status": "not_applicable",
+            "record_count": 0,
+            "with_source_trace": 0,
+            "missing_titles": [],
+            "message": "Source trace verification starts after active queue records exist.",
+        }
+    missing = []
+    for record in records:
+        if radar_record_source_trace(record):
+            continue
+        missing.append(normalize_spaces(str(record.get("title") or record.get("dedupe_key") or "untitled")))
+    if missing:
+        status = "warning"
+        message = "Some active queue records are missing AI source trace metadata."
+    else:
+        status = "passed"
+        message = "Active queue records expose source trace metadata for generated recommendation fields."
+    return {
+        "status": status,
+        "record_count": len(records),
+        "with_source_trace": len(records) - len(missing),
+        "missing_titles": missing[:5],
+        "message": message,
+    }
+
+
+def radar_record_source_trace(record: dict[str, Any]) -> dict[str, Any]:
+    candidates: list[Any] = [
+        record.get("source_trace"),
+        record.get("summary_source_trace"),
+    ]
+    for key in ("summary", "recommendation", "latest_recommendation", "context", "reason_to_read"):
+        value = record.get(key)
+        if isinstance(value, dict):
+            candidates.append(value.get("source_trace"))
+            nested_summary = value.get("summary")
+            if isinstance(nested_summary, dict):
+                candidates.append(nested_summary.get("source_trace"))
+            nested_context = value.get("context")
+            if isinstance(nested_context, dict):
+                candidates.append(nested_context.get("source_trace"))
+    for candidate in candidates:
+        if isinstance(candidate, dict) and (candidate.get("processor") or candidate.get("ai_model") or candidate.get("model")):
+            return candidate
+    return {}
+
+
+def radar_audit_guardrail(*, product: str, audit_event_count: int | None = None) -> dict[str, Any]:
+    if product != "team":
+        return {
+            "status": "not_applicable",
+            "audit_event_count": None,
+            "message": "Team mutation audit logs are not applicable to this product surface.",
+        }
+    if audit_event_count is None:
+        return {
+            "status": "warning",
+            "audit_event_count": None,
+            "message": "Team Radar audit-event evidence was not supplied.",
+        }
+    return {
+        "status": "passed",
+        "audit_event_count": max(0, int(audit_event_count)),
+        "message": "Team Radar audit-event table is queryable for mutation evidence.",
+    }
+
+
+def format_radar_guardrail_readiness(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    counts = record.get("status_counts") if isinstance(record.get("status_counts"), dict) else {}
+    return (
+        "Guardrail readiness: "
+        f"status={record.get('status') or 'unknown'} "
+        f"next={record.get('next_action') or 'unknown'} "
+        f"passed={int(counts.get('passed') or 0)} "
+        f"warnings={int(counts.get('warning') or 0)} "
+        f"blocked={int(counts.get('blocked') or 0)}"
+    )
+
+
+def radar_operations_readiness(
+    *,
+    product: str,
+    scripts: list[dict[str, Any]] | None = None,
+    paths: list[dict[str, Any]] | None = None,
+    evidence: list[dict[str, Any]] | None = None,
+    cache_pdfs: bool = False,
+    pdf_cache_dir: str | Path | None = None,
+    backup_targets: list[str] | None = None,
+) -> dict[str, Any]:
+    script_records = [radar_operations_script_record(record) for record in (scripts or [])]
+    path_records = [radar_operations_path_record(record) for record in (paths or [])]
+    evidence_records = [radar_operations_evidence_record(record) for record in (evidence or [])]
+    missing_required_scripts = [
+        record["id"]
+        for record in script_records
+        if record.get("required") and not record.get("exists")
+    ]
+    non_executable_scripts = [
+        record["id"]
+        for record in script_records
+        if record.get("required") and record.get("exists") and not record.get("executable")
+    ]
+    candidate_backup_targets = [
+        radar_config_value(str(target))
+        for target in (backup_targets or [])
+        if radar_config_value(str(target))
+    ]
+    selected_backup_targets = [
+        normalize_spaces(str(target))
+        for target in candidate_backup_targets
+        if Path(str(target)).is_absolute()
+    ]
+    invalid_backup_targets = [
+        normalize_spaces(str(target))
+        for target in candidate_backup_targets
+        if not Path(str(target)).is_absolute()
+    ]
+    missing_required_evidence = [
+        record["id"]
+        for record in evidence_records
+        if record.get("required") and not record.get("exists")
+    ]
+    operation_commands = radar_operations_commands(product=product, scripts=script_records)
+    pdf_cache = {
+        "enabled": bool(cache_pdfs),
+        "configured": bool(pdf_cache_dir),
+        "path": str(pdf_cache_dir or ""),
+    }
+    blockers = len(missing_required_scripts) + len(non_executable_scripts)
+    warnings = 0
+    if not selected_backup_targets:
+        warnings += 1
+    if invalid_backup_targets:
+        warnings += 1
+    if missing_required_evidence:
+        warnings += 1
+    if cache_pdfs and not pdf_cache_dir:
+        blockers += 1
+    if blockers:
+        status = "blocked"
+        next_action = "fix_operations_configuration"
+    elif not selected_backup_targets or invalid_backup_targets:
+        status = "needs_attention"
+        next_action = "configure_backup_policy"
+    elif missing_required_evidence:
+        status = "needs_attention"
+        next_action = "run_operations_rehearsal"
+    elif warnings:
+        status = "needs_attention"
+        next_action = "review_operations_warnings"
+    else:
+        status = "ready"
+        next_action = "enable_or_monitor_schedule"
+    return {
+        "product": product,
+        "status": status,
+        "next_action": next_action,
+        "script_count": len(script_records),
+        "path_count": len(path_records),
+        "evidence_count": len(evidence_records),
+        "evidence_present_count": sum(1 for record in evidence_records if record.get("exists")),
+        "missing_required_evidence": missing_required_evidence,
+        "missing_required_scripts": missing_required_scripts,
+        "non_executable_scripts": non_executable_scripts,
+        "backup_configured": bool(selected_backup_targets),
+        "backup_targets": selected_backup_targets,
+        "invalid_backup_targets": invalid_backup_targets,
+        "pdf_cache": pdf_cache,
+        "commands": operation_commands,
+        "scripts": script_records,
+        "paths": path_records,
+        "evidence": evidence_records,
+        "warnings": radar_operations_warnings(
+            backup_configured=bool(selected_backup_targets),
+            invalid_backup_targets=invalid_backup_targets,
+            missing_required_evidence=missing_required_evidence,
+        ),
+    }
+
+
+def radar_operations_warnings(
+    *,
+    backup_configured: bool,
+    invalid_backup_targets: list[str],
+    missing_required_evidence: list[str] | None = None,
+) -> list[str]:
+    warnings = []
+    if not backup_configured:
+        warnings.append("backup_policy_not_configured")
+    if invalid_backup_targets:
+        warnings.append("backup_target_not_absolute")
+    if missing_required_evidence:
+        warnings.append("operations_evidence_missing")
+    return warnings
+
+
+def radar_operations_commands(*, product: str, scripts: list[dict[str, Any]]) -> dict[str, str]:
+    selected_product = str(product or "").strip().lower()
+    scripts_by_id = {
+        str(record.get("id") or ""): record
+        for record in scripts
+        if isinstance(record, dict) and str(record.get("id") or "")
+    }
+    commands: dict[str, str] = {}
+    backup_path = radar_operations_command_path(scripts_by_id.get("backup"))
+    if backup_path:
+        dry_run_env = "PERSONAL_RADAR_BACKUP_DRY_RUN" if selected_product == "personal" else "RADAR_BACKUP_DRY_RUN"
+        commands["backup_dry_run"] = f"{dry_run_env}=1 {backup_path}"
+    rehearsal_path = radar_operations_command_path(scripts_by_id.get("rehearsal"))
+    if rehearsal_path:
+        commands["cycle_rehearsal"] = rehearsal_path
+    return commands
+
+
+def radar_operations_command_path(record: dict[str, Any] | None) -> str:
+    if not isinstance(record, dict):
+        return ""
+    path_text = str(record.get("path") or "").strip()
+    if not path_text:
+        return ""
+    path = Path(path_text)
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
+
+
+def radar_operations_script_record(record: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(record.get("path") or ""))
+    exists = path.exists() if str(path) else False
+    executable = os.access(path, os.X_OK) if exists else False
+    return {
+        "id": str(record.get("id") or path.name or "script"),
+        "label": str(record.get("label") or record.get("id") or path.name or "Script"),
+        "path": str(path),
+        "required": bool(record.get("required", True)),
+        "exists": exists,
+        "executable": executable,
+    }
+
+
+def radar_operations_path_record(record: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(record.get("path") or ""))
+    exists = path.exists() if str(path) else False
+    return {
+        "id": str(record.get("id") or path.name or "path"),
+        "label": str(record.get("label") or record.get("id") or path.name or "Path"),
+        "path": str(path),
+        "kind": str(record.get("kind") or "path"),
+        "required": bool(record.get("required", False)),
+        "exists": exists,
+    }
+
+
+def radar_operations_evidence_record(record: dict[str, Any]) -> dict[str, Any]:
+    raw_path = str(record.get("path") or "").strip()
+    raw_pattern = str(record.get("pattern") or "").strip()
+    raw_patterns = [
+        str(pattern).strip()
+        for pattern in (record.get("patterns") or [])
+        if str(pattern).strip()
+    ]
+    patterns = [raw_pattern] if raw_pattern else []
+    patterns.extend(raw_patterns)
+    matched_paths: list[str] = []
+    path_exists = False
+    if raw_path:
+        path = Path(raw_path)
+        try:
+            path_exists = path.exists()
+        except OSError:
+            path_exists = False
+        if path_exists:
+            matched_paths.append(str(path))
+    for pattern in patterns:
+        try:
+            matches = sorted(glob.glob(pattern))
+        except OSError:
+            matches = []
+        matched_paths.extend(str(match) for match in matches)
+    matched_paths = list(dict.fromkeys(matched_paths))
+    return {
+        "id": str(record.get("id") or Path(raw_path).name or raw_pattern or "evidence"),
+        "label": str(record.get("label") or record.get("id") or Path(raw_path).name or "Evidence"),
+        "path": raw_path,
+        "pattern": raw_pattern,
+        "patterns": patterns,
+        "kind": str(record.get("kind") or "evidence"),
+        "required": bool(record.get("required", True)),
+        "exists": bool(path_exists or matched_paths),
+        "matched_paths": matched_paths,
+        "match_count": len(matched_paths),
+    }
+
+
+def format_radar_operations_readiness(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    pdf_cache = record.get("pdf_cache") if isinstance(record.get("pdf_cache"), dict) else {}
+    evidence_count = int(record.get("evidence_count") or 0)
+    evidence_present_count = int(record.get("evidence_present_count") or 0)
+    return (
+        "Operations readiness: "
+        f"status={record.get('status') or 'unknown'} "
+        f"next={record.get('next_action') or 'unknown'} "
+        f"scripts={int(record.get('script_count') or 0)} "
+        f"paths={int(record.get('path_count') or 0)} "
+        f"evidence={evidence_present_count}/{evidence_count} "
+        f"backup={'yes' if record.get('backup_configured') else 'no'} "
+        f"invalid_backup_targets={len(record.get('invalid_backup_targets') or [])} "
+        f"pdf_cache={'yes' if pdf_cache.get('enabled') else 'no'}"
+    )
+
+
+def radar_source_validation_plan(
+    sources: list[str] | tuple[str, ...] | None,
+    collection_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_sources = unique_source_ids(list(sources or []))
+    selected_config = dict(collection_config or {})
+    readiness = radar_source_readiness_summary(selected_sources, selected_config)
+    oa_enrichment = radar_oa_enrichment_summary(selected_sources, selected_config)
+    missing_required = readiness.get("missing_required") if isinstance(readiness.get("missing_required"), list) else []
+    missing_recommended = (
+        readiness.get("missing_recommended") if isinstance(readiness.get("missing_recommended"), list) else []
+    )
+    required_by_source = group_validation_config_entries(missing_required)
+    recommended_by_source = group_validation_config_entries(missing_recommended)
+    checks = [
+        radar_source_validation_check(
+            source_id,
+            required_config=required_by_source.get(source_id, []),
+            recommended_config=recommended_by_source.get(source_id, []),
+        )
+        for source_id in selected_sources
+    ]
+    oa_check = radar_oa_validation_check(oa_enrichment)
+    if oa_check:
+        checks.append(oa_check)
+    blocked_count = sum(1 for check in checks if check["status"] == "blocked")
+    warning_count = sum(1 for check in checks if check["status"] == "warning")
+    ready_count = sum(1 for check in checks if check["status"] == "ready")
+    if blocked_count:
+        next_action = "configure_blocked_sources"
+    elif warning_count:
+        next_action = "add_recommended_source_config"
+    elif checks:
+        next_action = "run_live_source_validation"
+    else:
+        next_action = "select_sources"
+    return {
+        "status": "blocked" if blocked_count else "ready_with_warnings" if warning_count else "ready" if checks else "empty",
+        "next_action": next_action,
+        "network_required": bool(checks),
+        "network_performed": False,
+        "source_count": len(selected_sources),
+        "check_count": len(checks),
+        "ready_count": ready_count,
+        "warning_count": warning_count,
+        "blocked_count": blocked_count,
+        "api_source_count": sum(1 for check in checks if check.get("validation_kind") == "api_metadata"),
+        "official_page_count": sum(1 for check in checks if check.get("validation_kind") == "official_accepted_page"),
+        "oa_enrichment_status": oa_enrichment.get("status") or "unknown",
+        "checks": checks,
+    }
+
+
+def group_validation_config_entries(entries: list[Any]) -> dict[str, list[dict[str, str]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source_id = str(entry.get("source_id") or "").strip()
+        if not source_id:
+            continue
+        grouped.setdefault(source_id, []).append(
+            {
+                "key": str(entry.get("key") or ""),
+                "label": str(entry.get("label") or entry.get("key") or ""),
+            }
+        )
+    return grouped
+
+
+def radar_source_validation_check(
+    source_id: str,
+    *,
+    required_config: list[dict[str, str]] | None = None,
+    recommended_config: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    policy = radar_source_policy_record(source_id)
+    required = list(required_config or [])
+    recommended = list(recommended_config or [])
+    if required:
+        status = "blocked"
+        next_action = "configure_required_source_input"
+    elif recommended:
+        status = "warning"
+        next_action = "add_recommended_source_config"
+    else:
+        status = "ready"
+        next_action = "run_live_metadata_check"
+    return {
+        "source_id": source_id,
+        "label": radar_source_label(source_id),
+        "source_class": policy.get("source_class") or "unknown",
+        "access": policy.get("access") or "unknown",
+        "authoritative_metadata": bool(policy.get("authoritative_metadata")),
+        "validation_kind": radar_source_validation_kind(policy),
+        "status": status,
+        "next_action": next_action,
+        "required_config": required,
+        "recommended_config": recommended,
+    }
+
+
+def radar_oa_validation_check(oa_enrichment: dict[str, Any]) -> dict[str, Any] | None:
+    relevant_sources = (
+        oa_enrichment.get("relevant_source_ids") if isinstance(oa_enrichment.get("relevant_source_ids"), list) else []
+    )
+    if not relevant_sources:
+        return None
+    configured = bool(oa_enrichment.get("configured"))
+    return {
+        "source_id": "unpaywall",
+        "label": str(oa_enrichment.get("label") or "Unpaywall"),
+        "source_class": str(oa_enrichment.get("source_class") or "oa_enrichment"),
+        "access": "api",
+        "authoritative_metadata": False,
+        "validation_kind": "oa_enrichment",
+        "status": "ready" if configured else "warning",
+        "next_action": "run_oa_enrichment_check" if configured else "add_unpaywall_contact",
+        "required_config": [],
+        "recommended_config": list(oa_enrichment.get("recommended_config") or []),
+        "relevant_source_ids": [str(source_id) for source_id in relevant_sources],
+    }
+
+
+def radar_source_validation_kind(policy: dict[str, Any]) -> str:
+    access = str(policy.get("access") or "").strip()
+    source_class = str(policy.get("source_class") or "").strip()
+    if source_class == "official_accepted_page" or access == "official_accepted_papers_page":
+        return "official_accepted_page"
+    if source_class == "oa_enrichment":
+        return "oa_enrichment"
+    if access in {"api", "api_derived", "api_or_rss", "rss_or_api"}:
+        return "api_metadata"
+    if source_class == "trend_signal":
+        return "trend_signal"
+    return "metadata_source"
+
+
+def format_radar_source_validation_plan(plan: dict[str, Any]) -> str:
+    if not isinstance(plan, dict) or not plan:
+        return "Source validation: not recorded"
+    return (
+        f"Source validation: status={plan.get('status') or 'unknown'} "
+        f"next={plan.get('next_action') or 'inspect'} "
+        f"checks={int(plan.get('check_count') or 0)} "
+        f"ready={int(plan.get('ready_count') or 0)} "
+        f"warnings={int(plan.get('warning_count') or 0)} "
+        f"blocked={int(plan.get('blocked_count') or 0)} "
+        f"network={'yes' if plan.get('network_required') else 'no'}"
+    )
+
+
+def radar_source_validation_command_guidance(
+    *,
+    product: str,
+    source_validation_plan: dict[str, Any] | None,
+    db_path: str | Path | None = None,
+    root_path: str | Path | None = None,
+    use_saved_defaults: bool = False,
+    validation_args: list[str] | None = None,
+) -> dict[str, Any]:
+    plan = source_validation_plan if isinstance(source_validation_plan, dict) else {}
+    max_results = 1
+    if product == "team":
+        base = ["python", "team/research_cli.py", "radar-validate-sources"]
+        if db_path:
+            base.extend(["--db-path", str(db_path)])
+        if use_saved_defaults:
+            base.append("--use-saved-defaults")
+    elif product == "personal":
+        base = ["python", "scripts/personal_literature_radar.py", "validate-sources"]
+        if root_path:
+            base.extend(["--root-path", str(root_path)])
+    else:
+        base = ["python", "validate-sources"]
+    if validation_args:
+        base.extend(str(part) for part in validation_args)
+    dry_run = [*base, "--json"]
+    live = [*base, "--live", "--validation-max-results", str(max_results), "--json"]
+    blocked = int(plan.get("blocked_count") or 0)
+    warnings = int(plan.get("warning_count") or 0)
+    if blocked:
+        next_action = "configure_blocked_sources_before_live_validation"
+    elif warnings:
+        next_action = "add_recommended_config_then_run_live_validation"
+    elif plan.get("network_required"):
+        next_action = "run_live_validation_command"
+    else:
+        next_action = "select_sources_before_validation"
+    return {
+        "product": product,
+        "status": plan.get("status") or "unknown",
+        "next_action": next_action,
+        "recommended_live_validation_max_results": max_results,
+        "dry_run": {
+            "argv": dry_run,
+            "command": shell_join(dry_run),
+            "network": False,
+        },
+        "live": {
+            "argv": live,
+            "command": shell_join(live),
+            "network": True,
+        },
+        "note": "Run the dry-run command first; run the live command only after API/contact settings are configured.",
+    }
+
+
+def shell_join(argv: list[str]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in argv)
+
+
+def format_radar_source_validation_commands(guidance: dict[str, Any] | None) -> list[str]:
+    record = guidance if isinstance(guidance, dict) else {}
+    if not record:
+        return []
+    dry_run = record.get("dry_run") if isinstance(record.get("dry_run"), dict) else {}
+    live = record.get("live") if isinstance(record.get("live"), dict) else {}
+    lines = []
+    if dry_run.get("command"):
+        lines.append(f"Dry-run validation command: {dry_run['command']}")
+    if live.get("command"):
+        lines.append(f"Live validation command: {live['command']}")
+    if record.get("note"):
+        lines.append(f"Validation note: {record['note']}")
+    return lines
+
+
+def radar_source_validation_evidence(
+    *,
+    source_validation_result: dict[str, Any] | None = None,
+    source_validation_path: str | Path | None = None,
+    primary_source_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = source_validation_result if isinstance(source_validation_result, dict) else {}
+    supplied = bool(source_validation_path) or bool(result)
+    network_performed = bool(result.get("network_performed"))
+    checks = result.get("checks") if isinstance(result.get("checks"), list) else []
+    planned_source_ids = [
+        str(check.get("source_id") or "")
+        for check in checks
+        if isinstance(check, dict) and str(check.get("source_id") or "").strip()
+    ]
+    succeeded_source_ids = [
+        str(check.get("source_id") or "")
+        for check in checks
+        if isinstance(check, dict)
+        and str(check.get("source_id") or "").strip()
+        and str(check.get("status") or "") == "succeeded"
+    ]
+    incomplete_source_ids = [
+        str(check.get("source_id") or "")
+        for check in checks
+        if isinstance(check, dict)
+        and str(check.get("source_id") or "").strip()
+        and str(check.get("status") or "") != "succeeded"
+    ]
+    if not supplied:
+        mode = "missing"
+        status = "missing"
+        next_action = "run_or_attach_source_validation"
+        coverage_status = "missing"
+    elif network_performed:
+        mode = "live"
+        status = str(result.get("status") or "unknown")
+        next_action = "review_live_validation_result"
+        coverage_status = "complete" if planned_source_ids and not incomplete_source_ids else "partial"
+    else:
+        mode = "dry_run"
+        status = str(result.get("status") or "unknown")
+        next_action = "run_live_source_validation"
+        coverage_status = "dry_run"
+    primary_validation_coverage = radar_primary_source_validation_coverage(
+        primary_source_coverage=primary_source_coverage,
+        planned_source_ids=planned_source_ids,
+        succeeded_source_ids=succeeded_source_ids,
+        supplied=supplied,
+        network_performed=network_performed,
+    )
+    return {
+        "status": status,
+        "mode": mode,
+        "network_performed": network_performed,
+        "path": str(source_validation_path or ""),
+        "result_status": str(result.get("status") or ""),
+        "next_action": next_action,
+        "coverage": {
+            "status": coverage_status,
+            "planned_count": len(planned_source_ids),
+            "succeeded_count": len(succeeded_source_ids),
+            "incomplete_count": len(incomplete_source_ids),
+            "planned_source_ids": planned_source_ids,
+            "succeeded_source_ids": succeeded_source_ids,
+            "incomplete_source_ids": incomplete_source_ids,
+        },
+        "primary_coverage": primary_validation_coverage,
+    }
+
+
+def radar_primary_source_validation_coverage(
+    *,
+    primary_source_coverage: dict[str, Any] | None = None,
+    planned_source_ids: list[str] | tuple[str, ...] | None = None,
+    succeeded_source_ids: list[str] | tuple[str, ...] | None = None,
+    supplied: bool = False,
+    network_performed: bool = False,
+) -> dict[str, Any]:
+    coverage = primary_source_coverage if isinstance(primary_source_coverage, dict) else {}
+    requirements = coverage.get("requirements") if isinstance(coverage.get("requirements"), list) else []
+    planned_set = {str(source_id) for source_id in planned_source_ids or [] if str(source_id).strip()}
+    succeeded_set = {str(source_id) for source_id in succeeded_source_ids or [] if str(source_id).strip()}
+    required_primary_source_ids: list[str] = []
+    planned_primary_source_ids: list[str] = []
+    validated_primary_source_ids: list[str] = []
+    unvalidated_primary_source_ids: list[str] = []
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            continue
+        requirement_id = str(requirement.get("id") or "").strip()
+        if not requirement_id:
+            continue
+        acceptable_source_ids = [
+            str(source_id).strip()
+            for source_id in requirement.get("acceptable_source_ids") or []
+            if str(source_id).strip()
+        ]
+        required_primary_source_ids.append(requirement_id)
+        if any(source_id in planned_set for source_id in acceptable_source_ids):
+            planned_primary_source_ids.append(requirement_id)
+        if any(source_id in succeeded_set for source_id in acceptable_source_ids):
+            validated_primary_source_ids.append(requirement_id)
+        else:
+            unvalidated_primary_source_ids.append(requirement_id)
+    if not requirements:
+        status = "not_recorded"
+        next_action = "record_primary_source_coverage"
+    elif not supplied:
+        status = "missing"
+        next_action = "run_or_attach_source_validation"
+    elif not network_performed:
+        status = "dry_run"
+        next_action = "run_live_source_validation"
+    elif not unvalidated_primary_source_ids:
+        status = "complete"
+        next_action = "keep_live_validation_snapshot"
+    elif validated_primary_source_ids:
+        status = "partial"
+        next_action = "validate_missing_primary_sources"
+    else:
+        status = "missing"
+        next_action = "validate_primary_sources"
+    return {
+        "status": status,
+        "next_action": next_action,
+        "required_count": len(required_primary_source_ids),
+        "planned_count": len(planned_primary_source_ids),
+        "validated_count": len(validated_primary_source_ids),
+        "unvalidated_count": len(unvalidated_primary_source_ids),
+        "required_primary_source_ids": required_primary_source_ids,
+        "planned_primary_source_ids": planned_primary_source_ids,
+        "validated_primary_source_ids": validated_primary_source_ids,
+        "unvalidated_primary_source_ids": unvalidated_primary_source_ids,
+    }
+
+
+def format_radar_source_validation_evidence(evidence: dict[str, Any] | None) -> str:
+    record = evidence if isinstance(evidence, dict) else {}
+    if not record:
+        return "Source validation evidence: not recorded"
+    parts = [
+        "Source validation evidence:",
+        f"mode={record.get('mode') or 'unknown'}",
+        f"status={record.get('status') or 'unknown'}",
+        f"network={'yes' if record.get('network_performed') else 'no'}",
+        f"next={record.get('next_action') or 'inspect'}",
+    ]
+    coverage = record.get("coverage") if isinstance(record.get("coverage"), dict) else {}
+    if coverage:
+        parts.append(
+            "coverage="
+            f"{coverage.get('status') or 'unknown'} "
+            f"{int(coverage.get('succeeded_count') or 0)}/{int(coverage.get('planned_count') or 0)}"
+        )
+    primary_coverage = record.get("primary_coverage") if isinstance(record.get("primary_coverage"), dict) else {}
+    if primary_coverage:
+        parts.append(
+            "primary="
+            f"{primary_coverage.get('status') or 'unknown'} "
+            f"{int(primary_coverage.get('validated_count') or 0)}/"
+            f"{int(primary_coverage.get('required_count') or 0)}"
+        )
+    if record.get("path"):
+        parts.append(f"path={record.get('path')}")
+    return " ".join(parts)
+
+
+def radar_source_validation_guidance(plan: dict[str, Any] | None) -> dict[str, Any]:
+    selected_plan = plan if isinstance(plan, dict) else {}
+    checks = selected_plan.get("checks") if isinstance(selected_plan.get("checks"), list) else []
+    actions = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        actions.extend(radar_source_validation_guidance_actions(check))
+    blocked_actions = [action for action in actions if action.get("severity") == "error"]
+    warning_actions = [action for action in actions if action.get("severity") == "warning"]
+    api_contact_actions = [action for action in actions if action.get("category") == "contact"]
+    api_key_actions = [action for action in actions if action.get("category") == "api_key"]
+    if blocked_actions:
+        status = "blocked"
+        next_action = "configure_required_source_inputs"
+    elif warning_actions:
+        status = "ready_with_warnings"
+        next_action = "add_recommended_api_contact_or_keys"
+    elif checks:
+        status = "ready"
+        next_action = "run_live_source_validation"
+    else:
+        status = "empty"
+        next_action = "select_sources"
+    guidance = {
+        "status": status,
+        "next_action": next_action,
+        "action_count": len(actions),
+        "blocked_action_count": len(blocked_actions),
+        "warning_action_count": len(warning_actions),
+        "api_contact_action_count": len(api_contact_actions),
+        "api_key_action_count": len(api_key_actions),
+        "recommended_live_validation_max_results": 1,
+        "live_validation_note": (
+            "Use one-sample live validation first; increase only after source health and contact/API settings are clean."
+            if checks
+            else "Select sources before live validation."
+        ),
+        "actions": actions,
+    }
+    guidance["action_lines"] = format_radar_source_validation_result_actions(guidance)
+    return guidance
+
+
+def radar_source_validation_guidance_actions(check: dict[str, Any]) -> list[dict[str, Any]]:
+    source_id = str(check.get("source_id") or "").strip()
+    label = str(check.get("label") or source_id or "source")
+    actions = []
+    for entry in check.get("required_config") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("label") or entry.get("key") or "required setting")
+        key = str(entry.get("key") or "")
+        env_vars = radar_source_config_env_vars(key)
+        actions.append(
+            {
+                "source_id": source_id,
+                "label": label,
+                "severity": "error",
+                "category": "required_config",
+                "key": key,
+                "next_action": "configure_required_source_input",
+                "message": f"Configure {name} before running live validation for {label}.",
+                "env_vars": env_vars,
+                "example_env": radar_source_config_example_env(key, env_vars),
+            }
+        )
+    for entry in check.get("recommended_config") or []:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key") or "")
+        name = str(entry.get("label") or key or "recommended setting")
+        category = radar_source_validation_guidance_category(source_id, key)
+        env_vars = radar_source_config_env_vars(key)
+        actions.append(
+            {
+                "source_id": source_id,
+                "label": label,
+                "severity": "warning",
+                "category": category,
+                "key": key,
+                "next_action": "add_recommended_source_config",
+                "message": radar_source_validation_guidance_message(label, name, category),
+                "env_vars": env_vars,
+                "example_env": radar_source_config_example_env(key, env_vars),
+            }
+        )
+    return actions
+
+
+def radar_source_config_env_vars(key: str) -> list[str]:
+    return list(RADAR_SOURCE_CONFIG_ENV_HINTS.get(str(key or ""), []))
+
+
+def radar_source_config_example_env(key: str, env_vars: list[str] | None = None) -> str:
+    selected_vars = list(env_vars or radar_source_config_env_vars(key))
+    if not selected_vars:
+        return ""
+    selected_key = str(key or "")
+    placeholder = "value"
+    if "api_key" in selected_key:
+        placeholder = "api-key"
+    elif "email" in selected_key or "mailto" in selected_key:
+        placeholder = "you@example.org"
+    elif selected_key.endswith("_ids") or selected_key == "seed_paper_ids":
+        placeholder = "id1 id2"
+    elif selected_key == "official_accepted_pages":
+        placeholder = "source_id | Venue Name | 2026 | https://official.example/accepted-papers"
+    return f"{selected_vars[0]}={placeholder}"
+
+
+def radar_source_validation_guidance_category(source_id: str, key: str) -> str:
+    if "api_key" in key:
+        return "api_key"
+    if "mailto" in key or "email" in key or source_id == "unpaywall":
+        return "contact"
+    return "recommended_config"
+
+
+def radar_source_validation_guidance_message(label: str, name: str, category: str) -> str:
+    if category == "api_key":
+        return f"Add {name} for {label} to reduce unauthenticated rate-limit risk during live validation and scheduled runs."
+    if category == "contact":
+        return f"Add {name} for {label} so API requests include contact/polite-pool metadata where supported."
+    return f"Add {name} for {label} before live validation if available."
+
+
+def format_radar_source_validation_guidance(guidance: dict[str, Any]) -> str:
+    if not isinstance(guidance, dict) or not guidance:
+        return "Source validation guidance: not recorded"
+    return (
+        f"Source validation guidance: status={guidance.get('status') or 'unknown'} "
+        f"next={guidance.get('next_action') or 'inspect'} "
+        f"actions={int(guidance.get('action_count') or 0)} "
+        f"blocked={int(guidance.get('blocked_action_count') or 0)} "
+        f"warnings={int(guidance.get('warning_action_count') or 0)} "
+        f"contacts={int(guidance.get('api_contact_action_count') or 0)} "
+        f"api_keys={int(guidance.get('api_key_action_count') or 0)} "
+        f"live_max={int(guidance.get('recommended_live_validation_max_results') or 1)}"
+    )
+
+
+def build_radar_source_validation_result(
+    plan: dict[str, Any] | None,
+    check_results: list[dict[str, Any]] | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_plan = plan if isinstance(plan, dict) else {}
+    planned_checks = selected_plan.get("checks") if isinstance(selected_plan.get("checks"), list) else []
+    result_by_source: dict[str, dict[str, Any]] = {}
+    for result in check_results or []:
+        if not isinstance(result, dict):
+            continue
+        source_id = str(result.get("source_id") or "").strip()
+        if source_id:
+            result_by_source[source_id] = result
+    checked_at = iso_timestamp(now or datetime.now(timezone.utc))
+    live_performed = bool(result_by_source)
+    checks = [
+        radar_source_validation_result_check(
+            check,
+            result_by_source.get(str(check.get("source_id") or "")),
+            checked_at,
+            live_performed=live_performed,
+        )
+        for check in planned_checks
+        if isinstance(check, dict)
+    ]
+    for source_id, result in result_by_source.items():
+        if any(check.get("source_id") == source_id for check in checks):
+            continue
+        checks.append(
+            radar_source_validation_result_check({"source_id": source_id}, result, checked_at, live_performed=live_performed)
+        )
+    status_counts: dict[str, int] = {}
+    for check in checks:
+        status = str(check.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+    zero_sample_count = sum(
+        1
+        for check in checks
+        if str(check.get("status") or "") == "succeeded" and int(check.get("sample_count") or 0) == 0
+    )
+    if status_counts.get("failed"):
+        status = "failed"
+        next_action = "inspect_validation_failures"
+    elif status_counts.get("blocked"):
+        status = "blocked"
+        next_action = "configure_blocked_sources"
+    elif status_counts.get("not_run") or status_counts.get("skipped"):
+        status = "partial" if result_by_source else "pending"
+        next_action = "run_live_source_validation"
+    elif zero_sample_count:
+        status = "partial"
+        next_action = "verify_zero_sample_sources"
+    elif checks:
+        status = "succeeded"
+        next_action = "run_literature_radar"
+    else:
+        status = "empty"
+        next_action = "select_sources"
+    result_guidance = radar_source_validation_result_guidance(checks)
+    return {
+        "status": status,
+        "next_action": next_action,
+        "network_performed": live_performed,
+        "checked_at": checked_at,
+        "planned_check_count": len(planned_checks),
+        "result_count": len(result_by_source),
+        "check_count": len(checks),
+        "status_counts": dict(sorted(status_counts.items())),
+        "failed_source_ids": [
+            str(check.get("source_id"))
+            for check in checks
+            if str(check.get("status") or "") == "failed"
+        ],
+        "blocked_source_ids": [
+            str(check.get("source_id"))
+            for check in checks
+            if str(check.get("status") or "") == "blocked"
+        ],
+        "pending_source_ids": [
+            str(check.get("source_id"))
+            for check in checks
+            if str(check.get("status") or "") in {"not_run", "skipped"}
+        ],
+        "result_guidance": result_guidance,
+        "checks": checks,
+    }
+
+
+def radar_source_validation_result_check(
+    planned_check: dict[str, Any],
+    result: dict[str, Any] | None,
+    checked_at: str,
+    *,
+    live_performed: bool = False,
+) -> dict[str, Any]:
+    source_id = str(planned_check.get("source_id") or (result or {}).get("source_id") or "").strip()
+    label = str(planned_check.get("label") or source_id or "source")
+    if result:
+        status = normalize_radar_validation_status(result.get("status"))
+        record = {
+            "source_id": source_id,
+            "label": label,
+            "status": status,
+            "checked_at": str(result.get("checked_at") or checked_at),
+            "validation_kind": str(result.get("validation_kind") or planned_check.get("validation_kind") or "metadata_source"),
+            "sample_count": int(result.get("sample_count") or result.get("collected_count") or 0),
+            "message": str(result.get("message") or ""),
+        }
+        if result.get("error"):
+            record["error"] = str(result.get("error") or "")
+        if result.get("error_type"):
+            record["error_type"] = str(result.get("error_type") or "")
+        return record
+    planned_status = str(planned_check.get("status") or "")
+    if planned_status == "blocked":
+        return {
+            "source_id": source_id,
+            "label": label,
+            "status": "blocked",
+            "checked_at": checked_at,
+            "validation_kind": str(planned_check.get("validation_kind") or "metadata_source"),
+            "sample_count": 0,
+            "message": "Missing required source configuration.",
+        }
+    if live_performed:
+        recommended_config = [
+            entry for entry in planned_check.get("recommended_config") or [] if isinstance(entry, dict)
+        ]
+        if recommended_config:
+            labels = ", ".join(str(entry.get("label") or entry.get("key") or "").strip() for entry in recommended_config)
+            labels = labels or "recommended source configuration"
+            return {
+                "source_id": source_id,
+                "label": label,
+                "status": "skipped",
+                "checked_at": checked_at,
+                "validation_kind": str(planned_check.get("validation_kind") or "metadata_source"),
+                "sample_count": 0,
+                "message": f"Live validation skipped because recommended source configuration is missing: {labels}.",
+            }
+        return {
+            "source_id": source_id,
+            "label": label,
+            "status": "skipped",
+            "checked_at": checked_at,
+            "validation_kind": str(planned_check.get("validation_kind") or "metadata_source"),
+            "sample_count": 0,
+            "message": "Live validation did not record a collector result for this source.",
+        }
+    return {
+        "source_id": source_id,
+        "label": label,
+        "status": "not_run",
+        "checked_at": checked_at,
+        "validation_kind": str(planned_check.get("validation_kind") or "metadata_source"),
+        "sample_count": 0,
+        "message": "Live validation has not been run for this source.",
+    }
+
+
+def normalize_radar_validation_status(value: Any) -> str:
+    status = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if status in {"ok", "success", "succeeded", "ready"}:
+        return "succeeded"
+    if status in {"fail", "failed", "error"}:
+        return "failed"
+    if status in {"blocked", "missing_required_config"}:
+        return "blocked"
+    if status in {"skip", "skipped"}:
+        return "skipped"
+    if status in {"not_run", "pending"}:
+        return "not_run"
+    return status or "unknown"
+
+
+def format_radar_source_validation_result(result: dict[str, Any]) -> str:
+    if not isinstance(result, dict) or not result:
+        return "Source validation result: not recorded"
+    counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
+    count_text = ",".join(f"{key}={int(value)}" for key, value in sorted(counts.items())) or "none"
+    return (
+        f"Source validation result: status={result.get('status') or 'unknown'} "
+        f"next={result.get('next_action') or 'inspect'} "
+        f"checks={int(result.get('check_count') or 0)} "
+        f"results={int(result.get('result_count') or 0)} "
+        f"counts={count_text}"
+    )
+
+
+def radar_source_validation_result_guidance(checks: list[dict[str, Any]] | None) -> dict[str, Any]:
+    selected_checks = [check for check in checks or [] if isinstance(check, dict)]
+    actions = []
+    for check in selected_checks:
+        action = radar_source_validation_result_action(check)
+        if action:
+            actions.append(action)
+    failed_actions = [action for action in actions if action.get("severity") == "error"]
+    warning_actions = [action for action in actions if action.get("severity") == "warning"]
+    category_counts: dict[str, int] = {}
+    for action in actions:
+        category = str(action.get("category") or "unknown")
+        category_counts[category] = int(category_counts.get(category) or 0) + 1
+    pending_count = sum(1 for check in selected_checks if str(check.get("status") or "") == "not_run")
+    if category_counts.get("rate_limit"):
+        status = "action_needed"
+        next_action = "wait_reduce_sample_or_add_api_contact"
+    elif category_counts.get("service_unavailable"):
+        status = "action_needed"
+        next_action = "retry_after_source_recovers"
+    elif failed_actions:
+        status = "action_needed"
+        next_action = "inspect_validation_failures"
+    elif category_counts.get("zero_sample") or category_counts.get("empty_official_page"):
+        status = "review"
+        next_action = "verify_zero_sample_sources"
+    elif warning_actions:
+        status = "review"
+        next_action = "inspect_skipped_sources"
+    elif pending_count:
+        status = "pending"
+        next_action = "run_live_source_validation"
+    elif selected_checks:
+        status = "clear"
+        next_action = "run_literature_radar"
+    else:
+        status = "empty"
+        next_action = "run_live_source_validation"
+    guidance = {
+        "status": status,
+        "next_action": next_action,
+        "action_count": len(actions),
+        "error_action_count": len(failed_actions),
+        "warning_action_count": len(warning_actions),
+        "pending_check_count": pending_count,
+        "category_counts": dict(sorted(category_counts.items())),
+        "actions": actions,
+    }
+    guidance["action_lines"] = format_radar_source_validation_result_actions(guidance)
+    return guidance
+
+
+def radar_source_validation_result_action(check: dict[str, Any]) -> dict[str, Any] | None:
+    status = str(check.get("status") or "").strip().lower()
+    source_id = str(check.get("source_id") or "").strip()
+    label = str(check.get("label") or source_id or "source")
+    sample_count = int(check.get("sample_count") or 0)
+    if status == "succeeded" and sample_count == 0:
+        validation_kind = str(check.get("validation_kind") or "").strip()
+        category = "empty_official_page" if validation_kind == "official_accepted_page" else "zero_sample"
+        return {
+            "source_id": source_id,
+            "label": label,
+            "severity": "warning",
+            "category": category,
+            "next_action": "verify_source_query_or_publication_window",
+            "message": radar_source_validation_zero_sample_message(label, category),
+        }
+    if status not in {"failed", "blocked", "skipped"}:
+        return None
+    text = " ".join(
+        str(check.get(key) or "")
+        for key in ("error_type", "error", "message")
+    ).lower()
+    if status == "blocked":
+        return {
+            "source_id": source_id,
+            "label": label,
+            "severity": "error",
+            "category": "blocked_config",
+            "next_action": "configure_blocked_source",
+            "message": f"Configure required inputs for {label} before rerunning live validation.",
+        }
+    if status == "skipped":
+        if "recommended" in text and ("config" in text or "configuration" in text):
+            category = "skipped_missing_recommended_config"
+            next_action = "add_recommended_source_config"
+            message = f"Add recommended source configuration for {label}, then rerun live validation."
+        else:
+            category = "skipped_no_sample" if "doi" in text or "sample" in text else "skipped"
+            next_action = "review_skipped_source"
+            message = f"Review why {label} was skipped before treating the validation run as complete."
+        return {
+            "source_id": source_id,
+            "label": label,
+            "severity": "warning",
+            "category": category,
+            "next_action": next_action,
+            "message": message,
+        }
+    category = radar_source_validation_error_category(text)
+    return {
+        "source_id": source_id,
+        "label": label,
+        "severity": "error",
+        "category": category,
+        "next_action": radar_source_validation_error_next_action(category),
+        "message": radar_source_validation_error_message(label, category),
+    }
+
+
+def radar_source_validation_zero_sample_message(label: str, category: str) -> str:
+    if category == "empty_official_page":
+        return f"{label} responded but returned no papers; verify the accepted-paper page year/cycle or wait for posting."
+    return f"{label} responded but returned no metadata sample; verify query terms, venue/year settings, or source publication timing."
+
+
+def radar_source_validation_error_category(text: str) -> str:
+    if any(token in text for token in ("429", "rate limit", "rate-limit", "too many requests", "throttle")):
+        return "rate_limit"
+    if any(token in text for token in ("503", "502", "504", "service unavailable", "bad gateway", "gateway timeout")):
+        return "service_unavailable"
+    if any(token in text for token in ("401", "403", "unauthorized", "forbidden", "api key", "authentication")):
+        return "auth"
+    if any(token in text for token in ("timeout", "timed out", "connection", "dns", "network", "urlerror")):
+        return "network"
+    if any(token in text for token in ("parse", "json", "xml", "html", "malformed")):
+        return "parser"
+    return "unknown_failure"
+
+
+def radar_source_validation_error_next_action(category: str) -> str:
+    return {
+        "rate_limit": "wait_reduce_sample_or_add_api_contact",
+        "service_unavailable": "retry_after_source_recovers",
+        "auth": "configure_api_key_or_access",
+        "network": "retry_after_network_check",
+        "parser": "inspect_source_response_format",
+        "unknown_failure": "inspect_validation_failure",
+    }.get(category, "inspect_validation_failure")
+
+
+def radar_source_validation_error_message(label: str, category: str) -> str:
+    if category == "rate_limit":
+        return f"{label} appears rate-limited; wait, keep live validation at one result, and add API/contact settings where supported."
+    if category == "service_unavailable":
+        return f"{label} returned a temporary service-unavailable error; retry later and keep the one-result validation sample."
+    if category == "auth":
+        return f"{label} returned an auth/access error; configure the relevant API key or source access setting."
+    if category == "network":
+        return f"{label} failed at the network layer; retry after checking connectivity and source availability."
+    if category == "parser":
+        return f"{label} returned an unexpected response shape; inspect the source response before scheduling it."
+    return f"{label} failed live validation; inspect the stored error before scheduling this source."
+
+
+def format_radar_source_validation_result_guidance(guidance: dict[str, Any]) -> str:
+    if not isinstance(guidance, dict) or not guidance:
+        return "Source validation result guidance: not recorded"
+    counts = guidance.get("category_counts") if isinstance(guidance.get("category_counts"), dict) else {}
+    count_text = ",".join(f"{key}={int(value)}" for key, value in sorted(counts.items())) or "none"
+    return (
+        f"Source validation result guidance: status={guidance.get('status') or 'unknown'} "
+        f"next={guidance.get('next_action') or 'inspect'} "
+        f"actions={int(guidance.get('action_count') or 0)} "
+        f"errors={int(guidance.get('error_action_count') or 0)} "
+        f"warnings={int(guidance.get('warning_action_count') or 0)} "
+        f"pending={int(guidance.get('pending_check_count') or 0)} "
+        f"categories={count_text}"
+    )
+
+
+def format_radar_source_validation_result_actions(guidance: dict[str, Any]) -> list[str]:
+    if not isinstance(guidance, dict) or not guidance:
+        return []
+    lines = []
+    for action in guidance.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        source_id = str(action.get("source_id") or "").strip()
+        category = str(action.get("category") or "").strip()
+        next_action = str(action.get("next_action") or "").strip()
+        message = str(action.get("message") or "").strip()
+        if not message:
+            continue
+        prefix_parts = [part for part in (source_id, category, next_action) if part]
+        prefix = " / ".join(prefix_parts)
+        lines.append(f"Next: {prefix} - {message}" if prefix else f"Next: {message}")
+    return lines
+
+
+def radar_source_validation_results_from_stats(
+    source_stats: list[dict[str, Any]] | None,
+    source_errors: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Convert collector health records into the validation result input shape."""
+    results: dict[str, dict[str, Any]] = {}
+    errors_by_source: dict[str, dict[str, Any]] = {}
+    for error in source_errors or []:
+        if not isinstance(error, dict):
+            continue
+        source_id = clean_radar_source_id(error.get("source_id"))
+        if source_id:
+            errors_by_source[source_id] = error
+    for stat in source_stats or []:
+        if not isinstance(stat, dict):
+            continue
+        source_id = clean_radar_source_id(stat.get("source_id"))
+        if not source_id:
+            continue
+        status = clean_radar_source_status(stat.get("status"))
+        result_status = "succeeded"
+        message = "Source returned metadata successfully."
+        if status == "failed":
+            result_status = "failed"
+            message = "Source validation failed while collecting a small metadata sample."
+        elif status == "not_run":
+            skip_reason = str(stat.get("skip_reason") or "").strip()
+            if skip_reason == "missing_required_config":
+                result_status = "blocked"
+                message = "Missing required source configuration."
+            else:
+                result_status = "skipped"
+                message = skip_reason.replace("_", " ") or "Source validation was skipped."
+        elif status != "succeeded":
+            result_status = status or "unknown"
+            message = f"Source finished with collector status {result_status}."
+        elif int(stat.get("collected_count") or 0) == 0:
+            message = "Source responded successfully but returned zero metadata samples."
+        result = {
+            "source_id": source_id,
+            "status": result_status,
+            "sample_count": int(stat.get("collected_count") or 0),
+            "checked_at": str(stat.get("recorded_at") or ""),
+            "message": message,
+        }
+        error = errors_by_source.get(source_id) or stat
+        if result_status == "failed":
+            result["error_type"] = str(error.get("error_type") or "Error")
+            result["error"] = str(error.get("error") or "")
+        results[source_id] = result
+    for source_id, error in errors_by_source.items():
+        if source_id in results:
+            continue
+        results[source_id] = {
+            "source_id": source_id,
+            "status": "failed",
+            "sample_count": 0,
+            "checked_at": str(error.get("recorded_at") or ""),
+            "message": "Source validation failed before collector stats were recorded.",
+            "error_type": str(error.get("error_type") or "Error"),
+            "error": str(error.get("error") or ""),
+        }
+    return [results[source_id] for source_id in sorted(results)]
 
 
 def radar_oa_enrichment_summary(
@@ -929,6 +4706,30 @@ def format_radar_oa_enrichment(summary: dict[str, Any]) -> str:
         f"configured={'yes' if summary.get('configured') else 'no'} "
         f"sources={source_text}"
     )
+
+
+def format_radar_oa_enrichment_actions(summary: dict[str, Any], *, product: str = "shared") -> list[str]:
+    if not isinstance(summary, dict) or not summary:
+        return []
+    if str(summary.get("status") or "") != "missing_recommended":
+        return []
+    recommended = summary.get("recommended_config") if isinstance(summary.get("recommended_config"), list) else []
+    needs_unpaywall = any(
+        isinstance(entry, dict) and str(entry.get("key") or "") == "unpaywall_email_configured"
+        for entry in recommended
+    )
+    if not needs_unpaywall:
+        return []
+    if product == "team":
+        env_text = "RADAR_UNPAYWALL_EMAIL, UNPAYWALL_EMAIL, or RADAR_SOURCE_CONTACT_EMAIL"
+    elif product == "personal":
+        env_text = "PERSONAL_RADAR_UNPAYWALL_EMAIL, UNPAYWALL_EMAIL, PERSONAL_RADAR_SOURCE_CONTACT_EMAIL, or RADAR_SOURCE_CONTACT_EMAIL"
+    else:
+        env_text = "UNPAYWALL_EMAIL or a Radar source-contact email"
+    return [
+        "Next: unpaywall / contact / add_unpaywall_contact - "
+        f"Set {env_text} so DOI-bearing candidates get legal OA/PDF checks."
+    ]
 
 
 def radar_scoring_profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -1433,6 +5234,8 @@ def normalize_release_date(value: Any) -> str:
         return value.astimezone(timezone.utc).date().isoformat()
     if isinstance(value, (int, float)):
         timestamp = float(value)
+        if timestamp.is_integer() and 1000 <= int(timestamp) <= 9999:
+            return f"{int(timestamp):04d}"
         if timestamp > 10_000_000_000:
             timestamp = timestamp / 1000
         try:
@@ -1498,27 +5301,60 @@ def source_record_release_date(source_record: dict[str, Any]) -> str:
     for key in ("release_date", "publication_date", "publicationDate", "published_at", "published_date", "published"):
         selected = normalize_release_date(source_record.get(key))
         if selected:
+            if release_date_needs_year_recovery(selected):
+                recovered = year_level_release_date_from_record(source_record)
+                if recovered:
+                    return recovered
             return selected
     for key in ("pdate", "tcdate", "cdate"):
         selected = normalize_release_date(source_record.get(key))
         if selected:
+            if release_date_needs_year_recovery(selected):
+                recovered = year_level_release_date_from_record(source_record)
+                if recovered:
+                    return recovered
             return selected
     selected = release_date_from_date_parts(source_record)
     if selected:
+        if release_date_needs_year_recovery(selected):
+            recovered = year_level_release_date_from_record(source_record)
+            if recovered:
+                return recovered
         return selected
-    year = source_record.get("venue_year") or source_record.get("openreview_venue_year")
-    return normalize_release_date(year)
+    return year_level_release_date_from_record(source_record, keys=("venue_year", "openreview_venue_year"))
 
 
 def paper_release_date(paper: dict[str, Any]) -> str:
     selected = normalize_release_date(paper.get("release_date"))
     if selected:
+        if release_date_needs_year_recovery(selected):
+            recovered = year_level_release_date_from_record(paper)
+            if recovered:
+                return recovered
         return selected
     for source_record in paper.get("source_records") or []:
         selected = source_record_release_date(source_record)
         if selected:
             return selected
     return normalize_release_date(paper.get("year"))
+
+
+def release_date_needs_year_recovery(value: Any) -> bool:
+    return normalize_release_date(value) == "1970-01-01"
+
+
+def year_level_release_date_from_record(
+    record: dict[str, Any],
+    *,
+    keys: tuple[str, ...] = ("year", "venue_year", "openreview_venue_year"),
+) -> str:
+    if not isinstance(record, dict):
+        return ""
+    for key in keys:
+        selected = normalize_release_date(record.get(key))
+        if re.fullmatch(r"\d{4}", selected or "") and selected != "1970":
+            return selected
+    return ""
 
 
 def dedupe_key(paper: dict[str, Any]) -> str:
@@ -1779,6 +5615,7 @@ def pdf_access_decision(
         "local_pdf_path": local_pdf_path,
         "downloaded": downloaded,
         "download_reason": selected_download_reason,
+        "download_decision_reason": selected_download_reason,
         "access_date": iso_timestamp(now or datetime.now(timezone.utc)),
     }
     if selected_provenance:
@@ -1790,6 +5627,34 @@ def pdf_access_decision(
                 "provenance_collected_at": selected_provenance.get("collected_at") or "",
             }
         )
+    return decision
+
+
+def finalize_pdf_access_decision(pdf_access: dict[str, Any]) -> dict[str, Any]:
+    decision = dict(pdf_access)
+    source_url = normalize_spaces(str(decision.get("source_url") or ""))
+    access_kind = normalize_spaces(str(decision.get("access_kind") or ""))
+    if not access_kind:
+        access_kind = metadata_only_access_kind({}, source_url)
+        decision["access_kind"] = access_kind
+    download_reason = normalize_spaces(
+        str(decision.get("download_reason") or decision.get("download_decision_reason") or "")
+    )
+    can_download = bool(decision.get("can_download"))
+    downloaded = bool(decision.get("downloaded"))
+    if download_reason:
+        decision["download_reason"] = download_reason
+        decision["download_decision_reason"] = download_reason
+    else:
+        download_reason = default_download_reason(
+            can_download=can_download,
+            downloaded=downloaded,
+            access_kind=access_kind,
+        )
+        decision["download_reason"] = download_reason
+        decision["download_decision_reason"] = download_reason
+    for field in ("source_url", "pdf_url", "license", "oa_status", "local_pdf_path", "access_date"):
+        decision.setdefault(field, "")
     return decision
 
 
@@ -2379,6 +6244,34 @@ def radar_run_health_action(run_summary: dict[str, Any] | None) -> dict[str, Any
             "message": "The latest Radar run completed with incomplete source coverage.",
             "source_ids": source_ids,
         }
+    primary_coverage = (
+        run_summary.get("primary_source_coverage")
+        if isinstance(run_summary.get("primary_source_coverage"), dict)
+        else {}
+    )
+    primary_status = str(primary_coverage.get("status") or "").strip().lower()
+    if primary_status in {"partial", "empty"}:
+        source_ids = [
+            str(source_id)
+            for source_id in (primary_coverage.get("missing_primary_source_ids") or [])
+        ]
+        if int(run_summary.get("recommendation_count") or 0) > 0:
+            return {
+                "status": "degraded",
+                "severity": "warning",
+                "action": "review_queue_and_expand_sources",
+                "reason": "partial_primary_source_coverage",
+                "message": "Review current recommendations, then add missing primary source families before relying on scheduled coverage.",
+                "source_ids": source_ids,
+            }
+        return {
+            "status": "degraded",
+            "severity": "warning",
+            "action": "expand_primary_sources",
+            "reason": "partial_primary_source_coverage",
+            "message": "The latest Radar run did not cover all primary source families from the objective.",
+            "source_ids": source_ids,
+        }
     if freshness.get("status") == "stale":
         return {
             "status": "stale",
@@ -2581,32 +6474,32 @@ def cache_open_access_pdf(
     now: datetime | None = None,
     max_bytes: int = 50 * 1024 * 1024,
 ) -> dict[str, Any]:
-    decision = dict(pdf_access or assess_pdf_access(paper, now=now))
+    decision = finalize_pdf_access_decision(dict(pdf_access or assess_pdf_access(paper, now=now)))
     if decision.get("downloaded") and decision.get("local_pdf_path"):
-        return decision
+        return finalize_pdf_access_decision(decision)
     if not decision.get("can_download"):
-        return {
+        return finalize_pdf_access_decision({
             **decision,
             "download_attempted": False,
             "downloaded": False,
             "download_error": "",
             "download_reason": "not_legally_downloadable",
-        }
+        })
 
     pdf_url = downloadable_pdf_url(paper, decision)
     if not pdf_url:
-        return {
+        return finalize_pdf_access_decision({
             **decision,
             "download_attempted": False,
             "downloaded": False,
             "download_error": "no_downloadable_pdf_url",
             "download_reason": "no_downloadable_pdf_url",
-        }
+        })
 
     try:
         content = fetcher(pdf_url)
     except Exception as error:
-        return {
+        return finalize_pdf_access_decision({
             **decision,
             "pdf_url": pdf_url,
             "download_attempted": True,
@@ -2614,9 +6507,9 @@ def cache_open_access_pdf(
             "download_error": f"fetch_failed:{type(error).__name__}",
             "download_error_detail": str(error),
             "download_reason": "download_failed",
-        }
+        })
     if len(content) > max_bytes:
-        return {
+        return finalize_pdf_access_decision({
             **decision,
             "pdf_url": pdf_url,
             "download_attempted": True,
@@ -2624,22 +6517,22 @@ def cache_open_access_pdf(
             "download_error": "pdf_exceeds_max_bytes",
             "max_bytes": max_bytes,
             "download_reason": "download_failed",
-        }
+        })
     if not looks_like_pdf(content):
-        return {
+        return finalize_pdf_access_decision({
             **decision,
             "pdf_url": pdf_url,
             "download_attempted": True,
             "downloaded": False,
             "download_error": "response_is_not_pdf",
             "download_reason": "download_failed",
-        }
+        })
 
     digest = hashlib.sha256(content).hexdigest()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / radar_pdf_cache_filename(paper, digest=digest)
     path.write_bytes(content)
-    return {
+    return finalize_pdf_access_decision({
         **decision,
         "pdf_url": pdf_url,
         "local_pdf_path": str(path),
@@ -2650,7 +6543,7 @@ def cache_open_access_pdf(
         "downloaded_at": iso_timestamp(now or datetime.now(timezone.utc)),
         "sha256": digest,
         "bytes": len(content),
-    }
+    })
 
 
 def cache_recommendation_pdfs(
@@ -2788,10 +6681,22 @@ def keyword_matches(text: str, keyword: str) -> bool:
     if not normalized_keyword:
         return False
     padded_text = f" {text} "
-    if f" {normalized_keyword} " in padded_text:
+    if f" {normalized_keyword} " in padded_text and not keyword_match_is_negated(text, normalized_keyword):
         return True
-    words = normalized_keyword.split()
-    return len(words) > 1 and all(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
+    return False
+
+
+def keyword_match_is_negated(text: str, normalized_keyword: str) -> bool:
+    padded_text = f" {text} "
+    needle = f" {normalized_keyword} "
+    index = padded_text.find(needle)
+    if index < 0:
+        return False
+    before = padded_text[:index].split()[-5:]
+    window = " ".join(before)
+    if any(signal in window for signal in ("does not", "do not", "did not", "not study", "not about")):
+        return True
+    return any(token in {"not", "no", "without", "excluding", "unrelated"} for token in before[-3:])
 
 
 def relevance_reasons(label: str, positive_matches: list[str], negative_matches: list[str]) -> list[str]:
@@ -2807,6 +6712,138 @@ def relevance_reasons(label: str, positive_matches: list[str], negative_matches:
     return reasons
 
 
+def radar_relevance_evaluation_cases() -> list[dict[str, Any]]:
+    return [
+        {
+            **case,
+            "paper": dict(case.get("paper") or {}),
+            "topic_ids": list(case.get("topic_ids") or []),
+            "expected_positive_keywords": list(case.get("expected_positive_keywords") or []),
+            "expected_negative_keywords": list(case.get("expected_negative_keywords") or []),
+        }
+        for case in RADAR_RELEVANCE_EVALUATION_CASES
+    ]
+
+
+def radar_relevance_evaluation_cases_for_interests(
+    interest_keywords: list[str] | tuple[str, ...] | None,
+    *,
+    topic_profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    active_topic_ids: set[str] = set()
+    for keyword in interest_keywords or []:
+        profile = radar_topic_keyword_profile(keyword, topic_profile=topic_profile)
+        active_topic_ids.update(str(topic_id) for topic_id in profile.get("topic_ids") or [] if str(topic_id).strip())
+    if not active_topic_ids:
+        return radar_relevance_evaluation_cases()
+    selected = []
+    for case in radar_relevance_evaluation_cases():
+        case_topic_ids = {str(topic_id) for topic_id in case.get("topic_ids") or [] if str(topic_id).strip()}
+        if not case_topic_ids or case_topic_ids.intersection(active_topic_ids):
+            selected.append(case)
+    return selected
+
+
+def evaluate_radar_relevance_cases(
+    cases: list[dict[str, Any]] | None = None,
+    *,
+    scorer: RadarScorer | None = None,
+    topic_profile: dict[str, Any] | None = None,
+    check_expected_keywords: bool = True,
+) -> dict[str, Any]:
+    selected_cases = cases if cases is not None else radar_relevance_evaluation_cases()
+    selected_scorer = scorer or (lambda paper: score_paper_against_profile(paper, topic_profile))
+    results = []
+    passed_count = 0
+    for case in selected_cases:
+        paper = dict(case.get("paper") or {})
+        scoring = selected_scorer(paper)
+        failures = radar_relevance_case_failures(
+            case,
+            scoring,
+            check_expected_keywords=check_expected_keywords,
+        )
+        passed = not failures
+        if passed:
+            passed_count += 1
+        results.append(
+            {
+                "id": str(case.get("id") or paper.get("id") or ""),
+                "title": str(paper.get("title") or ""),
+                "passed": passed,
+                "failures": failures,
+                "expected_min_label": str(case.get("expected_min_label") or ""),
+                "expected_max_label": str(case.get("expected_max_label") or ""),
+                "expected_min_score": case.get("expected_min_score"),
+                "expected_max_score": case.get("expected_max_score"),
+                "actual_label": str(scoring.get("label") or ""),
+                "actual_score": int(scoring.get("score") or 0),
+                "matched_positive_keywords": list(scoring.get("matched_positive_keywords") or []),
+                "matched_negative_keywords": list(scoring.get("matched_negative_keywords") or []),
+            }
+        )
+    total = len(results)
+    failed = [result for result in results if not result["passed"]]
+    return {
+        "status": "passed" if total and passed_count == total else "failed" if total else "empty",
+        "case_count": total,
+        "passed_count": passed_count,
+        "failed_count": len(failed),
+        "pass_rate": round(passed_count / total, 4) if total else 0.0,
+        "failed_case_ids": [result["id"] for result in failed],
+        "cases": results,
+    }
+
+
+def radar_relevance_case_failures(
+    case: dict[str, Any],
+    scoring: dict[str, Any],
+    *,
+    check_expected_keywords: bool = True,
+) -> list[str]:
+    failures = []
+    label = str(scoring.get("label") or "")
+    score = int(scoring.get("score") or 0)
+    min_label = str(case.get("expected_min_label") or "")
+    max_label = str(case.get("expected_max_label") or "")
+    if min_label and radar_relevance_label_rank(label) < radar_relevance_label_rank(min_label):
+        failures.append(f"label {label or 'unknown'} below expected minimum {min_label}")
+    if max_label and radar_relevance_label_rank(label) > radar_relevance_label_rank(max_label):
+        failures.append(f"label {label or 'unknown'} above expected maximum {max_label}")
+    min_score = case.get("expected_min_score")
+    if min_score is not None and score < int(min_score):
+        failures.append(f"score {score} below expected minimum {int(min_score)}")
+    max_score = case.get("expected_max_score")
+    if max_score is not None and score > int(max_score):
+        failures.append(f"score {score} above expected maximum {int(max_score)}")
+    if check_expected_keywords:
+        positives = set(normalize_match_text(str(value)) for value in scoring.get("matched_positive_keywords") or [])
+        for keyword in case.get("expected_positive_keywords") or []:
+            if normalize_match_text(str(keyword)) not in positives:
+                failures.append(f"missing positive keyword {keyword}")
+        negatives = set(normalize_match_text(str(value)) for value in scoring.get("matched_negative_keywords") or [])
+        for keyword in case.get("expected_negative_keywords") or []:
+            if normalize_match_text(str(keyword)) not in negatives:
+                failures.append(f"missing negative keyword {keyword}")
+    return failures
+
+
+def radar_relevance_label_rank(label: str) -> int:
+    return int(RADAR_RELEVANCE_LABEL_RANKS.get(str(label or ""), -1))
+
+
+def format_radar_relevance_evaluation(summary: dict[str, Any]) -> str:
+    if not summary:
+        return ""
+    return (
+        "Relevance evaluation: "
+        f"status={summary.get('status') or 'unknown'} "
+        f"passed={int(summary.get('passed_count') or 0)}/{int(summary.get('case_count') or 0)} "
+        f"failed={int(summary.get('failed_count') or 0)} "
+        f"pass_rate={float(summary.get('pass_rate') or 0):.2f}"
+    )
+
+
 def recommend_papers(
     papers: list[dict[str, Any]],
     *,
@@ -2818,6 +6855,8 @@ def recommend_papers(
     recommendations = []
     selected_scorer = scorer or (lambda paper: score_paper_against_profile(paper, topic_profile))
     for paper in merge_duplicate_papers(papers):
+        if not is_radar_paper_like(paper):
+            continue
         scoring = selected_scorer(paper)
         if scoring["label"] == "low_relevance":
             continue
@@ -2840,6 +6879,91 @@ def recommend_papers(
         ),
         reverse=True,
     )[:limit]
+
+
+NON_PAPER_TITLE_PREFIXES = (
+    "call for papers",
+    "call for participation",
+    "call for posters",
+    "call for talks",
+    "call for tutorials",
+    "call for workshops",
+    "workshop announcement",
+    "conference announcement",
+    "accepted papers announced",
+)
+
+NON_PAPER_TITLE_EXACT = {
+    "program",
+    "schedule",
+    "proceedings",
+    "table of contents",
+    "front matter",
+    "back matter",
+    "preface",
+    "editorial",
+    "erratum",
+    "corrigendum",
+}
+
+NON_PAPER_RECORD_TYPES = {
+    "announcement",
+    "blog",
+    "blog_post",
+    "call_for_papers",
+    "call_for_participation",
+    "conference_page",
+    "dataset",
+    "editorial",
+    "event",
+    "front_matter",
+    "keynote",
+    "news",
+    "poster",
+    "presentation",
+    "proceedings",
+    "program",
+    "schedule",
+    "slides",
+    "tutorial",
+    "video",
+    "webpage",
+    "workshop_page",
+}
+
+
+def is_radar_paper_like(paper: dict[str, Any]) -> bool:
+    return radar_paper_likeness(paper)["is_paper_like"]
+
+
+def radar_paper_likeness(paper: dict[str, Any]) -> dict[str, Any]:
+    title = normalize_spaces(paper.get("title") or "")
+    reasons: list[str] = []
+    if not title:
+        reasons.append("missing_title")
+    normalized_title = normalize_match_text(title)
+    if normalized_title in NON_PAPER_TITLE_EXACT:
+        reasons.append("non_paper_title")
+    if any(normalized_title.startswith(prefix) for prefix in NON_PAPER_TITLE_PREFIXES):
+        reasons.append("non_paper_title")
+    source_records = paper.get("source_records") if isinstance(paper.get("source_records"), list) else []
+    record_types = [
+        normalize_match_text(record.get(key))
+        for record in source_records
+        if isinstance(record, dict)
+        for key in ("record_type", "content_type", "publication_type", "type")
+        if record.get(key)
+    ]
+    paper_record_types = {"article", "conference", "conference_paper", "inproceedings", "journal_article", "paper", "preprint"}
+    if record_types and not any(record_type in paper_record_types for record_type in record_types):
+        if any(record_type in NON_PAPER_RECORD_TYPES for record_type in record_types):
+            reasons.append("non_paper_record_type")
+    return {
+        "is_paper_like": not reasons,
+        "reasons": sorted(set(reasons)),
+        "title": title,
+        "record_types": sorted(set(record_types)),
+    }
 
 
 def add_local_recommendation_summaries(
@@ -2948,7 +7072,7 @@ def build_recommendation_attention_summary(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
-    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    scoring = radar_effective_recommendation_scoring(recommendation)
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
     context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
     novelty = recommendation.get("novelty") if isinstance(recommendation.get("novelty"), dict) else {}
@@ -3895,6 +8019,9 @@ def build_radar_history_brief(
     source_policy_lines = radar_brief_source_policy_lines([bundle["run"] for bundle in bundles])
     if source_policy_lines:
         lines.extend(["## Source Policy", "", *source_policy_lines, ""])
+    primary_source_coverage_lines = radar_brief_primary_source_coverage_lines([bundle["run"] for bundle in bundles])
+    if primary_source_coverage_lines:
+        lines.extend(["## Primary Source Coverage", "", *primary_source_coverage_lines, ""])
     source_readiness_lines = radar_brief_source_readiness_lines([bundle["run"] for bundle in bundles])
     if source_readiness_lines:
         lines.extend(["## Source Readiness", "", *source_readiness_lines, ""])
@@ -4144,6 +8271,71 @@ def radar_history_source_policy_summary(
     return {
         **summary,
         "run_count": len(run_summaries),
+        "runs": run_summaries,
+    }
+
+
+def radar_history_primary_source_coverage_summary(
+    run_records: list[dict[str, Any]],
+    *,
+    generated_at: datetime | None = None,
+    days: int | None = 7,
+) -> dict[str, Any]:
+    selected_now = generated_at or datetime.now(timezone.utc)
+    selected_days = max(1, int(days)) if days else None
+    cutoff = selected_now - timedelta(days=selected_days) if selected_days else None
+    status_counts: dict[str, int] = {}
+    missing_primary_source_ids: set[str] = set()
+    missing_config_primary_source_ids: set[str] = set()
+    covered_primary_source_ids: set[str] = set()
+    run_summaries = []
+    for record in run_records:
+        bundle = normalize_radar_brief_bundle(record)
+        if not bundle:
+            continue
+        run = bundle["run"]
+        run_time = radar_brief_run_time(run)
+        if run_time is None or (cutoff is not None and run_time < cutoff):
+            continue
+        sources = run.get("sources") if isinstance(run.get("sources"), list) else []
+        if not sources:
+            continue
+        collection_config = run.get("collection_config") if isinstance(run.get("collection_config"), dict) else {}
+        stored_summary = run.get("primary_source_coverage") if isinstance(run.get("primary_source_coverage"), dict) else {}
+        summary = stored_summary or radar_primary_source_coverage_summary(sources, collection_config)
+        status = str(summary.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status) or 0) + 1
+        missing = [str(source_id) for source_id in summary.get("missing_primary_source_ids") or []]
+        missing_config = [
+            str(source_id) for source_id in summary.get("missing_config_primary_source_ids") or []
+        ]
+        covered = [str(source_id) for source_id in summary.get("covered_primary_source_ids") or []]
+        missing_primary_source_ids.update(missing)
+        missing_config_primary_source_ids.update(missing_config)
+        covered_primary_source_ids.update(covered)
+        run_summaries.append(
+            {
+                "run_id": run.get("id") or "",
+                "started_at": run.get("started_at") or "",
+                "completed_at": run.get("completed_at") or "",
+                "status": status,
+                "covered_count": int(summary.get("covered_count") or 0),
+                "required_count": int(summary.get("required_count") or 0),
+                "missing_count": int(summary.get("missing_count") or 0),
+                "missing_primary_source_ids": missing,
+                "missing_config_primary_source_ids": missing_config,
+            }
+        )
+    run_summaries.sort(key=lambda run: str(run.get("started_at") or ""), reverse=True)
+    return {
+        "run_count": len(run_summaries),
+        "status_counts": dict(sorted(status_counts.items())),
+        "complete_run_count": int(status_counts.get("complete") or 0),
+        "partial_run_count": int(status_counts.get("partial") or 0),
+        "empty_run_count": int(status_counts.get("empty") or 0),
+        "covered_primary_source_ids": sorted(covered_primary_source_ids),
+        "missing_primary_source_ids": sorted(missing_primary_source_ids),
+        "missing_config_primary_source_ids": sorted(missing_config_primary_source_ids),
         "runs": run_summaries,
     }
 
@@ -4675,7 +8867,10 @@ def radar_brief_collection_config_text(config: dict[str, Any]) -> str:
     if config.get("summarize"):
         provider = config.get("summary_provider") or "local"
         summary_limit = config.get("summary_limit")
-        parts.append(f"summary={provider}{f' limit={summary_limit}' if summary_limit else ''}")
+        summary_min_score = config.get("summary_min_score")
+        limit_text = f" limit={summary_limit}" if summary_limit else ""
+        min_score_text = f" min_score={summary_min_score}" if summary_min_score is not None else ""
+        parts.append(f"summary={provider}{limit_text}{min_score_text}")
     if config.get("cache_pdfs"):
         parts.append(f"cache_pdfs=true max_bytes={config.get('pdf_cache_max_bytes') or 'default'}")
     if config.get("import_results"):
@@ -4767,6 +8962,33 @@ def radar_brief_source_policy_lines(runs: list[dict[str, Any]]) -> list[str]:
         suffix = f": {', '.join(f'`{source_id}`' for source_id in trend_ids[:5])}" if trend_ids else ""
         lines.append(f"- Trend signals are secondary context, not authoritative bibliographic records{suffix}")
     return lines
+
+
+def radar_brief_primary_source_coverage_lines(runs: list[dict[str, Any]]) -> list[str]:
+    summary = radar_history_primary_source_coverage_summary(runs, days=None)
+    if int(summary.get("run_count") or 0) <= 0:
+        return []
+    parts = [
+        f"runs={int(summary.get('run_count') or 0)}",
+        f"statuses={format_status_counts(summary.get('status_counts') or {})}",
+        f"complete={int(summary.get('complete_run_count') or 0)}",
+        f"partial={int(summary.get('partial_run_count') or 0)}",
+    ]
+    missing = (
+        summary.get("missing_primary_source_ids")
+        if isinstance(summary.get("missing_primary_source_ids"), list)
+        else []
+    )
+    missing_config = (
+        summary.get("missing_config_primary_source_ids")
+        if isinstance(summary.get("missing_config_primary_source_ids"), list)
+        else []
+    )
+    if missing:
+        parts.append(f"missing={', '.join(str(source_id) for source_id in missing[:8])}")
+    if missing_config:
+        parts.append(f"missing_config={', '.join(str(source_id) for source_id in missing_config[:8])}")
+    return ["- Primary source coverage: " + "; ".join(parts)]
 
 
 def radar_brief_source_provenance_lines(bundles: list[dict[str, Any]]) -> list[str]:
@@ -4946,7 +9168,7 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
     attention = recommendation.get("attention_summary") if isinstance(recommendation.get("attention_summary"), dict) else {}
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
     context = radar_brief_recommendation_context(recommendation)
-    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    scoring = radar_effective_recommendation_scoring(recommendation)
     source_metadata = radar_record_source_metadata(recommendation)
     source_ids = unique_normalized_terms(
         [
@@ -4972,6 +9194,14 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
         or recommendation.get("matched_terms")
         or []
     )
+    triage_hint = radar_brief_recommendation_triage_hint(recommendation)
+    reason_source = {
+        **recommendation,
+        "triage_hint": triage_hint,
+        "context": context,
+        "attention_summary": dict(attention),
+        "summary": dict(summary),
+    }
     return {
         "rank": max(1, int(rank)),
         "title": radar_brief_recommendation_title(recommendation),
@@ -4990,11 +9220,12 @@ def radar_brief_recommendation_record(entry: dict[str, Any], *, rank: int) -> di
         "score": radar_brief_recommendation_score(recommendation),
         "label": radar_brief_recommendation_label(recommendation),
         "review": recommendation_review_record(recommendation),
-        "triage_hint": radar_brief_recommendation_triage_hint(recommendation),
+        "triage_hint": triage_hint,
         "novelty": radar_brief_recommendation_novelty(recommendation),
         "attention_summary": dict(attention),
         "summary": dict(summary),
         "signal_lines": radar_latest_signal_lines(recommendation),
+        "reason_to_read": radar_reason_to_read_summary(reason_source),
         "context": context,
         "pdf_access": pdf_access,
         "pdf_policy": pdf_access_report_text(pdf_access),
@@ -5030,7 +9261,7 @@ def radar_brief_recommendation_title(recommendation: dict[str, Any]) -> str:
 
 def radar_brief_recommendation_release_date(recommendation: dict[str, Any]) -> str:
     selected = normalize_release_date(recommendation.get("release_date"))
-    if selected:
+    if selected and not release_date_needs_year_recovery(selected):
         return selected
     paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
     selected = paper_release_date(paper)
@@ -5038,12 +9269,15 @@ def radar_brief_recommendation_release_date(recommendation: dict[str, Any]) -> s
         return selected
     nested = recommendation.get("recommendation") if isinstance(recommendation.get("recommendation"), dict) else {}
     nested_paper = nested.get("paper") if isinstance(nested.get("paper"), dict) else {}
-    return paper_release_date(nested_paper)
+    selected = paper_release_date(nested_paper)
+    if selected:
+        return selected
+    return normalize_release_date(recommendation.get("release_date"))
 
 
 def radar_brief_recommendation_score(recommendation: dict[str, Any]) -> int:
-    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
-    score = recommendation.get("score", scoring.get("score", 0))
+    scoring = radar_effective_recommendation_scoring(recommendation)
+    score = scoring.get("score", 0)
     try:
         return int(float(score or 0))
     except (TypeError, ValueError):
@@ -5051,8 +9285,8 @@ def radar_brief_recommendation_score(recommendation: dict[str, Any]) -> int:
 
 
 def radar_brief_recommendation_label(recommendation: dict[str, Any]) -> str:
-    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
-    return str(recommendation.get("label") or scoring.get("label") or "needs_review")
+    scoring = radar_effective_recommendation_scoring(recommendation)
+    return str(scoring.get("label") or "needs_review")
 
 
 def recommendation_review_record(recommendation: dict[str, Any]) -> dict[str, Any]:
@@ -5148,6 +9382,201 @@ def radar_pdf_access_summary(records: list[dict[str, Any]] | dict[str, dict[str,
     return summary
 
 
+def radar_queue_evidence_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
+    values = [record for record in (records.values() if isinstance(records, dict) else records) if isinstance(record, dict)]
+    missing: dict[str, list[str]] = {
+        "reason_to_read": [],
+        "existing_work_relation": [],
+        "source_link": [],
+        "source_provenance": [],
+        "pdf_access": [],
+        "pdf_policy_evidence": [],
+    }
+    counts = {
+        "reason_to_read": 0,
+        "existing_work_relation": 0,
+        "source_link": 0,
+        "source_provenance": 0,
+        "pdf_access": 0,
+        "pdf_policy_evidence": 0,
+        "context_signal": 0,
+    }
+    for record in values:
+        title = normalize_spaces(str(record.get("title") or record.get("dedupe_key") or "untitled"))
+        reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+        reason_points = reason.get("points") if isinstance(reason.get("points"), list) else []
+        signal_lines = record.get("signal_lines") if isinstance(record.get("signal_lines"), list) else []
+        if radar_reason_to_read_is_actionable(reason, signal_lines):
+            counts["reason_to_read"] += 1
+        else:
+            missing["reason_to_read"].append(title)
+
+        if radar_queue_existing_work_relation(record):
+            counts["existing_work_relation"] += 1
+        else:
+            missing["existing_work_relation"].append(title)
+
+        links = record.get("links") if isinstance(record.get("links"), dict) else {}
+        if record.get("link") or any(str(value).strip() for value in links.values()):
+            counts["source_link"] += 1
+        else:
+            missing["source_link"].append(title)
+
+        provenance = radar_history_source_provenance(record)
+        if provenance.get("source_id") or provenance.get("source_class") or provenance.get("source_url"):
+            counts["source_provenance"] += 1
+        else:
+            missing["source_provenance"].append(title)
+
+        pdf_access = radar_history_pdf_access(record)
+        if pdf_access:
+            counts["pdf_access"] += 1
+            missing_policy_fields = pdf_access_policy_missing_fields(pdf_access)
+            if missing_policy_fields:
+                missing["pdf_policy_evidence"].append(
+                    f"{title} ({', '.join(missing_policy_fields[:4])})"
+                )
+            else:
+                counts["pdf_policy_evidence"] += 1
+        else:
+            missing["pdf_access"].append(title)
+            missing["pdf_policy_evidence"].append(title)
+
+        context_text = " ".join(
+            [
+                *(str(point) for point in reason_points),
+                *(str(line) for line in signal_lines),
+                radar_queue_existing_work_relation(record),
+            ]
+        ).lower()
+        if any(marker in context_text for marker in ("context:", "related", "ongoing", "prior", "library")):
+            counts["context_signal"] += 1
+
+    total = len(values)
+    missing = {key: titles for key, titles in missing.items() if titles}
+    if total == 0:
+        status = "warning"
+        next_action = "collect_or_review_queue"
+        message = "No active queue papers are available to verify recommendation evidence."
+    elif missing:
+        status = "warning"
+        next_action = "improve_recommendation_evidence"
+        message = "Some active queue papers are missing recommendation evidence fields."
+    else:
+        status = "passed"
+        next_action = "review_reason_to_read"
+        message = "Active queue papers include the core recommendation evidence fields."
+    return {
+        "status": status,
+        "next_action": next_action,
+        "message": message,
+        "total": total,
+        "counts": counts,
+        "missing": {key: titles[:5] for key, titles in missing.items()},
+    }
+
+
+def radar_reason_to_read_is_actionable(reason: dict[str, Any], signal_lines: list[Any]) -> bool:
+    headline = normalize_spaces(str(reason.get("headline") or ""))
+    points = reason.get("points") if isinstance(reason.get("points"), list) else []
+    text_parts = [headline, *(normalize_spaces(str(point)) for point in points), *(normalize_spaces(str(line)) for line in signal_lines)]
+    evidence_text = " ".join(part for part in text_parts if part).lower()
+    if not evidence_text:
+        return False
+    placeholder_markers = (
+        "metadata is ambiguous",
+        "reviewer should decide",
+        "decide whether to watch",
+        "decide whether to import",
+        "human review",
+    )
+    actionable_markers = (
+        "connects to configured interests",
+        "matched terms",
+        "matches ",
+        "matched: ",
+    )
+    if any(marker in evidence_text for marker in actionable_markers):
+        return True
+    return not any(marker in evidence_text for marker in placeholder_markers)
+
+
+def radar_queue_existing_work_relation(record: dict[str, Any]) -> str:
+    attention_candidates = []
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    if isinstance(record.get("attention_summary"), dict):
+        attention_candidates.append(record["attention_summary"])
+    if isinstance(latest.get("attention_summary"), dict):
+        attention_candidates.append(latest["attention_summary"])
+    for attention in attention_candidates:
+        relation = normalize_spaces(str(attention.get("relationship_to_existing_work") or ""))
+        if relation:
+            return relation
+
+    for source in (record, latest):
+        context = source.get("context") if isinstance(source.get("context"), dict) else {}
+        relation = normalize_spaces(str(context.get("relationship_summary") or ""))
+        if relation:
+            return relation
+        related_items = context.get("related_items") if isinstance(context.get("related_items"), list) else []
+        if related_items:
+            titles = [
+                normalize_spaces(str(item.get("title") or item.get("id") or ""))
+                for item in related_items
+                if isinstance(item, dict)
+            ]
+            titles = [title for title in titles if title]
+            return f"Related to existing context: {', '.join(titles[:2])}." if titles else "Related context is present."
+
+    reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+    reason_points = reason.get("points") if isinstance(reason.get("points"), list) else []
+    for point in reason_points:
+        if isinstance(point, dict):
+            label = normalize_spaces(str(point.get("label") or "")).lower()
+            text = normalize_spaces(str(point.get("text") or ""))
+            if text and label in {"existing work", "context", "related work"}:
+                return text
+        else:
+            text = normalize_spaces(str(point or ""))
+            if text and any(marker in text.lower() for marker in ("existing", "context", "related", "prior", "library")):
+                return text
+
+    for line in record.get("signal_lines") if isinstance(record.get("signal_lines"), list) else []:
+        text = normalize_spaces(str(line or ""))
+        if text and any(marker in text.lower() for marker in ("context:", "attention:", "existing", "related", "prior", "library")):
+            return text
+    provenance = radar_history_source_provenance(record)
+    links = record.get("links") if isinstance(record.get("links"), dict) else {}
+    has_source_evidence = bool(
+        record.get("link")
+        or any(str(value).strip() for value in links.values())
+        or provenance.get("source_id")
+        or provenance.get("source_class")
+        or radar_history_pdf_access(record)
+    )
+    if has_source_evidence and (reason.get("headline") or reason_points):
+        return "No related existing work is recorded for this queued paper yet."
+    return ""
+
+
+def pdf_access_policy_missing_fields(pdf_access: dict[str, Any]) -> list[str]:
+    missing = []
+    required_non_empty = ("source_url", "access_date", "access_kind", "reason")
+    for field in required_non_empty:
+        if not normalize_spaces(str(pdf_access.get(field) or "")):
+            missing.append(field)
+    if not normalize_spaces(
+        str(pdf_access.get("download_decision_reason") or pdf_access.get("download_reason") or "")
+    ):
+        missing.append("download_decision_reason")
+    for field in ("license", "oa_status", "local_pdf_path"):
+        if field not in pdf_access:
+            missing.append(field)
+    if pdf_access.get("downloaded") and not normalize_spaces(str(pdf_access.get("local_pdf_path") or "")):
+        missing.append("local_pdf_path")
+    return list(dict.fromkeys(missing))
+
+
 def radar_triage_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> dict[str, Any]:
     values = list(records.values()) if isinstance(records, dict) else list(records)
     summary: dict[str, Any] = {
@@ -5179,6 +9608,408 @@ def radar_triage_summary(records: list[dict[str, Any]] | dict[str, dict[str, Any
             key=lambda item: (-int(item[1]), str(item[0])),
         )[0][0]
     return summary
+
+
+def radar_daily_queue_guidance(
+    records: list[dict[str, Any]] | dict[str, dict[str, Any]],
+    *,
+    review_counts: dict[str, Any] | None = None,
+    latest_run: dict[str, Any] | None = None,
+    access_summary: dict[str, Any] | None = None,
+    triage_summary: dict[str, Any] | None = None,
+    source_health: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    selected_review_counts = review_counts if isinstance(review_counts, dict) else {}
+    selected_latest_run = latest_run if isinstance(latest_run, dict) else {}
+    selected_access = access_summary if isinstance(access_summary, dict) else {}
+    selected_triage = triage_summary if isinstance(triage_summary, dict) else {}
+    selected_source_health = source_health if isinstance(source_health, dict) else {}
+    health_action = (
+        selected_latest_run.get("health_action")
+        if isinstance(selected_latest_run.get("health_action"), dict)
+        else {}
+    )
+    top_action = str(selected_triage.get("top_action") or "")
+    if values and top_action:
+        next_action = top_action
+        next_source = "triage"
+        status = "active"
+    elif selected_source_health:
+        next_action = str(selected_source_health.get("next_action") or "inspect_latest_run")
+        next_source = "source_health"
+        status = str(selected_source_health.get("severity") or selected_source_health.get("status") or "review")
+    elif health_action:
+        next_action = str(health_action.get("action") or "inspect_latest_run")
+        next_source = "latest_run_health"
+        status = str(health_action.get("severity") or "review")
+    else:
+        next_action = "run_literature_radar"
+        next_source = "empty_queue"
+        status = "empty"
+    freshness = (
+        selected_latest_run.get("freshness")
+        if isinstance(selected_latest_run.get("freshness"), dict)
+        else {}
+    )
+    return {
+        "status": status,
+        "next_action": next_action,
+        "next_source": next_source,
+        "active_count": len(values),
+        "unreviewed_count": int(selected_review_counts.get("unreviewed") or 0),
+        "watch_count": int(selected_review_counts.get("watch") or 0),
+        "downloadable_count": int(selected_access.get("downloadable") or 0),
+        "top_lane": top_action,
+        "freshness_status": str(freshness.get("status") or "") if freshness else "",
+    }
+
+
+def format_radar_daily_queue_guidance(guidance: dict[str, Any] | None) -> str:
+    record = guidance if isinstance(guidance, dict) else {}
+    parts = [
+        "Daily guidance:",
+        f"next={record.get('next_action') or 'unknown'}",
+        f"active={int(record.get('active_count') or 0)}",
+        f"unreviewed={int(record.get('unreviewed_count') or 0)}",
+        f"watch={int(record.get('watch_count') or 0)}",
+        f"downloadable={int(record.get('downloadable_count') or 0)}",
+    ]
+    if record.get("top_lane"):
+        parts.append(f"top_lane={record.get('top_lane')}")
+    if record.get("freshness_status"):
+        parts.append(f"freshness={record.get('freshness_status')}")
+    return " | ".join(parts)
+
+
+def radar_daily_source_health(
+    latest_run: dict[str, Any] | None,
+    *,
+    configured_primary_source_coverage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    run = latest_run if isinstance(latest_run, dict) else {}
+    configured_primary = (
+        configured_primary_source_coverage
+        if isinstance(configured_primary_source_coverage, dict)
+        else {}
+    )
+    health = (
+        run.get("health_action")
+        if isinstance(run.get("health_action"), dict)
+        else radar_run_health_action(run)
+    )
+    source_coverage = run.get("source_coverage") if isinstance(run.get("source_coverage"), dict) else {}
+    primary_coverage = (
+        run.get("primary_source_coverage")
+        if isinstance(run.get("primary_source_coverage"), dict)
+        else {}
+    )
+    source_readiness = run.get("source_readiness") if isinstance(run.get("source_readiness"), dict) else {}
+    oa_enrichment = run.get("oa_enrichment") if isinstance(run.get("oa_enrichment"), dict) else {}
+
+    severity = str(health.get("severity") or "info")
+    status = str(health.get("status") or "unknown")
+    action = str(health.get("action") or "inspect_latest_run")
+    message = normalize_spaces(health.get("message") or "")
+    details: list[str] = []
+
+    def source_list(*keys: str) -> list[str]:
+        values: list[str] = []
+        for key in keys:
+            selected = source_coverage.get(key) if isinstance(source_coverage.get(key), list) else []
+            values.extend(str(source_id) for source_id in selected if str(source_id).strip())
+        return unique_normalized_terms(values)
+
+    blocked = source_readiness.get("blocked_source_ids") if isinstance(source_readiness.get("blocked_source_ids"), list) else []
+    warnings = source_readiness.get("warning_source_ids") if isinstance(source_readiness.get("warning_source_ids"), list) else []
+    failed_or_missing = source_list("failed_source_ids", "partial_source_ids", "not_run_source_ids")
+    missing_primary = (
+        primary_coverage.get("missing_primary_source_ids")
+        if isinstance(primary_coverage.get("missing_primary_source_ids"), list)
+        else []
+    )
+    missing_primary_config = (
+        primary_coverage.get("missing_config_primary_source_ids")
+        if isinstance(primary_coverage.get("missing_config_primary_source_ids"), list)
+        else []
+    )
+    if message:
+        details.append(message)
+    if blocked:
+        details.append("Configure blocked sources: " + ", ".join(str(source_id) for source_id in blocked[:5]))
+    if failed_or_missing:
+        details.append("Inspect source coverage: " + ", ".join(failed_or_missing[:5]))
+    if missing_primary:
+        details.append("Missing primary source families: " + ", ".join(str(source_id) for source_id in missing_primary[:5]))
+    if missing_primary_config:
+        details.append("Missing primary-source config: " + ", ".join(str(source_id) for source_id in missing_primary_config[:5]))
+    if warnings:
+        details.append("Recommended source setup warnings: " + ", ".join(str(source_id) for source_id in warnings[:5]))
+    if oa_enrichment and oa_enrichment.get("status") == "missing_recommended":
+        details.append("Add Unpaywall/contact setup before relying on legal OA/PDF enrichment.")
+    configured_status = str(configured_primary.get("status") or "")
+    configured_covered = int(configured_primary.get("covered_count") or 0)
+    configured_required = int(configured_primary.get("required_count") or 0)
+    run_covered = int(primary_coverage.get("covered_count") or 0)
+    configured_missing_config = (
+        configured_primary.get("missing_config_primary_source_ids")
+        if isinstance(configured_primary.get("missing_config_primary_source_ids"), list)
+        else []
+    )
+    latest_run_missing_for_config = action == "run_literature_radar" and str(health.get("reason") or "") == "no_latest_run"
+    if configured_primary and configured_covered > run_covered:
+        coverage_context = (
+            "no latest run exists yet."
+            if latest_run_missing_for_config
+            else "latest run used a narrower source set."
+        )
+        details.append(
+            f"Saved source defaults cover {configured_covered}/{configured_required or configured_covered} "
+            f"primary families; {coverage_context}"
+        )
+    if configured_missing_config:
+        details.append(
+            "Saved source defaults still need primary-source config: "
+            + ", ".join(str(source_id) for source_id in configured_missing_config[:5])
+        )
+    configured_broader_than_run = bool(configured_primary and configured_covered > run_covered)
+    effective_action = action
+    effective_reason = str(health.get("reason") or "unknown")
+    effective_headline = str(health.get("message") or "Inspect latest source health.")
+    effective_source_ids = [str(source_id) for source_id in (health.get("source_ids") or [])]
+    if configured_broader_than_run and action in {"review_queue_and_expand_sources", "run_literature_radar"}:
+        latest_run_missing = latest_run_missing_for_config
+        effective_reason = (
+            "no_latest_run_saved_defaults_available"
+            if latest_run_missing
+            else "latest_run_narrower_than_saved_defaults"
+        )
+        if configured_missing_config:
+            effective_action = "run_saved_defaults_and_configure_primary_sources"
+            if latest_run_missing:
+                effective_headline = "Run saved source defaults and configure remaining primary-source metadata."
+            else:
+                effective_headline = (
+                    "Review current recommendations, run saved source defaults, and configure remaining "
+                    "primary-source metadata."
+                )
+            effective_source_ids = [str(source_id) for source_id in configured_missing_config]
+        else:
+            effective_action = "run_saved_source_defaults"
+            if latest_run_missing:
+                effective_headline = "Run saved source defaults for primary-source coverage."
+            else:
+                effective_headline = (
+                    "Review current recommendations, then run saved source defaults for broader primary-source coverage."
+                )
+
+    return {
+        "status": status,
+        "severity": severity,
+        "next_action": effective_action,
+        "reason": effective_reason,
+        "headline": effective_headline,
+        "source_ids": effective_source_ids,
+        "details": unique_signal_lines(details)[:5],
+        "source_coverage_status": str(source_coverage.get("status") or ""),
+        "primary_source_coverage_status": str(primary_coverage.get("status") or ""),
+        "configured_primary_source_coverage_status": configured_status,
+        "configured_primary_source_covered_count": configured_covered,
+        "configured_primary_source_required_count": configured_required,
+        "source_readiness_status": str(source_readiness.get("status") or ""),
+        "oa_enrichment_status": str(oa_enrichment.get("status") or ""),
+    }
+
+
+def format_radar_daily_source_health(summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    if not record:
+        return ""
+    parts = [
+        "Source health:",
+        f"status={record.get('status') or 'unknown'}",
+        f"action={record.get('next_action') or 'inspect'}",
+        f"reason={record.get('reason') or 'unknown'}",
+    ]
+    for key, label in (
+        ("source_coverage_status", "coverage"),
+        ("primary_source_coverage_status", "primary"),
+        ("configured_primary_source_coverage_status", "configured_primary"),
+        ("source_readiness_status", "readiness"),
+        ("oa_enrichment_status", "oa"),
+    ):
+        if record.get(key):
+            value = str(record.get(key) or "")
+            if key == "configured_primary_source_coverage_status":
+                covered = int(record.get("configured_primary_source_covered_count") or 0)
+                required = int(record.get("configured_primary_source_required_count") or 0)
+                if covered or required:
+                    value = f"{value}({covered}/{required or covered})"
+            parts.append(f"{label}={value}")
+    source_ids = record.get("source_ids") if isinstance(record.get("source_ids"), list) else []
+    if source_ids:
+        parts.append(f"sources={', '.join(str(source_id) for source_id in source_ids[:5])}")
+    return " | ".join(parts)
+
+
+def radar_daily_review_plan(
+    records: list[dict[str, Any]] | dict[str, dict[str, Any]],
+    *,
+    guidance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    values = list(records.values()) if isinstance(records, dict) else list(records)
+    selected_guidance = guidance if isinstance(guidance, dict) else {}
+    if not values:
+        next_action = str(selected_guidance.get("next_action") or "run_literature_radar")
+        return {
+            "status": str(selected_guidance.get("status") or "empty"),
+            "headline": "No active Radar papers; run Literature Radar or inspect latest-run health.",
+            "primary": {},
+            "steps": [
+                {
+                    "action": next_action,
+                    "label": next_action.replace("_", " "),
+                    "reason": "The active queue is empty.",
+                }
+            ],
+        }
+
+    primary = values[0] if isinstance(values[0], dict) else {}
+    latest = (
+        primary.get("latest_recommendation")
+        if isinstance(primary.get("latest_recommendation"), dict)
+        else {}
+    )
+    paper = primary.get("paper") if isinstance(primary.get("paper"), dict) else {}
+    triage = primary.get("triage_hint") if isinstance(primary.get("triage_hint"), dict) else {}
+    attention = (
+        primary.get("attention_summary")
+        if isinstance(primary.get("attention_summary"), dict)
+        else latest.get("attention_summary")
+        if isinstance(latest.get("attention_summary"), dict)
+        else {}
+    )
+    title = str(primary.get("title") or paper.get("title") or latest.get("title") or "Untitled paper")
+    action = str(triage.get("action") or selected_guidance.get("next_action") or "review")
+    label = str(triage.get("label") or action.replace("_", " ").title())
+    reason = str(
+        triage.get("reason")
+        or attention.get("why_attention")
+        or latest.get("why_relevant")
+        or "Highest-priority active queue item."
+    )
+    signal_lines = primary.get("signal_lines") if isinstance(primary.get("signal_lines"), list) else []
+    signal = next((str(line) for line in signal_lines if str(line).strip()), "")
+    freshness_status = str(selected_guidance.get("freshness_status") or "")
+    effective_scoring = radar_effective_recommendation_scoring(primary)
+    primary_record = {
+        "dedupe_key": str(primary.get("dedupe_key") or ""),
+        "title": title,
+        "action": action,
+        "label": label,
+        "score": int(float(effective_scoring.get("score") or 0)),
+        "release_date": radar_review_primary_release_date(primary, paper),
+        "link": str(primary.get("link") or radar_record_best_link(primary)),
+        "reason": reason,
+        "signal": signal,
+    }
+    steps = [
+        {
+            "action": "review_primary",
+            "label": f"{label} top candidate",
+            "target_dedupe_key": primary_record["dedupe_key"],
+            "title": title,
+            "reason": reason,
+        }
+    ]
+    remaining = max(0, len(values) - 1)
+    if remaining:
+        steps.append(
+            {
+                "action": "continue_active_queue",
+                "label": f"Review {remaining} more active candidate{'' if remaining == 1 else 's'}",
+                "reason": "Continue in stored queue order after the top paper.",
+            }
+        )
+    if freshness_status == "stale":
+        steps.append(
+            {
+                "action": "refresh_after_review",
+                "label": "Refresh Radar after review",
+                "reason": "The latest run is stale for the selected freshness window.",
+            }
+        )
+    return {
+        "status": "active",
+        "headline": f"Start with {title}.",
+        "primary": primary_record,
+        "steps": steps,
+    }
+
+
+def radar_review_primary_release_date(primary: dict[str, Any], paper: dict[str, Any]) -> str:
+    selected = normalize_release_date(primary.get("release_date") if isinstance(primary, dict) else "")
+    if selected and not release_date_needs_year_recovery(selected):
+        return selected
+    recovered = paper_release_date(paper if isinstance(paper, dict) else {})
+    if recovered:
+        return recovered
+    return selected
+
+
+def format_radar_daily_review_plan(plan: dict[str, Any] | None) -> str:
+    record = plan if isinstance(plan, dict) else {}
+    primary = record.get("primary") if isinstance(record.get("primary"), dict) else {}
+    parts = [
+        "Daily review:",
+        str(record.get("headline") or "No active review plan."),
+    ]
+    if primary:
+        if primary.get("label"):
+            parts.append(f"action={primary.get('label')}")
+        if primary.get("score") is not None:
+            parts.append(f"score={int(primary.get('score') or 0)}")
+        if primary.get("release_date"):
+            parts.append(f"released={primary.get('release_date')}")
+    return " | ".join(parts)
+
+
+def append_radar_daily_review_plan_to_report(report: str, plan: dict[str, Any] | None) -> str:
+    record = plan if isinstance(plan, dict) else {}
+    if not record:
+        return report
+    primary = record.get("primary") if isinstance(record.get("primary"), dict) else {}
+    steps = record.get("steps") if isinstance(record.get("steps"), list) else []
+    lines = [report.rstrip(), "", "## Daily Review Plan", "", f"- {format_radar_daily_review_plan(record)}"]
+    if primary:
+        if primary.get("reason"):
+            lines.append(f"- Reason: {primary.get('reason')}")
+        if primary.get("link"):
+            lines.append(f"- Link: {primary.get('link')}")
+    for step in steps[:4]:
+        if not isinstance(step, dict):
+            continue
+        label = str(step.get("label") or step.get("action") or "Review").strip()
+        reason = str(step.get("reason") or "").strip()
+        lines.append(f"- Step: {label}{f' - {reason}' if reason else ''}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def append_radar_daily_source_health_to_report(report: str, summary: dict[str, Any] | None) -> str:
+    record = summary if isinstance(summary, dict) else {}
+    if not record:
+        return report
+    lines = [report.rstrip(), "", "## Source Health", "", f"- {format_radar_daily_source_health(record)}"]
+    headline = normalize_spaces(record.get("headline") or "")
+    if headline:
+        lines.append(f"- Summary: {headline}")
+    for detail in record.get("details") or []:
+        detail_text = normalize_spaces(detail)
+        if detail_text:
+            lines.append(f"- Detail: {detail_text}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def normalize_radar_triage_action(value: Any) -> str:
@@ -5302,8 +10133,105 @@ def radar_history_source_provenance(record: dict[str, Any]) -> dict[str, Any]:
     for candidate in radar_source_metadata_candidates(record):
         provenance = candidate.get("source_provenance") if isinstance(candidate.get("source_provenance"), dict) else {}
         if provenance:
+            inferred = inferred_radar_history_source_provenance(record)
+            merged = dict(provenance)
+            for key, value in inferred.items():
+                if value not in ("", None, []) and not merged.get(key):
+                    merged[key] = value
+            return merged
+    return inferred_radar_history_source_provenance(record)
+
+
+def inferred_radar_history_source_provenance(record: dict[str, Any]) -> dict[str, Any]:
+    source_ids = [
+        str(source_id).strip()
+        for source_id in record.get("source_ids", [])
+        if str(source_id).strip()
+    ] if isinstance(record.get("source_ids"), list) else []
+    fallback_provenance: dict[str, Any] = {}
+    for candidate in radar_source_metadata_candidates(record):
+        links = dict(candidate.get("links") if isinstance(candidate.get("links"), dict) else {})
+        candidate_link = normalize_spaces(str(candidate.get("link") or ""))
+        if candidate_link and not links.get("landing"):
+            links["landing"] = candidate_link
+        identifiers = candidate.get("identifiers") if isinstance(candidate.get("identifiers"), dict) else {}
+        source_records = candidate.get("source_records") if isinstance(candidate.get("source_records"), list) else []
+        source_record = next((source for source in source_records if isinstance(source, dict)), {})
+        existing_provenance = (
+            candidate.get("source_provenance")
+            if isinstance(candidate.get("source_provenance"), dict)
+            else {}
+        )
+        for link_key, provenance_key in (
+            ("source_page", "source_page_url"),
+            ("landing", "landing_url"),
+            ("doi", "doi_url"),
+            ("arxiv", "arxiv_url"),
+            ("publisher", "publisher_url"),
+            ("pdf", "pdf_url"),
+            ("oa_pdf", "oa_pdf_url"),
+        ):
+            value = normalize_spaces(str(existing_provenance.get(provenance_key) or ""))
+            if value and not links.get(link_key):
+                links[link_key] = value
+        if existing_provenance.get("source_url") and not links.get("source_page") and not links.get("landing"):
+            links["landing"] = normalize_spaces(str(existing_provenance.get("source_url") or ""))
+        source_id = str(
+            candidate.get("source_id")
+            or candidate.get("collector_id")
+            or source_record.get("collector_id")
+            or source_record.get("source_id")
+            or existing_provenance.get("source_id")
+            or (source_ids[0] if source_ids else "")
+        ).strip()
+        if not source_id and not links and not identifiers and not source_record:
+            continue
+        provenance = build_paper_source_provenance(
+            source_id=source_id,
+            source_paper_id=str(candidate.get("source_paper_id") or source_record.get("source_paper_id") or ""),
+            links=links,
+            identifiers=identifiers,
+            source_record=source_record,
+            collected_at=str(candidate.get("discovered_at") or source_record.get("collected_at") or record.get("first_seen_at") or ""),
+            license_text=str(candidate.get("license") or ""),
+            oa_status=str(candidate.get("oa_status") or ""),
+            local_pdf_path=str(candidate.get("local_pdf_path") or ""),
+        )
+        if (
+            provenance.get("source_url")
+            or provenance.get("pdf_url")
+            or provenance.get("doi_url")
+            or provenance.get("arxiv_url")
+            or provenance.get("publisher_url")
+        ):
             return provenance
-    return {}
+        if provenance.get("source_id") and not fallback_provenance:
+            fallback_provenance = provenance
+    return fallback_provenance
+
+
+def radar_history_record_source_ids(record: dict[str, Any]) -> list[str]:
+    if not isinstance(record, dict):
+        return []
+    source_ids: list[str] = []
+    if isinstance(record.get("source_ids"), list):
+        source_ids.extend(str(source_id) for source_id in record["source_ids"])
+    provenance = radar_history_source_provenance(record)
+    if provenance.get("configured_source_id"):
+        source_ids.append(str(provenance["configured_source_id"]))
+    if provenance.get("source_id"):
+        source_ids.append(str(provenance["source_id"]))
+    for candidate in radar_source_metadata_candidates(record):
+        for key in ("configured_source_id", "venue_profile_id", "source_id", "collector_id"):
+            if candidate.get(key):
+                source_ids.append(str(candidate[key]))
+        source_records = candidate.get("source_records") if isinstance(candidate.get("source_records"), list) else []
+        for source_record in source_records:
+            if isinstance(source_record, dict):
+                for key in ("configured_source_id", "venue_profile_id", "source_id", "collector_id"):
+                    if source_record.get(key):
+                        source_ids.append(str(source_record[key]))
+    return unique_source_ids(source_ids)
 
 
 def format_radar_source_provenance_summary(summary: dict[str, Any]) -> str:
@@ -5349,7 +10277,7 @@ def radar_history_pdf_access(record: dict[str, Any]) -> dict[str, Any]:
     ]
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate:
-            return candidate
+            return finalize_pdf_access_decision(candidate)
     return {}
 
 
@@ -5432,6 +10360,19 @@ def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, 
     enriched = dict(record)
     enriched["signal_lines"] = radar_latest_signal_lines(record)
     enriched["triage_hint"] = radar_review_triage_hint(record)
+    enriched["reason_to_read"] = radar_reason_to_read_summary(enriched)
+    provenance = radar_history_source_provenance(record)
+    source_ids = radar_history_record_source_ids(enriched)
+    if source_ids:
+        enriched["source_ids"] = source_ids
+        if provenance and not provenance.get("source_id"):
+            provenance = dict(provenance)
+            provenance["source_id"] = source_ids[0]
+    if provenance:
+        enriched["source_provenance"] = provenance
+    pdf_access = radar_history_pdf_access(record)
+    if pdf_access:
+        enriched["pdf_access"] = pdf_access
     source_metadata = radar_record_source_metadata(record)
     if source_metadata["identifiers"]:
         enriched["identifiers"] = source_metadata["identifiers"]
@@ -5448,7 +10389,40 @@ def radar_history_record_with_signal_lines(record: dict[str, Any]) -> dict[str, 
     attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
     if attention:
         enriched["attention_summary"] = dict(attention)
+    source_trace = radar_history_queue_source_trace(record, enriched)
+    if source_trace:
+        enriched["source_trace"] = source_trace
     return enriched
+
+
+def radar_history_queue_source_trace(record: dict[str, Any], enriched: dict[str, Any] | None = None) -> dict[str, Any]:
+    existing = radar_record_source_trace(record)
+    if existing:
+        return dict(existing)
+    selected = enriched if isinstance(enriched, dict) else record
+    provenance = selected.get("source_provenance") if isinstance(selected.get("source_provenance"), dict) else {}
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    signal_lines = selected.get("signal_lines") if isinstance(selected.get("signal_lines"), list) else []
+    reason = selected.get("reason_to_read") if isinstance(selected.get("reason_to_read"), dict) else {}
+    if not (latest or signal_lines or reason or provenance):
+        return {}
+    derived_from = []
+    if latest:
+        derived_from.append("latest_recommendation")
+    if signal_lines:
+        derived_from.append("signal_lines")
+    if reason:
+        derived_from.append("reason_to_read")
+    if provenance:
+        derived_from.append("source_provenance")
+    return {
+        "processor": RADAR_QUEUE_TRACE_PROCESSOR,
+        "source": "stored_literature_radar_record",
+        "ai_generated": False,
+        "derived_from": derived_from,
+        "source_id": provenance.get("source_id") or "",
+        "source_class": provenance.get("source_class") or "",
+    }
 
 
 def radar_record_source_metadata(record: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -5527,6 +10501,10 @@ def radar_review_triage_hint(record: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         score = 0.0
     label = normalize_spaces(latest.get("label") or scoring.get("label") or "needs_review").lower()
+    fallback_scoring = radar_metadata_fallback_scoring(record)
+    if label == "needs_review" and score <= 0 and fallback_scoring.get("matched_positive_keywords"):
+        score = float(fallback_scoring.get("score") or 0)
+        label = normalize_spaces(fallback_scoring.get("label") or label).lower()
     machine_action = normalize_spaces(latest.get("recommended_action") or "human_review") or "human_review"
     title = normalize_spaces(record.get("title") or paper.get("title") or "this paper")
     review_reason = normalize_spaces(record.get("review_reason") or "")
@@ -5578,9 +10556,9 @@ def radar_history_is_imported(record: dict[str, Any]) -> bool:
 
 
 def radar_history_priority_key(record: dict[str, Any]) -> tuple[float, str, str]:
-    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    effective_scoring = radar_effective_recommendation_scoring(record)
     try:
-        score = float(latest.get("score") or 0)
+        score = float(effective_scoring.get("score") or 0)
     except (TypeError, ValueError):
         score = 0.0
     return (
@@ -5618,10 +10596,12 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
     add_line("Attention", attention_report_text(attention) if attention else "")
 
     scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    fallback_scoring = radar_metadata_fallback_scoring(source)
     matched_terms = unique_normalized_terms(
         latest.get("matched_positive_keywords")
         or scoring.get("matched_positive_keywords")
         or scoring.get("matched_terms")
+        or fallback_scoring.get("matched_positive_keywords")
         or []
     )
     if matched_terms:
@@ -5629,11 +10609,164 @@ def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> lis
     negative_terms = unique_normalized_terms(
         latest.get("matched_negative_keywords")
         or scoring.get("matched_negative_keywords")
+        or fallback_scoring.get("matched_negative_keywords")
         or []
     )
     if negative_terms:
         lines.append(f"Caution: matched negative context: {', '.join(negative_terms[:max(0, int(max_matched_terms))])}")
     return lines
+
+
+def radar_reason_to_read_summary(source: Any, *, max_points: int = 4, max_matched_terms: int = 5) -> dict[str, Any]:
+    latest = source.get("latest_recommendation") if isinstance(source, dict) else {}
+    if not isinstance(latest, dict) or not latest:
+        latest = source if isinstance(source, dict) else {}
+    if not isinstance(latest, dict) or not latest:
+        latest = {}
+    summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
+    attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
+    if not attention and isinstance(source, dict) and isinstance(source.get("attention_summary"), dict):
+        attention = source["attention_summary"]
+    context = latest.get("context") if isinstance(latest.get("context"), dict) else {}
+    if not context and isinstance(source, dict) and isinstance(source.get("context"), dict):
+        context = source["context"]
+    triage = source.get("triage_hint") if isinstance(source, dict) and isinstance(source.get("triage_hint"), dict) else {}
+    scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    fallback_scoring = radar_metadata_fallback_scoring(source)
+
+    matched_terms = unique_normalized_terms(
+        latest.get("matched_positive_keywords")
+        or scoring.get("matched_positive_keywords")
+        or scoring.get("matched_terms")
+        or latest.get("matched_terms")
+        or fallback_scoring.get("matched_positive_keywords")
+        or []
+    )[: max(0, int(max_matched_terms))]
+    negative_terms = unique_normalized_terms(
+        latest.get("matched_negative_keywords")
+        or scoring.get("matched_negative_keywords")
+        or fallback_scoring.get("matched_negative_keywords")
+        or []
+    )[: max(0, int(max_matched_terms))]
+    fallback_relationship = relationship_to_interests_text(
+        matched_terms,
+        str(fallback_scoring.get("label") or scoring.get("label") or latest.get("label") or "needs_review"),
+    )
+
+    headline = normalize_spaces(
+        attention.get("why_attention")
+        or summary.get("short_summary")
+        or summary.get("relationship_to_interests")
+        or latest.get("why_relevant")
+        or (fallback_relationship if matched_terms else "")
+        or triage.get("reason")
+        or ""
+    )
+    points: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_point(label: str, value: Any) -> None:
+        text = truncate_text(normalize_spaces(str(value or "")), 260)
+        key = f"{label.lower()}:{text.lower()}"
+        if not text or key in seen:
+            return
+        points.append({"label": label, "text": text})
+        seen.add(key)
+
+    add_point(
+        "Why",
+        attention.get("relationship_to_interests")
+        or summary.get("relationship_to_interests")
+        or latest.get("why_relevant")
+        or (fallback_relationship if matched_terms else ""),
+    )
+    add_point("Existing work", attention.get("relationship_to_existing_work") or (context_report_text(context) if context else ""))
+    add_point("Why now", attention.get("why_now"))
+    add_point("Triage", triage.get("reason"))
+    if matched_terms:
+        add_point("Matched terms", ", ".join(matched_terms))
+    if negative_terms:
+        add_point("Caution", f"Matched negative context: {', '.join(negative_terms)}")
+
+    if not headline and points:
+        headline = points[0]["text"]
+    if not headline:
+        signal_lines = radar_latest_signal_lines(source)
+        if signal_lines:
+            headline = re.sub(r"^[A-Za-z ]+:\s*", "", signal_lines[0]).strip()
+    return {
+        "headline": truncate_text(headline, 220),
+        "points": points[: max(0, int(max_points))],
+        "matched_terms": matched_terms,
+        "negative_terms": negative_terms,
+    }
+
+
+def radar_effective_recommendation_scoring(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {"score": 0, "label": "needs_review"}
+    latest = source.get("latest_recommendation") if isinstance(source.get("latest_recommendation"), dict) else source
+    scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    existing = dict(scoring)
+    if latest.get("score") is not None:
+        existing["score"] = latest.get("score")
+    else:
+        existing.setdefault("score", 0)
+    if latest.get("label"):
+        existing["label"] = latest.get("label")
+    else:
+        existing.setdefault("label", scoring.get("label") or "needs_review")
+    if latest.get("matched_positive_keywords") and not existing.get("matched_positive_keywords"):
+        existing["matched_positive_keywords"] = list(latest.get("matched_positive_keywords") or [])
+    if latest.get("matched_negative_keywords") and not existing.get("matched_negative_keywords"):
+        existing["matched_negative_keywords"] = list(latest.get("matched_negative_keywords") or [])
+    try:
+        score = float(existing.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    label = normalize_spaces(str(existing.get("label") or "needs_review")).lower()
+    if score > 0 or label not in {"", "needs_review"}:
+        return existing
+    fallback_scoring = radar_metadata_fallback_scoring(source)
+    if fallback_scoring.get("matched_positive_keywords"):
+        return dict(fallback_scoring)
+    return existing
+
+
+def radar_metadata_fallback_scoring(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    latest = source.get("latest_recommendation") if isinstance(source.get("latest_recommendation"), dict) else {}
+    existing_scoring = latest.get("scoring") if isinstance(latest.get("scoring"), dict) else {}
+    if (
+        latest.get("matched_positive_keywords")
+        or existing_scoring.get("matched_positive_keywords")
+        or existing_scoring.get("matched_terms")
+    ):
+        return {}
+    paper = radar_metadata_fallback_paper(source, latest)
+    scoring = score_paper_against_profile(paper)
+    if not scoring.get("matched_positive_keywords") and not scoring.get("matched_negative_keywords"):
+        return {}
+    return scoring
+
+
+def radar_metadata_fallback_paper(source: dict[str, Any], latest: dict[str, Any] | None = None) -> dict[str, Any]:
+    selected_latest = latest if isinstance(latest, dict) else {}
+    nested_paper = selected_latest.get("paper") if isinstance(selected_latest.get("paper"), dict) else {}
+    record_paper = source.get("paper") if isinstance(source.get("paper"), dict) else {}
+    paper = {**record_paper, **nested_paper}
+    tags = []
+    for candidate in (paper.get("tags"), source.get("tags"), selected_latest.get("tags")):
+        if isinstance(candidate, list):
+            tags.extend(candidate)
+    return {
+        "id": paper.get("id") or source.get("paper_id") or source.get("dedupe_key") or source.get("id") or "",
+        "title": paper.get("title") or source.get("title") or selected_latest.get("title") or "",
+        "abstract": paper.get("abstract") or source.get("abstract") or selected_latest.get("abstract") or "",
+        "venue": paper.get("venue") or source.get("venue") or selected_latest.get("venue") or "",
+        "tags": unique_normalized_terms(tags),
+    }
 
 
 def unique_signal_lines(values: list[Any]) -> list[str]:

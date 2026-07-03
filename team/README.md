@@ -94,6 +94,7 @@ python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-di
 python team/research_cli.py radar-status --json
 python team/research_cli.py radar-history
 python team/research_cli.py radar-queue
+python team/research_cli.py radar-review-queue --usefulness useful --reviewer alice
 python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
@@ -129,6 +130,18 @@ Use `team/scripts/check_literature_radar_status.sh` to check saved settings and
 latest-run queue health without collecting sources, downloading PDFs, or calling
 AI. The same combined status payload is available from
 `python team/research_cli.py radar-status --json` and `/radar/status.json`.
+Use `team/scripts/check_literature_radar_thin_mvp.sh` after a real run to get
+the current thin-MVP gate: exit code `0` means ready, `2` means usable but
+still needing required evidence or minor setup, and `3` means blocked or
+missing status evidence. The gate output includes the cycle run command and the
+terminal review command,
+`python team/research_cli.py radar-review-queue --usefulness useful`,
+for server workflows that do not open the web UI. It also prints the queue
+review scope and a small sample of visible papers, so a reviewer can optionally
+leave queue feedback without blocking readiness. Set
+`RADAR_THIN_MVP_RUN_COMMAND`, `RADAR_THIN_MVP_REVIEW_URL`, or
+`RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND` when the server uses a different wrapper
+or URL.
 Use `/radar/brief` for a weekly or daily roll-up over stored runs without
 collecting again. `/radar/brief.json?days=7&limit=20` exposes the same stored
 brief for local dashboards or notification scripts. Use `/radar/papers` to
@@ -169,7 +182,14 @@ settings are configured.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI and prints latest-run
 health, pipeline phase status, source readiness, and Unpaywall OA enrichment
-readiness before the priority papers. Use
+readiness before the priority papers. When the latest queue has not been judged
+yet, the same output marks `Queue usefulness: not reviewed yet`, shows the
+optional feedback step, and prints the exact `radar-review-queue` command to
+run if someone wants to leave feedback after scanning the queue. Use
+`python team/research_cli.py radar-review-queue --usefulness useful --reviewer alice`
+after scanning the terminal queue to record whether the latest queue was useful,
+partly useful, not useful, or still needs review; it prints the updated
+thin-MVP readiness. Use
 `python team/research_cli.py radar-import-queue --limit 20 --min-score 35` to
 promote the active terminal queue into Latest Relevant Papers with the same
 dedupe and provenance behavior as the web Queue import form. Scheduled
@@ -181,7 +201,8 @@ unless `RADAR_WRITE_LATEST=0`.
 Daily operation is: configure `.env`, run
 `team/scripts/check_literature_radar_status.sh` to validate readiness, run or
 enable `team/scripts/run_literature_radar_cycle.sh`, then review
-`/radar/queue?limit=20` or `/radar/brief` from the web UI.
+`/radar/queue?limit=20` or `/radar/brief` from the web UI, or use
+`radar-queue` plus `radar-review-queue` from the terminal.
 Radar signal lines are persisted in stored run recommendations, paper history,
 and imported library-item metadata, so future API or notification surfaces can
 reuse the same explanation without reprocessing the paper.
