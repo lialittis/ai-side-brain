@@ -126,9 +126,9 @@ SORT_OPTIONS = [
 ]
 RADAR_REVIEW_FILTER_OPTIONS = [
     ("all", "All"),
-    ("unreviewed", "Unreviewed"),
-    ("watch", "Watch"),
-    ("dismissed", "Dismissed"),
+    ("unreviewed", "New"),
+    ("watch", "Saved"),
+    ("dismissed", "Not Relevant"),
 ]
 RADAR_WEB_SOURCE_OPTIONS = [
     (option["id"], option["label"])
@@ -302,14 +302,15 @@ def canonical_paper_url(url: str) -> str:
 
 
 def page(title: str, body: str, *, active: str = "papers") -> str:
+    today_active = active in {"today", "radar_queue"}
     nav = "\n".join(
         [
-            f'<a class="nav-item {"active" if active == "papers" else ""}" href="/">Latest Papers</a>',
-            f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar</a>',
-            f'<a class="nav-item {"active" if active == "radar_queue" else ""}" href="/radar/queue?limit=20">Queue</a>',
-            f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Brief</a>',
+            f'<a class="nav-item {"active" if today_active else ""}" href="/">Today</a>',
+            f'<a class="nav-item {"active" if active in {"papers", "library"} else ""}" href="/library">Library</a>',
+            f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
-            f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Interests</a>',
+            f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
+            f'<a class="nav-item {"active" if active == "radar" else ""}" href="/radar">Radar Ops</a>',
         ]
     )
     return f"""<!doctype html>
@@ -873,6 +874,49 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       border-radius: 8px;
       background: #fbfcfe;
     }}
+    .today-hero {{
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border-left: 4px solid var(--accent);
+    }}
+    .today-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
+    .today-title {{
+      margin: 0;
+      font-size: 18px;
+    }}
+    .today-summary {{
+      color: #344054;
+      max-width: 820px;
+    }}
+    .member-filter-strip {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }}
+    details.operator-details {{
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 10px;
+    }}
+    details.operator-details > summary {{
+      cursor: pointer;
+      font-weight: 800;
+      color: #344054;
+    }}
+    details.operator-details[open] > summary {{ margin-bottom: 10px; }}
     .radar-queue-review {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) minmax(180px, 1fr) auto;
@@ -1067,7 +1111,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
   <div class="shell">
     <aside class="sidebar">
       <p class="brand">Team Side-Brain</p>
-      <p class="subtitle">Relevant papers library</p>
+      <p class="subtitle">New research worth a look</p>
       <nav>{nav}</nav>
     </aside>
     <main class="content">{body}</main>
@@ -1195,7 +1239,7 @@ def render_literature_radar_page(
         else []
     )
     body = f"""
-    {render_topline("Literature Radar", "Scheduled recommendations from source-stable academic collectors.", "/radar/queue?limit=20", "Open Queue")}
+    {render_topline("Radar Ops", "Source settings, run controls, diagnostics, and owner-facing Radar status.", "/radar/queue?limit=20", "Open Today")}
     {render_notice(notice)}
     {render_radar_daily_overview(database, runs)}
     <div class="radar-grid radar-dashboard-grid">
@@ -1212,7 +1256,7 @@ def render_literature_radar_page(
       </aside>
     </div>
     """
-    return page("Literature Radar", body, active="radar")
+    return page("Radar Ops", body, active="radar")
 
 
 def team_saved_primary_source_coverage(database: TeamResearchDatabase) -> dict[str, Any]:
@@ -1243,17 +1287,21 @@ def render_literature_radar_brief_page(
         configured_primary_source_coverage=team_saved_primary_source_coverage(database),
     )
     body = f"""
-    {render_topline("Radar Brief", "Weekly or daily roll-up from stored Literature Radar runs.", "/radar", "Radar")}
+    {render_topline("Research Digest", "A short roll-up of new papers and Radar signals.", "/", "Today")}
     <section class="panel">
       {render_notice(notice)}
       {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit, queue_recent_days=selected_queue_recent_days)}
-      <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
-      {render_radar_brief_summary(payload)}
       {render_radar_brief_top_recommendations(payload)}
-      <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
+      <details class="operator-details">
+        <summary>Radar Ops details</summary>
+        <p><a class="button" href="{html_escape(payload['links']['json'])}">Brief JSON</a></p>
+        {render_radar_brief_summary(payload)}
+        <h3>Raw Radar brief</h3>
+        <pre class="radar-brief-output">{html_escape(payload["brief"])}</pre>
+      </details>
     </section>
     """
-    return page("Radar Brief", body, active="radar_brief")
+    return page("Research Digest", body, active="radar_brief")
 
 
 def render_literature_radar_queue_page(
@@ -1294,41 +1342,45 @@ def render_literature_radar_queue_page(
         queue_window=queue_window,
     )
     body = f"""
-    {render_topline("Radar Queue", "Daily review queue for stored Literature Radar candidates.", "/radar", "Run Radar")}
+    {render_topline("Radar Today", "New Radar items ranked by likely value for the team.", "/radar/brief?days=7&amp;limit=20", "Open Digest")}
     {render_notice(notice)}
-    <section class="panel radar-queue" aria-label="Literature Radar daily review queue">
+    <section class="panel radar-queue" aria-label="Literature Radar today feed">
       <div class="radar-queue-head">
         <div>
-          <h2>Daily Review</h2>
-          <div class="muted">{html_escape(radar_queue_status_line(review_counts))}</div>
+          <h2>Worth Reading Today</h2>
+          <div class="muted">{html_escape(radar_today_status_line(review_counts, len(records)))}</div>
         </div>
         <div class="radar-queue-actions">
-          <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
-          <a class="button" href="/radar/papers?limit=50">Paper History</a>
-          <a class="button" href="{html_escape(payload['links']['json'])}">Queue JSON</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
+          <a class="button" href="/library">Library</a>
+          <a class="button" href="/radar">Radar Ops</a>
         </div>
       </div>
       {render_radar_queue_overview(payload, review_counts, access_summary)}
-      <div class="radar-control-strip">
-        {render_latest_radar_run_health(latest_run)}
-        {render_radar_queue_daily_guidance(payload)}
-        {render_radar_queue_source_health(payload)}
-        {render_radar_daily_workflow(payload.get("daily_workflow") if isinstance(payload.get("daily_workflow"), dict) else {})}
-        {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=50)}
-        {render_radar_queue_access_summary_from_payload(access_summary)}
+      <div class="member-filter-strip">
         {render_radar_queue_recent_options(selected_limit, selected_triage_action, selected_recent_days)}
-        {render_radar_queue_triage_summary(triage_summary, limit=selected_limit, recent_days=selected_recent_days)}
         {render_radar_queue_triage_options(triage_options, limit=selected_limit, recent_days=selected_recent_days)}
         {render_radar_queue_filter_status(selected_triage_action, selected_limit, recent_days=selected_recent_days)}
       </div>
       {render_radar_queue_daily_review_plan(payload)}
       {render_radar_queue_usefulness_review(payload, queue_window)}
-      {render_radar_queue_batch_import_control(records, limit=selected_limit, triage_action=selected_triage_action, recent_days=selected_recent_days)}
       {queue_preview_html}
       {render_empty_radar_queue(records, review_counts)}
+      {render_radar_queue_operator_details(
+          payload,
+          latest_run,
+          review_counts,
+          access_summary,
+          triage_summary,
+          selected_review,
+          selected_limit,
+          selected_recent_days,
+          records,
+          selected_triage_action,
+      )}
     </section>
     """
-    return page("Radar Queue", body, active="radar_queue")
+    return page("Radar Today", body, active="radar_queue")
 
 
 def render_literature_radar_papers_page(
@@ -1395,9 +1447,9 @@ def render_radar_daily_overview(database: TeamResearchDatabase, runs: list[dict[
             css="good" if queue_active else "",
         ),
         render_radar_kpi_card(
-            "Watch",
+            "Saved",
             int(review_counts.get("watch") or 0),
-            f"{int(review_counts.get('unreviewed') or 0)} unreviewed",
+            f"{int(review_counts.get('unreviewed') or 0)} new",
         ),
         render_radar_kpi_card(
             "Latest Run",
@@ -1415,13 +1467,13 @@ def render_radar_daily_overview(database: TeamResearchDatabase, runs: list[dict[
     <section class="panel radar-overview" aria-label="Literature Radar daily overview">
       <div class="radar-overview-head">
         <div>
-          <h2>Daily Radar</h2>
-          <div class="muted">Open the queue, scan the first candidates, and import only what the team wants to track.</div>
+          <h2>Radar Operations</h2>
+          <div class="muted">Refresh sources, inspect diagnostics, and keep the member-facing Today feed healthy.</div>
         </div>
         <div class="radar-overview-actions">
-          <a class="button primary" href="/radar/queue?limit=20">Review Queue</a>
-          <a class="button" href="/radar/brief?days=7&amp;limit=20">Brief</a>
-          <a class="button" href="/interests">Interests</a>
+          <a class="button primary" href="/radar/queue?limit=20">Open Today</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
+          <a class="button" href="/interests">Topics</a>
         </div>
       </div>
       <div class="radar-kpi-grid">{''.join(cards)}</div>
@@ -2608,8 +2660,8 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     review_counts = database.literature_radar_paper_review_counts()
     return f"""
     <div class="radar-brief-link">
-      <a class="button" href="/radar/queue?limit=20">Daily Queue</a>
-      <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
+      <a class="button" href="/radar/queue?limit=20">Radar Today</a>
+      <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
       <a class="button" href="/radar/queue.json?limit=20">Queue JSON</a>
@@ -2865,9 +2917,9 @@ def render_radar_brief_summary(payload: dict[str, Any]) -> str:
         <span class="tag">cached: {int(access_summary.get("downloaded") or 0)}</span>
       </div>
       <div class="tags">
-        <span class="muted">Triage:</span>
+        <span class="muted">Focus:</span>
         <span class="tag">total: {int(triage_summary.get("total") or 0)}</span>
-        <span class="tag">top: {html_escape(readable_radar_action(triage_summary.get("top_action") or "none", default="None"))}</span>
+        <span class="tag">top: {html_escape(readable_member_action(triage_summary.get("top_action") or "none", default="None"))}</span>
         <span class="tag">actions: {html_escape(format_action_counts_for_web(triage_summary.get("actions")))}</span>
       </div>
       {render_radar_queue_source_health(queue)}
@@ -2902,7 +2954,7 @@ def render_radar_brief_top_recommendations(payload: dict[str, Any]) -> str:
         return ""
     return f"""
     <div class="radar-queue-preview radar-brief-recommendations">
-      <h3>Top Recommendations</h3>
+      <h3>Worth Reading From This Digest</h3>
       {items}
     </div>
     """
@@ -2950,11 +3002,12 @@ def render_radar_brief_top_recommendation(
     label = str(record.get("label") or "needs_review")
     review = record.get("review") if isinstance(record.get("review"), dict) else {}
     triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
-    triage_label = normalize_inline_text(triage.get("label") or triage.get("action") or "")
+    triage_action = normalize_inline_text(triage.get("action") or triage.get("label") or "")
+    triage_label = readable_member_action(triage_action, default="")
     triage_severity = str(triage.get("severity") or "normal")
     triage_css = "good" if triage_severity == "good" else "warn" if triage_severity in {"warning", "error"} else ""
     triage_html = (
-        f'<span class="pill {triage_css}">Triage: {html_escape(triage_label)}</span>'
+        f'<span class="pill {triage_css}">Priority: {html_escape(triage_label)}</span>'
         if triage_label
         else ""
     )
@@ -3050,7 +3103,7 @@ def format_action_counts_for_web(counts: Any) -> str:
     if not isinstance(counts, dict) or not counts:
         return "none"
     return ", ".join(
-        f"{readable_radar_action(action)}: {int(count or 0)}"
+        f"{readable_member_action(action)}: {int(count or 0)}"
         for action, count in sorted(counts.items())
     )
 
@@ -3331,13 +3384,23 @@ def render_radar_reason_to_read(source: Any) -> str:
     for point in reason.get("points") or []:
         if not isinstance(point, dict):
             continue
-        label = normalize_inline_text(point.get("label") or "Reason")
+        label = member_reason_to_read_label(point.get("label") or "Reason")
         text = normalize_inline_text(point.get("text") or "")
         if text:
             rows.append(f"<p><strong>{html_escape(label)}:</strong> {html_escape(text)}</p>")
     if not rows:
         return ""
     return f'<div class="radar-ai-summary radar-reason-to-read">{"".join(rows)}</div>'
+
+
+def member_reason_to_read_label(value: Any) -> str:
+    label = normalize_inline_text(value or "Reason")
+    normalized = label.lower()
+    if normalized == "triage":
+        return "Why this is worth a look"
+    if normalized == "matched terms":
+        return "Matched"
+    return label
 
 
 def render_radar_attention_summary(source: Any) -> str:
@@ -3376,7 +3439,7 @@ def render_radar_paper_import_control(
         if return_to == "queue":
             href = radar_queue_path_from_window(queue_window, notice=f"In library: {imported_item_id}")
             return f'<a class="button" href="{html_escape(href)}">In Library</a>'
-        return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
+        return f'<a class="button" href="/library?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
     return f"""
     <form class="inline-form" method="post" action="/radar/papers/import">
       <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
@@ -3972,6 +4035,59 @@ def readable_radar_action(value: Any, *, default: str = "Review") -> str:
     return text
 
 
+RADAR_MEMBER_ACTION_LABELS = {
+    "already_imported": "Already saved",
+    "compare_with_existing_work": "Compare with library",
+    "dismiss_or_watch": "Low priority",
+    "follow_up_watch": "Saved for later",
+    "human_review": "Worth checking",
+    "human_triage": "Worth checking",
+    "inspect": "Check details",
+    "import_to_library": "Worth saving",
+    "keep_dismissed": "Keep hidden",
+    "none": "No action",
+    "queue_for_human_triage": "Worth a skim",
+    "read_and_summarize_open_access_pdf": "Read PDF",
+    "read_metadata_and_open_link": "Open and skim",
+    "review_then_import": "Skim, then save",
+    "skim_metadata": "Skim metadata",
+}
+
+
+RELEVANCE_MEMBER_LABELS = {
+    "highly_relevant": "Strong match",
+    "possibly_relevant": "Possible match",
+    "needs_review": "Worth a skim",
+    "low_relevance": "Low priority",
+    "unknown": "Unrated",
+}
+
+
+def readable_member_action(value: Any, *, default: str = "Worth a look") -> str:
+    text = normalize_inline_text(value)
+    if not text:
+        return default
+    canonical = clean_triage_action(text)
+    if canonical and canonical in RADAR_MEMBER_ACTION_LABELS:
+        return RADAR_MEMBER_ACTION_LABELS[canonical]
+    if text in RADAR_MEMBER_ACTION_LABELS:
+        return RADAR_MEMBER_ACTION_LABELS[text]
+    return readable_radar_action(text, default=default)
+
+
+def member_relevance_label(label: str | None) -> str:
+    value = str(label or "unknown")
+    return RELEVANCE_MEMBER_LABELS.get(value, value.replace("_", " ").capitalize())
+
+
+def member_review_status_label(status: str) -> str:
+    if status == "dismissed":
+        return "Not relevant"
+    if status == "watch":
+        return "Saved"
+    return "New"
+
+
 def render_radar_terms(label: str, terms: list[str]) -> str:
     if not terms:
         return f'<span class="muted">{html_escape(label)}: none</span>'
@@ -4083,10 +4199,10 @@ def radar_review_from_record(record: dict[str, Any]) -> dict[str, Any]:
 def render_radar_review_pill(review: dict[str, Any]) -> str:
     status = str(review.get("status") or "unreviewed")
     if status == "dismissed":
-        return '<span class="pill warn">Dismissed</span>'
+        return '<span class="pill warn">Not relevant</span>'
     if status == "watch":
-        return '<span class="pill good">Watch</span>'
-    return '<span class="pill">Unreviewed</span>'
+        return '<span class="pill good">Saved</span>'
+    return '<span class="pill">New</span>'
 
 
 def render_radar_review_reason(review: dict[str, Any]) -> str:
@@ -4113,7 +4229,7 @@ def render_radar_review_controls(
     watch_button = "" if status == "watch" else render_radar_review_button(
         dedupe_key,
         "watch",
-        "Watch",
+        "Save for later",
         run_id,
         return_to,
         review_filter,
@@ -4127,7 +4243,7 @@ def render_radar_review_controls(
         else render_radar_review_button(
             dedupe_key,
             "dismissed",
-            "Dismiss",
+            "Not relevant",
             run_id,
             return_to,
             review_filter,
@@ -4140,7 +4256,7 @@ def render_radar_review_controls(
         render_radar_review_button(
             dedupe_key,
             "unreviewed",
-            "Clear",
+            "Mark as new",
             run_id,
             return_to,
             review_filter,
@@ -4164,7 +4280,7 @@ def render_radar_review_button(
     brief_window: dict[str, int] | None = None,
     queue_window: dict[str, int | str] | None = None,
 ) -> str:
-    reason_placeholder = "Why dismiss this?" if status == "dismissed" else "Why watch this?"
+    reason_placeholder = "Why is this not relevant?" if status == "dismissed" else "Why save this?"
     reason_input = (
         f'<input class="mini-input" name="reason" placeholder="{html_escape(reason_placeholder)}">'
         if include_reason
@@ -4330,7 +4446,7 @@ def render_radar_import_control(
         if return_to == "brief":
             href = radar_brief_path_from_window(brief_window, notice=f"In library: {imported_item_id}")
             return f'<a class="button" href="{html_escape(href)}">In Library</a>'
-        return f'<a class="button" href="/?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
+        return f'<a class="button" href="/library?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
     return f"""
     <form class="inline-form" method="post" action="/radar/import">
       <input type="hidden" name="run_id" value="{html_escape(record.get("run_id") or "")}">
@@ -4378,7 +4494,7 @@ def display_radar_datetime(value: str) -> str:
 def relevance_pill(label: str | None) -> str:
     value = label or "unknown"
     css = "good" if value == "highly_relevant" else "warn" if value == "possibly_relevant" else ""
-    return f'<span class="pill {css}">{html_escape(value)}</span>'
+    return f'<span class="pill {css}" title="{html_escape(value)}">{html_escape(member_relevance_label(value))}</span>'
 
 
 def ai_status_pill(status: str | None) -> str:
@@ -4386,6 +4502,99 @@ def ai_status_pill(status: str | None) -> str:
     warn_statuses = {"pending", "running", "failed", "pending_unsupported_link", "rejected_non_paper"}
     css = "good" if value == "succeeded" else "warn" if value in warn_statuses else ""
     return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
+
+
+def render_today_page(
+    database: TeamResearchDatabase,
+    *,
+    notice: str = "",
+    limit: int = 6,
+) -> str:
+    selected_limit = max(1, int(limit or 6))
+    payload = build_team_literature_radar_queue_payload(
+        database,
+        limit=selected_limit,
+        configured_primary_source_coverage=team_saved_primary_source_coverage(database),
+    )
+    records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
+    counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    selected_review = str(payload.get("review") or "all")
+    queue_window = {"limit": selected_limit, "triage_action": "", "recent_days": 0}
+    body = f"""
+    {render_topline("Today", "New research signals worth attention, ranked for a quick skim.", "/submit", "Submit")}
+    {render_notice(notice)}
+    <section class="panel today-hero" aria-label="Today research feed">
+      <div class="today-head">
+        <div>
+          <h2 class="today-title">Worth Reading Today</h2>
+          <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records)))}</div>
+        </div>
+        <div class="radar-overview-actions">
+          <a class="button primary" href="/radar/queue?limit=20">See More New Items</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
+          <a class="button" href="/library">Library</a>
+        </div>
+      </div>
+      {render_today_update_note(latest_run)}
+      {render_today_kpis(payload, counts, records)}
+    </section>
+    {render_latest_radar_queue_preview(records, review_filter=selected_review, return_to="latest", queue_window=queue_window)}
+    {render_empty_today(records, counts)}
+    """
+    return page("Today", body, active="today")
+
+
+def radar_today_status_line(counts: dict[str, Any], visible_count: int) -> str:
+    new_count = int(counts.get("unreviewed") or 0)
+    saved_count = int(counts.get("watch") or 0)
+    if new_count:
+        return (
+            f"Showing {visible_count} worth a look from {new_count} new Radar item"
+            f"{'' if new_count == 1 else 's'}."
+        )
+    if saved_count:
+        return f"No new high-signal items right now. {saved_count} item{'' if saved_count == 1 else 's'} saved for later."
+    return "No new Radar items are waiting in today's feed."
+
+
+def render_today_update_note(latest_run: dict[str, Any]) -> str:
+    if not latest_run:
+        return '<div class="muted">No Radar update has been stored yet.</div>'
+    updated_at = display_radar_datetime(str(latest_run.get("completed_at") or latest_run.get("started_at") or ""))
+    status = str(latest_run.get("status") or "unknown")
+    freshness = radar_run_freshness(latest_run)
+    parts = []
+    if updated_at:
+        parts.append(f"Updated {updated_at}")
+    if freshness.get("status"):
+        parts.append(f"{str(freshness.get('status')).replace('_', ' ')}")
+    message = ". ".join(parts) or "Latest Radar update available"
+    if status in {"failed", "partial"}:
+        message += "; some sources may be incomplete."
+    return f'<div class="muted">{html_escape(message)}</div>'
+
+
+def render_today_kpis(payload: dict[str, Any], counts: dict[str, Any], records: list[dict[str, Any]]) -> str:
+    access = payload.get("access_summary") if isinstance(payload.get("access_summary"), dict) else {}
+    guidance = payload.get("daily_guidance") if isinstance(payload.get("daily_guidance"), dict) else {}
+    top_action = readable_member_action(guidance.get("next_action") or guidance.get("top_lane") or "human_review")
+    cards = [
+        render_radar_kpi_card("New", int(counts.get("unreviewed") or 0), "fresh Radar items"),
+        render_radar_kpi_card("Worth a Look", len(records), top_action, css="good" if records else ""),
+        render_radar_kpi_card("Readable PDFs", int(access.get("downloadable") or 0), "available directly"),
+        render_radar_kpi_card("Saved", int(counts.get("watch") or 0), "for later discussion"),
+    ]
+    return f'<div class="radar-kpi-grid">{"".join(cards)}</div>'
+
+
+def render_empty_today(records: list[dict[str, Any]], counts: dict[str, Any]) -> str:
+    if records:
+        return ""
+    total = int(counts.get("all") or 0)
+    if total:
+        return '<section class="panel"><div class="empty">No new items match today\'s priority filters. Try the full Radar feed or the digest.</div></section>'
+    return '<section class="panel"><div class="empty">No Radar items yet. Submit a paper or wait for the next collector run.</div></section>'
 
 
 def render_latest_papers_page(
@@ -4403,11 +4612,10 @@ def render_latest_papers_page(
     )
     tags = database.list_tags()
     body = f"""
-    {render_topline("Latest Relevant Papers", "Recent papers and resources screened as relevant, with team tags and links.", "/submit", "Submit Paper")}
+    {render_topline("Team Library", "Saved papers and resources the team decided to keep.", "/submit", "Submit")}
     {render_notice(notice)}
-    {render_latest_radar_queue(database)}
     <div class="panel">
-      <form class="toolbar" method="get" action="/">
+      <form class="toolbar" method="get" action="/library">
         <div class="field">
           <label for="tag">Filter by tag</label>
           <select id="tag" name="tag">
@@ -4426,7 +4634,7 @@ def render_latest_papers_page(
       {render_paper_list(papers)}
     </div>
     """
-    return page("Latest Relevant Papers", body, active="papers")
+    return page("Team Library", body, active="library")
 
 
 def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
@@ -4441,43 +4649,30 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
     total = int(counts.get("all") or 0)
     if total == 0 and not latest_run:
         return ""
-    unreviewed = int(counts.get("unreviewed") or 0)
-    watch = int(counts.get("watch") or 0)
-    dismissed = int(counts.get("dismissed") or 0)
     selected_review = str(payload.get("review") or "all")
     priority_records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
     access_summary = payload.get("access_summary") if isinstance(payload.get("access_summary"), dict) else {}
     triage_summary = payload.get("triage_summary") if isinstance(payload.get("triage_summary"), dict) else {}
     triage_options = payload.get("triage_action_options") if isinstance(payload.get("triage_action_options"), list) else []
-    status_line = (
-        f"{unreviewed} unreviewed, {watch} watch, {dismissed} dismissed from {total} stored Radar paper"
-        f"{'' if total == 1 else 's'}."
-    )
     return f"""
     <section class="panel radar-queue" aria-label="Literature Radar review queue">
       <div class="radar-queue-head">
         <div>
-          <h2>Radar Queue</h2>
-          <div class="muted">{html_escape(status_line)}</div>
+          <h2>Radar Today</h2>
+          <div class="muted">{html_escape(radar_today_status_line(counts, len(priority_records)))}</div>
         </div>
         <div class="radar-queue-actions">
-          <a class="button" href="/radar/queue?limit=20">Daily Queue</a>
-          <a class="button" href="/radar/brief?days=7&amp;limit=20">Weekly Brief</a>
-          <a class="button" href="/radar">Run Radar</a>
+          <a class="button" href="/radar/queue?limit=20">See More New Items</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
+          <a class="button" href="/radar">Radar Ops</a>
           <a class="button" href="/radar/queue.json?limit=20">JSON</a>
         </div>
       </div>
-      {render_latest_radar_run_health(latest_run)}
-      {render_radar_queue_daily_guidance(payload)}
-      {render_radar_queue_source_health(payload)}
       {render_radar_queue_daily_review_plan(payload)}
-      {render_radar_daily_workflow(payload.get("daily_workflow") if isinstance(payload.get("daily_workflow"), dict) else {})}
       {render_radar_queue_usefulness_review(payload, {"return_to": "latest"})}
-      {render_radar_review_count_links(counts, selected_review=selected_review, limit=50)}
-      {render_radar_queue_access_summary_from_payload(access_summary)}
-      {render_radar_queue_triage_summary(triage_summary, limit=20)}
       {render_radar_queue_triage_options(triage_options, limit=20)}
       {render_latest_radar_queue_preview(priority_records, review_filter=selected_review, return_to="latest")}
+      {render_radar_queue_operator_details(payload, latest_run, counts, access_summary, triage_summary, selected_review, 20, 0, priority_records)}
     </section>
     """
 
@@ -4490,28 +4685,28 @@ def render_radar_queue_overview(
     guidance = payload.get("daily_guidance") if isinstance(payload.get("daily_guidance"), dict) else {}
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     active_count = int(guidance.get("active_count") or 0)
-    next_action = readable_radar_action(guidance.get("next_action") or guidance.get("top_lane") or "inspect")
+    next_action = readable_member_action(guidance.get("next_action") or guidance.get("top_lane") or "inspect")
     freshness = str(guidance.get("freshness_status") or "").replace("_", " ") or "unknown"
     latest_status = str(latest_run.get("status") or "none").replace("_", " ")
     cards = [
         render_radar_kpi_card(
-            "Start Here",
+            "Best Next Step",
             next_action,
-            "Recommended first action",
+            "for today's feed",
             css="good" if active_count else "",
         ),
         render_radar_kpi_card(
-            "Active",
+            "Worth a Look",
             active_count,
-            f"{int(review_counts.get('unreviewed') or 0)} unreviewed",
+            f"{int(review_counts.get('unreviewed') or 0)} new",
         ),
         render_radar_kpi_card(
-            "PDF Access",
+            "Readable PDFs",
             int(access_summary.get("downloadable") or 0),
             f"{int(access_summary.get('metadata_or_link_only') or 0)} link-only",
         ),
         render_radar_kpi_card(
-            "Latest Run",
+            "Latest Update",
             latest_status,
             f"freshness: {freshness}",
             css="good" if latest_status == "succeeded" else "warn" if latest_status in {"failed", "partial"} else "",
@@ -4529,6 +4724,40 @@ def radar_queue_status_line(counts: dict[str, Any]) -> str:
         f"{unreviewed} unreviewed, {watch} watch, {dismissed} dismissed from {total} stored Radar paper"
         f"{'' if total == 1 else 's'}."
     )
+
+
+def render_radar_queue_operator_details(
+    payload: dict[str, Any],
+    latest_run: dict[str, Any] | None,
+    review_counts: dict[str, Any],
+    access_summary: dict[str, Any],
+    triage_summary: dict[str, Any],
+    selected_review: str,
+    selected_limit: int,
+    selected_recent_days: int,
+    records: list[dict[str, Any]],
+    selected_triage_action: str = "",
+) -> str:
+    return f"""
+    <details class="operator-details">
+      <summary>Radar Ops details</summary>
+      <div class="radar-control-strip">
+        {render_latest_radar_run_health(latest_run)}
+        {render_radar_queue_daily_guidance(payload)}
+        {render_radar_queue_source_health(payload)}
+        {render_radar_daily_workflow(payload.get("daily_workflow") if isinstance(payload.get("daily_workflow"), dict) else {})}
+        {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=50)}
+        {render_radar_queue_access_summary_from_payload(access_summary)}
+        {render_radar_queue_triage_summary(triage_summary, limit=selected_limit, recent_days=selected_recent_days)}
+        <div class="radar-queue-actions">
+          <a class="button" href="{html_escape(payload['links']['json'])}">Queue JSON</a>
+          <a class="button" href="/radar/papers?limit=50">Paper History</a>
+          <a class="button" href="/radar/status.json?limit=20">Status JSON</a>
+        </div>
+        {render_radar_queue_batch_import_control(records, limit=selected_limit, triage_action=selected_triage_action, recent_days=selected_recent_days)}
+      </div>
+    </details>
+    """
 
 
 def render_latest_radar_run_health(run: dict[str, Any] | None) -> str:
@@ -4695,7 +4924,7 @@ def render_latest_radar_queue_preview(
     )
     return f"""
     <div class="radar-queue-preview">
-      <h3>Priority Candidates</h3>
+      <h3>Worth Reading Today</h3>
       {items}
     </div>
     """
@@ -4711,22 +4940,22 @@ def render_radar_queue_daily_guidance(payload: dict[str, Any]) -> str:
     if not guidance:
         return ""
     status = str(guidance.get("status") or "")
-    next_action = readable_radar_action(guidance.get("next_action") or "inspect")
+    next_action = readable_member_action(guidance.get("next_action") or "inspect")
     css = "warn" if status in {"warning", "error", "empty"} else "good" if int(guidance.get("active_count") or 0) else ""
     chips = [
         f'<span class="tag {css}">next: {html_escape(next_action)}</span>',
         f'<span class="tag">active: {int(guidance.get("active_count") or 0)}</span>',
-        f'<span class="tag">unreviewed: {int(guidance.get("unreviewed_count") or 0)}</span>',
-        f'<span class="tag">watch: {int(guidance.get("watch_count") or 0)}</span>',
+        f'<span class="tag">new: {int(guidance.get("unreviewed_count") or 0)}</span>',
+        f'<span class="tag">saved: {int(guidance.get("watch_count") or 0)}</span>',
         f'<span class="tag">downloadable: {int(guidance.get("downloadable_count") or 0)}</span>',
     ]
     if guidance.get("top_lane"):
-        chips.append(f'<span class="tag">top lane: {html_escape(readable_radar_action(guidance.get("top_lane")))}</span>')
+        chips.append(f'<span class="tag">top focus: {html_escape(readable_member_action(guidance.get("top_lane")))}</span>')
     if guidance.get("freshness_status"):
         chips.append(f'<span class="tag">freshness: {html_escape(str(guidance.get("freshness_status")))}</span>')
     return f"""
     <div class="tags">
-      <span class="muted">Daily guidance:</span>
+      <span class="muted">Feed guidance:</span>
       {''.join(chips)}
     </div>
     """
@@ -4785,7 +5014,7 @@ def render_radar_queue_daily_review_plan(payload: dict[str, Any]) -> str:
     return f"""
     <div class="radar-control-strip radar-daily-plan">
       <div>
-        <div class="radar-section-label">Daily plan:</div>
+        <div class="radar-section-label">Start here:</div>
         <h3>{html_escape(headline)}</h3>
         {reason_html}
       </div>
@@ -4835,18 +5064,18 @@ def render_radar_queue_usefulness_review(
     thin_mvp_chip = (
         '<span class="tag good">thin MVP review recorded</span>'
         if usefulness_id in {"useful", "partly_useful"}
-        else '<span class="tag">optional queue feedback</span>'
+        else '<span class="tag">optional feed feedback</span>'
     )
     optional_feedback_chip = (
         ""
         if usefulness_id in {"useful", "partly_useful"}
-        else '<span class="tag">optional feedback: Queue usefulness review</span>'
+        else '<span class="tag">optional feedback: Today feed usefulness</span>'
     )
     quick_actions = [
         ("useful", "Useful"),
         ("partly_useful", "Partly useful"),
         ("not_useful", "Not useful"),
-        ("needs_review", "Needs review"),
+        ("needs_review", "Needs tuning"),
     ]
     action_buttons = "".join(
         f'<button type="submit" name="usefulness" value="{value}">{label}</button>'
@@ -4857,15 +5086,15 @@ def render_radar_queue_usefulness_review(
       <input type="hidden" name="run_id" value="{html_escape(run_id)}">
       {render_radar_queue_hidden_inputs(queue_window)}
       <div class="radar-queue-review-summary">
-        <span class="muted">Queue usefulness:</span>
+        <span class="muted">Was today's feed useful?</span>
         {latest_summary}
         {review_scope_chip}
         {thin_mvp_chip}
         {optional_feedback_chip}
       </div>
       <input name="reviewer" placeholder="Name (optional)" aria-label="Reviewer name">
-      <input name="note" placeholder="Short note" aria-label="Queue review note">
-      <span class="radar-queue-review-actions" role="group" aria-label="Queue usefulness decision">
+      <input name="note" placeholder="Short note" aria-label="Today feed note">
+      <span class="radar-queue-review-actions" role="group" aria-label="Today feed usefulness decision">
         {action_buttons}
       </span>
     </form>
@@ -4918,7 +5147,7 @@ def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 2
     actions = summary.get("actions") if isinstance(summary.get("actions"), dict) else {}
     action_links = " ".join(
         f'<a class="tag" href="{html_escape(team_radar_queue_link("/radar/queue", max(1, int(limit)), str(action), recent_days=selected_recent_days))}">'
-        f'{html_escape(readable_radar_action(action))}: {int(count)}</a>'
+        f'{html_escape(readable_member_action(action))}: {int(count)}</a>'
         for action, count in sorted(actions.items())
         if int(count or 0) > 0
     )
@@ -4930,8 +5159,8 @@ def render_radar_queue_triage_summary(summary: dict[str, Any], *, limit: int = 2
     )
     return f"""
     <div class="tags">
-      <span class="muted">Triage:</span>
-      <span class="pill">top: {html_escape(readable_radar_action(summary.get('top_action') or 'none', default='None'))}</span>
+      <span class="muted">Focus:</span>
+      <span class="pill">top: {html_escape(readable_member_action(summary.get('top_action') or 'none', default='None'))}</span>
       {action_links}
       {f'<span class="tag">{html_escape(severity_text)}</span>' if severity_text else ''}
     </div>
@@ -4961,13 +5190,13 @@ def render_radar_queue_triage_options(options: list[Any], *, limit: int = 20, re
         )
         chips.append(
             f'<a class="{css}" href="{html_escape(href)}"'
-            f' title="{title}">{html_escape(label)} {count}</a>'
+            f' title="{title}">{html_escape(readable_member_action(action, default=label))} {count}</a>'
         )
     if not chips:
         return ""
     return f"""
     <div class="tags">
-      <span class="muted">Triage lanes:</span>
+      <span class="muted">Focus:</span>
       {''.join(chips)}
     </div>
     """
@@ -4981,7 +5210,7 @@ def render_radar_queue_filter_status(triage_action: str, limit: int, *, recent_d
     clear_link = f"/radar/queue?limit={max(1, int(limit))}"
     parts = []
     if selected:
-        parts.append(f'<span class="pill">triage: {html_escape(readable_radar_action(selected))}</span>')
+        parts.append(f'<span class="pill">focus: {html_escape(readable_member_action(selected))}</span>')
     if selected_recent_days:
         parts.append(f'<span class="pill">recent: last {selected_recent_days} days</span>')
     return f"""
@@ -5029,8 +5258,8 @@ def render_empty_radar_queue(records: list[dict[str, Any]], review_counts: dict[
         return ""
     total = int(review_counts.get("all") or 0)
     if total:
-        return '<p class="empty">No active unimported Radar candidates in the current priority queue.</p>'
-    return '<p class="empty">No stored Literature Radar papers yet. Run Radar or wait for the scheduled collector.</p>'
+        return '<p class="empty">No new items match this view. Try another focus filter or open the digest.</p>'
+    return '<p class="empty">No Radar items yet. Submit a paper or wait for the next collector run.</p>'
 
 
 def radar_access_kind_summary_text(kinds: dict[str, Any]) -> str:
@@ -5061,7 +5290,7 @@ def render_latest_radar_queue_item(
     triage = record.get("triage_hint") if isinstance(record.get("triage_hint"), dict) else {}
     if not triage:
         triage = radar_review_triage_hint(record)
-    action = readable_radar_action(triage.get("action") or latest.get("recommended_action") or "human_review")
+    action = readable_member_action(triage.get("action") or latest.get("recommended_action") or "human_review")
     source_ids = radar_history_record_source_ids(record)
     source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in source_ids[:4])
     if len(source_ids) > 4:
@@ -5096,8 +5325,7 @@ def render_latest_radar_queue_item(
         <div class="tags">
           {render_radar_review_pill(review)}
           {relevance_pill(label)}
-          <span class="pill">Score: {score}</span>
-          <span class="pill">Action: {html_escape(action)}</span>
+          <span class="pill">Suggestion: {html_escape(action)}</span>
           {render_radar_release_pill(paper)}
           {pdf_access_html}
           {render_radar_source_provenance_pill(provenance)}
@@ -5126,7 +5354,7 @@ def render_latest_radar_queue_item(
 def render_radar_triage_hint(triage: dict[str, Any]) -> str:
     if not triage:
         return ""
-    label = normalize_inline_text(triage.get("label") or triage.get("action") or "Review")
+    label = readable_member_action(triage.get("action") or triage.get("label") or "human_review")
     reason = normalize_inline_text(triage.get("reason") or "")
     if not label and not reason:
         return ""
@@ -5135,7 +5363,7 @@ def render_radar_triage_hint(triage: dict[str, Any]) -> str:
     reason_html = f'<span class="muted">{html_escape(reason)}</span>' if reason else ""
     return f"""
     <div class="tags radar-triage-hint">
-      <span class="pill {css}">Triage: {html_escape(label)}</span>
+      <span class="pill {css}">Priority: {html_escape(label)}</span>
       {reason_html}
     </div>
     """
@@ -5334,7 +5562,7 @@ def render_item_radar_review_controls(radar_history: dict[str, Any] | None = Non
 
 
 def render_plain_tags(tags: list[str]) -> str:
-    return "".join(f'<a class="tag" href="/?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags) or '<span class="muted">No tags</span>'
+    return "".join(f'<a class="tag" href="/library?tag={quote(tag)}">{html_escape(tag)}</a>' for tag in tags) or '<span class="muted">No tags</span>'
 
 
 def render_paper_comments(paper: dict[str, Any]) -> str:
@@ -5513,7 +5741,7 @@ def render_paper_link(link: str | None) -> str:
 
 def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
     body = f"""
-    {render_topline("Submit To Library", "Add a direct PDF, upload a PDF, or save a promising manual link.", "/", "Latest Papers")}
+    {render_topline("Submit Research", "Add a paper, PDF, or promising link for the team.", "/", "Today")}
     {render_notice(notice)}
     <div class="panel">
       <div class="submit-options">
@@ -5553,13 +5781,13 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
       </div>
     </div>
     """
-    return page("Submit To Library", body, active="submit")
+    return page("Submit Research", body, active="submit")
 
 
 def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> str:
     interests = database.list_team_interest_keywords()
     body = f"""
-    {render_topline("Team Interests", "Weighted keywords for initial relevance scoring.", "/", "Latest Papers")}
+    {render_topline("Topics", "Weighted research interests that shape Radar ranking.", "/", "Today")}
     {render_notice(notice)}
     <div class="panel">
       <div class="interest-bars">
@@ -5568,7 +5796,7 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
       {render_interest_add_form()}
     </div>
     """
-    return page("Team Interests", body, active="interests")
+    return page("Topics", body, active="interests")
 
 
 def render_interest_card(interest: dict[str, Any]) -> str:
@@ -6277,6 +6505,8 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             notice = query.get("notice", [""])[0]
             if parsed.path == "/":
+                self.respond_html(render_today_page(self.database, notice=notice))
+            elif parsed.path == "/library":
                 tag = query.get("tag", [None])[0] or None
                 sort_by = query.get("sort", ["latest"])[0] or "latest"
                 show_removed = query.get("removed", [""])[0] == "1"
@@ -6413,7 +6643,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/submit":
                 item_id = submit_research_item(self.database, fields, upload=upload)
-                self.redirect(f"/?notice={quote(f'Added {item_id} to the library.')}")
+                self.redirect(f"/library?notice={quote(f'Added {item_id} to the library.')}")
             elif parsed.path == "/radar/import":
                 item_id = import_radar_recommendation_to_library(self.database, fields)
                 run_id = fields.get("run_id") or ""
@@ -6506,34 +6736,34 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 self.redirect(f"/interests?notice={quote('Removed keyword.')}")
             elif parsed.path == "/paper/update":
                 item_id = update_paper_interactions(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Updated {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Updated {item_id}.')}")
             elif parsed.path == "/paper/tags":
                 item_id = update_paper_tags(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Updated tags for {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Updated tags for {item_id}.')}")
             elif parsed.path == "/paper/tag/add":
                 item_id = add_paper_tag(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Added tag for {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Added tag for {item_id}.')}")
             elif parsed.path == "/paper/tag/update":
                 item_id = update_paper_tag(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Updated tag for {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Updated tag for {item_id}.')}")
             elif parsed.path == "/paper/tag/remove":
                 item_id = remove_paper_tag(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Removed tag from {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Removed tag from {item_id}.')}")
             elif parsed.path == "/paper/comment/add":
                 item_id = add_paper_comment(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Added comment to {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Added comment to {item_id}.')}")
             elif parsed.path == "/paper/relevance":
                 item_id = update_paper_relevance(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Updated relevance for {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Updated relevance for {item_id}.')}")
             elif parsed.path == "/paper/importance":
                 item_id = update_paper_importance(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Updated importance for {item_id}.')}")
+                self.redirect(f"/library?notice={quote(f'Updated importance for {item_id}.')}")
             elif parsed.path == "/paper/remove":
                 item_id = remove_paper(self.database, fields)
-                self.redirect(f"/?notice={quote(f'Removed {item_id}. You can recover it for 24 hours.')}")
+                self.redirect(f"/library?notice={quote(f'Removed {item_id}. You can recover it for 24 hours.')}")
             elif parsed.path == "/paper/recover":
                 item_id = recover_paper(self.database, fields)
-                self.redirect(f"/?removed=1&notice={quote(f'Recovered {item_id}.')}")
+                self.redirect(f"/library?removed=1&notice={quote(f'Recovered {item_id}.')}")
             else:
                 self.respond_html(page("Not Found", "<h1>Not Found</h1>", active=""), status=HTTPStatus.NOT_FOUND)
         except Exception as error:
