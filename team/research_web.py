@@ -134,6 +134,20 @@ RADAR_WEB_SOURCE_OPTIONS = [
     (option["id"], option["label"])
     for option in radar_source_options()
 ]
+SOURCE_LABEL_OVERRIDES = {
+    "acm_ccs": "ACM CCS",
+    "arxiv": "arXiv",
+    "dblp": "DBLP",
+    "dblp_venues": "DBLP venues",
+    "ieee_sp": "IEEE S&P",
+    "ndss": "NDSS",
+    "openalex": "OpenAlex",
+    "openalex_venues": "OpenAlex venues",
+    "openreview": "OpenReview",
+    "openreview_venues": "OpenReview venues",
+    "semantic_scholar": "Semantic Scholar",
+    "usenix_security": "USENIX Security",
+}
 RADAR_WEB_DEFAULT_SOURCES = set(DEFAULT_RADAR_SOURCES)
 RADAR_WEB_SEED_SOURCES = {
     "semantic_scholar_citations",
@@ -1008,6 +1022,23 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       padding-top: 2px;
     }}
     .paper-controls, .paper-actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .paper-source-row {{
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }}
+    .source-label {{
+      border-color: #b6dfcc;
+      background: #edf8f2;
+      color: var(--good);
+    }}
+    .source-class-label {{
+      border-color: #c6d7f2;
+      background: #f3f7ff;
+      color: #24427a;
+    }}
     .tag, .pill {{
       display: inline-block;
       border: 1px solid var(--line);
@@ -1029,6 +1060,11 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .tag.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
     .inline-form {{ display: inline-flex; gap: 6px; align-items: center; }}
+    .pdf-upload-form label.button {{
+      display: inline-flex;
+      align-items: center;
+      margin: 0;
+    }}
     .mini-input {{
       width: 18ch;
       min-width: 12ch;
@@ -4843,16 +4879,26 @@ def render_latest_papers_page(
     database: TeamResearchDatabase,
     *,
     tag: str | None = None,
+    source: str | None = None,
     sort_by: str = "latest",
     show_removed: bool = False,
     notice: str = "",
 ) -> str:
-    papers = database.list_latest_relevant_papers(
+    base_papers = database.list_latest_relevant_papers(
         tag=tag,
         sort_by=sort_by,
         show_removed=show_removed,
     )
-    tags = database.list_tags()
+    source_filter = clean_library_source_filter(source)
+    papers = filter_library_papers_by_source(base_papers, source_filter)
+    hidden_source_tags = library_source_tag_keys_for_papers(
+        database.list_latest_relevant_papers(sort_by=sort_by, show_removed=show_removed, limit=500)
+    )
+    tags = [
+        candidate_tag
+        for candidate_tag in database.list_tags()
+        if source_filter_key(candidate_tag.get("tag")) not in hidden_source_tags
+    ]
     body = f"""
     {render_topline("Team Library", "Saved papers and resources the team decided to keep.", "/submit", "Submit")}
     {render_notice(notice)}
@@ -4863,6 +4909,13 @@ def render_latest_papers_page(
           <select id="tag" name="tag">
             <option value="">All tags</option>
             {render_tag_options(tags, tag)}
+          </select>
+        </div>
+        <div class="field">
+          <label for="source">Filter by source</label>
+          <select id="source" name="source">
+            <option value="">All sources</option>
+            {render_library_source_options(base_papers, source_filter)}
           </select>
         </div>
         <div class="field">
@@ -5625,6 +5678,163 @@ def render_sort_options(selected: str) -> str:
     )
 
 
+def clean_library_source_filter(value: str | None) -> str:
+    return source_filter_key(value or "")
+
+
+def source_filter_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_.-]+", "-", str(value or "").strip().lower().lstrip("#")).strip(".-")
+
+
+def source_display_label(value: Any) -> str:
+    key = source_filter_key(value)
+    if key in SOURCE_LABEL_OVERRIDES:
+        return SOURCE_LABEL_OVERRIDES[key]
+    text = str(value or "").strip()
+    if not text:
+        return "Unknown source"
+    cleaned = re.sub(r"[_-]+", " ", text).strip()
+    if key.isalpha() and len(key) <= 6:
+        return key.upper()
+    return cleaned[:1].upper() + cleaned[1:]
+
+
+def source_class_label(value: Any) -> str:
+    text = re.sub(r"[_-]+", " ", str(value or "").strip())
+    if not text or text.lower() == "unknown":
+        return ""
+    return text[:1].upper() + text[1:]
+
+
+def first_library_source_record(radar_metadata: dict[str, Any]) -> dict[str, Any]:
+    source_records = radar_metadata.get("source_records") if isinstance(radar_metadata.get("source_records"), list) else []
+    return next((record for record in source_records if isinstance(record, dict)), {})
+
+
+def library_paper_source(paper: dict[str, Any]) -> dict[str, str]:
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    provenance = (
+        radar_metadata.get("source_provenance")
+        if isinstance(radar_metadata.get("source_provenance"), dict)
+        else {}
+    )
+    source_record = first_library_source_record(radar_metadata)
+    identifiers = item.get("identifiers") if isinstance(item.get("identifiers"), dict) else {}
+    source_id = str(provenance.get("source_id") or source_record.get("collector_id") or source_record.get("source_id") or "")
+    configured_source = str(
+        provenance.get("configured_source_id")
+        or provenance.get("venue_profile_id")
+        or source_record.get("configured_source_id")
+        or source_record.get("venue_profile_id")
+        or ""
+    )
+    display_source = configured_source or source_id or str(item.get("venue") or "")
+    if not display_source and identifiers.get("manual_link_url"):
+        display_source = "manual_link"
+    if not display_source:
+        display_source = "manual"
+    key = source_filter_key(display_source)
+    source_class = (
+        provenance.get("source_class")
+        or source_record.get("source_class")
+        or ("manual_link" if identifiers.get("manual_link_url") else "")
+    )
+    return {
+        "key": key or "manual",
+        "label": source_display_label(display_source),
+        "class_label": source_class_label(source_class),
+        "source_id": source_filter_key(source_id),
+        "configured_source_id": source_filter_key(configured_source),
+    }
+
+
+def library_source_tag_keys(paper: dict[str, Any]) -> set[str]:
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    provenance = (
+        radar_metadata.get("source_provenance")
+        if isinstance(radar_metadata.get("source_provenance"), dict)
+        else {}
+    )
+    source_records = radar_metadata.get("source_records") if isinstance(radar_metadata.get("source_records"), list) else []
+    candidates: list[Any] = [
+        library_paper_source(paper).get("key"),
+        provenance.get("source_id"),
+        provenance.get("configured_source_id"),
+        provenance.get("venue_profile_id"),
+    ]
+    for source_record in source_records:
+        if not isinstance(source_record, dict):
+            continue
+        candidates.extend(
+            [
+                source_record.get("collector_id"),
+                source_record.get("source_id"),
+                source_record.get("configured_source_id"),
+                source_record.get("venue_profile_id"),
+                source_record.get("venue_profile_name"),
+            ]
+        )
+    return {key for key in (source_filter_key(candidate) for candidate in candidates) if key}
+
+
+def library_source_tag_keys_for_papers(papers: list[dict[str, Any]]) -> set[str]:
+    source_keys = {source_filter_key(source_id) for source_id, _label in RADAR_WEB_SOURCE_OPTIONS}
+    source_keys.update(source_filter_key(source_id) for source_id in SOURCE_LABEL_OVERRIDES)
+    for paper in papers:
+        source_keys.update(library_source_tag_keys(paper))
+    return {key for key in source_keys if key}
+
+
+def library_visible_tags(paper: dict[str, Any]) -> list[str]:
+    hidden_source_keys = library_source_tag_keys(paper)
+    return [
+        tag
+        for tag in paper.get("tags") or []
+        if source_filter_key(tag) not in hidden_source_keys
+    ]
+
+
+def filter_library_papers_by_source(papers: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    if not source:
+        return papers
+    return [paper for paper in papers if library_paper_source(paper).get("key") == source]
+
+
+def render_library_source_options(papers: list[dict[str, Any]], selected: str) -> str:
+    counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for paper in papers:
+        source = library_paper_source(paper)
+        key = source["key"]
+        counts[key] = counts.get(key, 0) + 1
+        labels[key] = source["label"]
+    rows = []
+    for key in sorted(counts, key=lambda value: labels.get(value, value).lower()):
+        label = f"{labels[key]} ({counts[key]})"
+        selected_attr = " selected" if key == selected else ""
+        rows.append(
+            f'<option value="{html_escape(key)}"{selected_attr}>{html_escape(label)}</option>'
+        )
+    return "\n".join(rows)
+
+
+def render_library_source_badges(paper: dict[str, Any]) -> str:
+    source = library_paper_source(paper)
+    class_html = (
+        f'<span class="pill source-class-label">{html_escape(source["class_label"])}</span>'
+        if source.get("class_label")
+        else ""
+    )
+    return f"""
+    <div class="paper-source-row">
+      <span class="tag source-label">Source: {html_escape(source["label"])}</span>
+      {class_html}
+    </div>
+    """
+
+
 def render_paper_list(papers: list[dict[str, Any]]) -> str:
     if not papers:
         return '<div class="empty">No relevant papers yet. Submit a link or PDF to start the library.</div>'
@@ -5632,22 +5842,20 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
     for paper in papers:
         item = paper["item"]
         screening = paper["screening"]
-        tags = paper["tags"]
+        tags = library_visible_tags(paper)
         link = paper.get("link")
         abstract = item.get("abstract") or ""
         link_html = render_paper_link(link)
         removed = (paper.get("library_entry") or {}).get("status") == "removed"
-        tag_html = render_plain_tags(tags) if removed else render_tag_editor(paper)
+        tag_html = render_plain_tags(tags) if removed else render_tag_editor({**paper, "tags": tags})
         relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
         importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
-        pdf_access_html = render_item_pdf_access_pill(item)
-        provenance_html = render_item_radar_source_provenance_pill(item)
-        radar_links_html = render_item_radar_links(item)
+        upload_pdf_html = "" if removed else render_pdf_upload_control(paper)
         row_class = "paper removed" if removed else "paper"
         paper_actions = (
             render_removed_controls(paper)
             if removed
-            else render_item_radar_review_controls(paper.get("radar_history")) + render_active_actions(paper)
+            else render_active_actions(paper)
         )
         rows.append(
             f"""
@@ -5657,6 +5865,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                 <div class="meta">
                   {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
                 </div>
+                {render_library_source_badges(paper)}
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
                 {render_paper_radar_insight(item, paper.get("radar_history"))}
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
@@ -5664,14 +5873,10 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
               </div>
               <div class="paper-footer">
                 <div class="paper-controls">
-                  {ai_status_pill(paper.get("ai_status"))}
                   {importance_html}
                   {relevance_html}
-                  {render_item_radar_lifecycle_pills(item, paper.get("radar_history"))}
-                  {pdf_access_html}
-                  {provenance_html}
-                  {radar_links_html}
                   {link_html}
+                  {upload_pdf_html}
                 </div>
                 <div class="paper-actions">
                   {paper_actions}
@@ -5923,6 +6128,35 @@ def render_active_actions(paper: dict[str, Any]) -> str:
     <form class="inline-form" method="post" action="/paper/remove">
       <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
       <button class="mini-button danger" type="submit">Remove</button>
+    </form>
+    """
+
+
+def paper_has_local_pdf(paper: dict[str, Any]) -> bool:
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    link = str(paper.get("link") or "")
+    return bool(item.get("object_key") or (link and not link.startswith(("http://", "https://"))))
+
+
+def render_pdf_upload_control(paper: dict[str, Any]) -> str:
+    if paper_has_local_pdf(paper):
+        return ""
+    item = paper["item"]
+    input_id = f"pdf-upload-{re.sub(r'[^A-Za-z0-9_-]+', '-', str(item['id']))}"
+    return f"""
+    <form class="inline-form pdf-upload-form" method="post" action="/paper/pdf/upload" enctype="multipart/form-data">
+      <input type="hidden" name="item_id" value="{html_escape(item["id"])}">
+      <label class="button" for="{html_escape(input_id)}">Upload PDF</label>
+      <input
+        id="{html_escape(input_id)}"
+        class="sr-only"
+        type="file"
+        name="pdf"
+        accept="application/pdf"
+        required
+        onchange="this.form.submit()"
+      >
+      <button class="sr-only" type="submit">Upload PDF</button>
     </form>
     """
 
@@ -6202,6 +6436,31 @@ def submit_research_item(
     if analyze:
         analyze_submitted_item(database, result.item["id"])
     return result.item["id"]
+
+
+def upload_paper_pdf(
+    database: TeamResearchDatabase,
+    fields: dict[str, str],
+    *,
+    upload: tuple[str, bytes] | None = None,
+) -> str:
+    item_id = required_field(fields, "item_id")
+    if upload is None:
+        raise ValueError("Choose a PDF file to upload.")
+    validate_pdf_upload(upload[0], upload[1])
+    digest = pdf_digest(upload[1])
+    existing_item = database.find_item_by_identifier("pdf_sha256", digest)
+    if existing_item and existing_item.get("id") != item_id:
+        raise ValueError("That PDF is already attached to another library item.")
+    object_key = save_uploaded_pdf(upload[0], upload[1])
+    database.attach_item_pdf(
+        item_id,
+        object_key=object_key,
+        pdf_sha256=digest,
+        filename=safe_filename(upload[0]),
+        actor=fields.get("actor") or "team-member",
+    )
+    return item_id
 
 
 def update_paper_interactions(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
@@ -6750,12 +7009,14 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 self.respond_html(render_today_page(self.database, notice=notice))
             elif parsed.path == "/library":
                 tag = query.get("tag", [None])[0] or None
+                source = query.get("source", [None])[0] or None
                 sort_by = query.get("sort", ["latest"])[0] or "latest"
                 show_removed = query.get("removed", [""])[0] == "1"
                 self.respond_html(
                     render_latest_papers_page(
                         self.database,
                         tag=tag,
+                        source=source,
                         sort_by=sort_by,
                         show_removed=show_removed,
                         notice=notice,
@@ -6994,6 +7255,9 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/paper/comment/add":
                 item_id = add_paper_comment(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Added comment to {item_id}.')}")
+            elif parsed.path == "/paper/pdf/upload":
+                item_id = upload_paper_pdf(self.database, fields, upload=upload)
+                self.redirect(f"/library?notice={quote(f'Uploaded PDF for {item_id}.')}")
             elif parsed.path == "/paper/relevance":
                 item_id = update_paper_relevance(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Updated relevance for {item_id}.')}")

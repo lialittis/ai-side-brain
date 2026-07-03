@@ -554,6 +554,65 @@ class TeamResearchDatabase:
             self._upsert_item(connection, item)
         return item
 
+    def attach_item_pdf(
+        self,
+        item_id: str,
+        *,
+        object_key: str,
+        pdf_sha256: str,
+        filename: str = "",
+        actor: str = "team-member",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        if not object_key:
+            raise ValueError("PDF attachment requires a saved file path.")
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        bundle = self.get_bundle(item_id)
+        item = dict(bundle["item"])
+        before_item = dict(item)
+        identifiers = dict(item.get("identifiers") or {})
+        if pdf_sha256:
+            identifiers["pdf_sha256"] = pdf_sha256
+        if filename:
+            identifiers["pdf_filename"] = filename
+        pdf_access = dict(item.get("pdf_access") or {})
+        pdf_access.update(
+            {
+                "reason": "uploaded_by_team",
+                "local_pdf_path": object_key,
+                "access_date": timestamp[:10],
+                "source_class": "team_upload",
+            }
+        )
+        item.update(
+            {
+                "identifiers": identifiers,
+                "object_key": object_key,
+                "pdf_access": pdf_access,
+                "updated_at": timestamp,
+            }
+        )
+        if isinstance(item.get("radar"), dict):
+            radar_metadata = dict(item["radar"])
+            radar_metadata["pdf_access"] = pdf_access
+            item["radar"] = radar_metadata
+        with self.connect() as connection:
+            self._upsert_item(connection, item)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="research_item_pdf_attached",
+                    object_type="research_item",
+                    object_id=item["id"],
+                    before=before_item,
+                    after=item,
+                    now=now,
+                ),
+            )
+        return item
+
     def mark_item_rejected_by_ai(
         self,
         item_id: str,
@@ -2116,7 +2175,7 @@ class TeamResearchDatabase:
                     "tags": self.get_item_tags(item["id"]),
                     "comments": self.list_item_comments(item["id"]),
                     "radar_history": radar_history,
-                    "link": item.get("url") or item.get("object_key"),
+                    "link": item.get("object_key") or item.get("url"),
                 }
             )
         active_papers = [paper for paper in papers if (paper.get("library_entry") or {}).get("status") != "removed"]

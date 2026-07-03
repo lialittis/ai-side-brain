@@ -52,6 +52,7 @@ from team.research_web import (
     update_paper_interactions,
     update_paper_relevance,
     update_paper_tags,
+    upload_paper_pdf,
     render_literature_radar_page,
     render_literature_radar_brief_page,
     render_literature_radar_queue_page,
@@ -169,6 +170,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("No relevant papers yet", latest)
         self.assertIn("Submit Research", submit)
         self.assertIn("Topics", latest)
+        self.assertIn("Filter by source", latest)
         self.assertNotIn("Radar Ops", latest)
         self.assertIn('href="/">Today</a>', latest)
         self.assertIn('href="/library">Library</a>', latest)
@@ -1174,8 +1176,80 @@ class TeamResearchWebTest(unittest.TestCase):
             )
             latest_html = render_latest_papers_page(database)
             self.assertIn("<strong>Signal:</strong> A local summary for radar review.", latest_html)
-            self.assertIn(">arXiv</a>", latest_html)
+            self.assertIn("Source: arXiv", latest_html)
+            self.assertIn("Open Link", latest_html)
+            self.assertIn("Upload PDF", latest_html)
             self.assertIn("https://arxiv.org/abs/2601.00006", latest_html)
+
+    def test_library_uses_source_filter_and_hides_source_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            ndss_paper = create_radar_paper(
+                source_id="official_accepted_pages",
+                source_paper_id="ndss-2026-runtime-hardening",
+                title="Runtime Hardening from an NDSS Accepted Paper",
+                abstract="Memory safety and system security work accepted at a security venue.",
+                year=2026,
+                links={"landing": "https://www.ndss-symposium.org/ndss-paper/runtime-hardening/"},
+                source_record={
+                    "source_id": "official_accepted_pages",
+                    "source_paper_id": "ndss-2026-runtime-hardening",
+                    "configured_source_id": "ndss",
+                    "venue_profile_id": "ndss",
+                    "source_page": "https://www.ndss-symposium.org/ndss2026/accepted-papers/",
+                },
+            )
+            arxiv_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00077",
+                title="ArXiv Memory Safety Baseline",
+                abstract="Memory safety and system security preprint.",
+                identifiers={"arxiv_id": "2601.00077"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00077"},
+            )
+            recommendations = recommend_papers([ndss_paper, arxiv_paper], limit=2)
+            run = database.create_literature_radar_run(
+                sources=["official_accepted_pages", "arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[ndss_paper, arxiv_paper],
+                recommendations=recommendations,
+                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+            )
+            item_id = import_radar_recommendation_to_library(
+                database,
+                {
+                    "run_id": run["id"],
+                    "dedupe_key": ndss_paper["dedupe_key"],
+                    "actor": "alice",
+                },
+            )
+            import_radar_recommendation_to_library(
+                database,
+                {
+                    "run_id": run["id"],
+                    "dedupe_key": arxiv_paper["dedupe_key"],
+                    "actor": "alice",
+                },
+            )
+            database.set_item_tags(item_id, ["ndss", "memory-safety"])
+
+            html = render_latest_papers_page(database)
+            self.assertIn("Runtime Hardening from an NDSS Accepted Paper", html)
+            self.assertIn("Source: NDSS", html)
+            self.assertIn("Official accepted page", html)
+            self.assertIn('aria-label="Edit tag memory-safety"', html)
+            self.assertNotIn('aria-label="Edit tag ndss"', html)
+            self.assertNotIn('/library?tag=ndss', html)
+            self.assertIn('<option value="ndss">NDSS (1)</option>', html)
+
+            filtered_html = render_latest_papers_page(database, source="ndss")
+            self.assertIn('option value="ndss" selected', filtered_html)
+            self.assertIn("Runtime Hardening from an NDSS Accepted Paper", filtered_html)
+            self.assertNotIn("ArXiv Memory Safety Baseline", filtered_html)
 
     def test_literature_radar_web_run_uses_team_runner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2047,14 +2121,14 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("System Security for Memory Safe Agents", html)
             latest_html = render_latest_papers_page(database)
             self.assertIn("Radar insight", latest_html)
-            self.assertIn("Saved", latest_html)
-            self.assertIn("Radar seen: 1", latest_html)
-            self.assertIn("Released: 2026-06-28", latest_html)
+            self.assertIn("Source: Semantic Scholar", latest_html)
+            self.assertNotIn("Radar seen: 1", latest_html)
+            self.assertNotIn("Released: 2026-06-28", latest_html)
             self.assertIn("Track this for the agent memory-safety workflow.", latest_html)
-            self.assertIn('action="/radar/review"', latest_html)
-            self.assertIn('name="return_to" value="latest"', latest_html)
-            self.assertIn('name="status" value="dismissed"', latest_html)
-            self.assertIn(">Mark as new</button>", latest_html)
+            self.assertNotIn('action="/radar/review"', latest_html)
+            self.assertNotIn('name="return_to" value="latest"', latest_html)
+            self.assertNotIn('name="status" value="dismissed"', latest_html)
+            self.assertNotIn(">Mark as new</button>", latest_html)
             self.assertIn("This paper links memory safety to agentic systems.", latest_html)
             self.assertIn("<strong>Attention:</strong> Prioritize for memory-safe agent workflow review.", latest_html)
             self.assertIn("<strong>Now:</strong> new this run", latest_html)
@@ -2062,7 +2136,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Related to existing context: Agentic baseline.", latest_html)
             self.assertIn("Matched:", latest_html)
             self.assertIn("agentic security", latest_html)
-            self.assertIn("PDF: metadata_only_no_legal_pdf_found", latest_html)
+            self.assertNotIn("PDF: metadata_only_no_legal_pdf_found", latest_html)
+            self.assertIn('action="/paper/pdf/upload"', latest_html)
+            self.assertIn("Upload PDF", latest_html)
             self.assertIn("Team Library", latest_html)
             self.assertNotIn("Worth Reading Today</h3>", latest_html)
             self.assertNotIn('action="/radar/papers/import"', latest_html)
@@ -2431,6 +2507,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Switchable radiative cooling envelope control", html)
             self.assertIn("radiative-cooling", html)
             self.assertIn("Open Link", html)
+            self.assertIn('action="/paper/pdf/upload"', html)
+            self.assertIn("Upload PDF", html)
+            self.assertNotIn("AI: local", html)
 
     def test_manual_link_submission_uses_team_interest_relevance_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2565,7 +2644,45 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertTrue(Path(papers[0]["link"]).exists())
             self.assertEqual(papers[0]["tags"], [])
             self.assertTrue(list(upload_dir.glob("*.pdf")))
-            self.assertIn("Open PDF", render_latest_papers_page(database))
+            html = render_latest_papers_page(database)
+            self.assertIn("Open PDF", html)
+            self.assertNotIn('action="/paper/pdf/upload"', html)
+
+    def test_link_only_paper_can_attach_uploaded_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            upload_dir = Path(temp_dir) / "uploads"
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/link-only-paper",
+                    "title": "Link Only Paper",
+                    "brief": "Memory safety and system security paper with only a landing page first.",
+                },
+                analyze=False,
+            )
+
+            before_html = render_latest_papers_page(database)
+            self.assertIn("Open Link", before_html)
+            self.assertIn("Upload PDF", before_html)
+
+            with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
+                upload_paper_pdf(
+                    database,
+                    {"item_id": item_id},
+                    upload=("attached.pdf", b"%PDF-1.4 attached content"),
+                )
+
+            paper = database.list_latest_relevant_papers()[0]
+            self.assertEqual(paper["item"]["id"], item_id)
+            self.assertIn("attached.pdf", paper["item"]["object_key"])
+            self.assertEqual(paper["item"]["pdf_access"]["reason"], "uploaded_by_team")
+            self.assertIn("attached.pdf", paper["link"])
+            self.assertTrue(Path(paper["link"]).exists())
+            after_html = render_latest_papers_page(database)
+            self.assertIn("Open PDF", after_html)
+            self.assertNotIn("Upload PDF", after_html)
 
     def test_duplicate_pdf_upload_reuses_existing_item_without_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
