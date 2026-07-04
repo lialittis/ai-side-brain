@@ -87,6 +87,8 @@ from shared.literature_radar import (
 )
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
+    RADAR_DEFAULT_AI_ENRICH_LIMIT,
+    RADAR_DEFAULT_AI_ENRICH_MIN_SCORE,
     TEAM_RADAR_SETTINGS_KEY,
     TEAM_RADAR_TOPIC_PROFILE,
     apply_team_radar_source_preset,
@@ -1649,6 +1651,7 @@ def render_radar_status_summary(database: TeamResearchDatabase, runs: list[dict[
         render_radar_metric_chip("summaries", "yes" if settings.get("summarize") else "no"),
         render_radar_metric_chip("provider", settings.get("summary_provider") or "local"),
         render_radar_metric_chip("summary min", settings.get("summary_min_score") or 0),
+        render_radar_metric_chip("AI enrich", "yes" if settings.get("ai_enrich") else "no"),
         render_radar_metric_chip("cache PDFs", "yes" if settings.get("cache_pdfs") else "no"),
         render_radar_metric_chip("source contact", "yes" if settings.get("source_contact_email") else "no"),
         render_radar_metric_chip("unreviewed", review_counts.get("unreviewed", 0)),
@@ -2288,6 +2291,9 @@ def default_radar_form_settings(*, source_preset: str = "team_security_daily") -
         "summarize": True,
         "summary_provider": "local",
         "summary_min_score": RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+        "ai_enrich": True,
+        "ai_enrich_limit": RADAR_DEFAULT_AI_ENRICH_LIMIT,
+        "ai_enrich_min_score": RADAR_DEFAULT_AI_ENRICH_MIN_SCORE,
         "cache_pdfs": False,
         "pdf_cache_dir": RADAR_DEFAULT_PDF_CACHE_DIR,
         "pdf_cache_max_bytes": RADAR_DEFAULT_PDF_CACHE_MAX_BYTES,
@@ -2716,6 +2722,9 @@ def radar_settings_collection_config(settings: dict[str, Any]) -> dict[str, Any]
         summary_min_score=int(
             settings.get("summary_min_score") or RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE
         ),
+        ai_enrich=bool(settings.get("ai_enrich")),
+        ai_enrich_limit=int(settings.get("ai_enrich_limit") or RADAR_DEFAULT_AI_ENRICH_LIMIT),
+        ai_enrich_min_score=int(settings.get("ai_enrich_min_score") or RADAR_DEFAULT_AI_ENRICH_MIN_SCORE),
         import_results=False,
         import_limit=0,
         min_import_score=0,
@@ -3142,7 +3151,7 @@ def render_radar_brief_top_recommendation(
       <div class="radar-queue-title">{rank}. {html_escape(title)}</div>
       <div class="tags">
         {relevance_pill(label)}
-        <span class="pill">Score: {score}</span>
+        <span class="pill">Priority: {score}</span>
         {render_radar_review_pill(review)}
         {render_radar_release_pill(record)}
         {triage_html}
@@ -3253,6 +3262,20 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
         <span class="muted">AI summary min score</span>
         <input type="number" name="summary_min_score" min="0" max="100" value="{html_escape(str(settings.get('summary_min_score') or RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE))}">
       </label>
+      <label class="radar-option-line">
+        <input type="checkbox" name="ai_enrich" value="1"{checked_attr(bool(settings.get('ai_enrich')))}>
+        <span>AI enrichment</span>
+      </label>
+      <div class="radar-number-row">
+        <label>
+          <span class="muted">AI enrich limit</span>
+          <input type="number" name="ai_enrich_limit" min="1" max="50" value="{html_escape(str(settings.get('ai_enrich_limit') or RADAR_DEFAULT_AI_ENRICH_LIMIT))}">
+        </label>
+        <label>
+          <span class="muted">AI min score</span>
+          <input type="number" name="ai_enrich_min_score" min="0" max="100" value="{html_escape(str(settings.get('ai_enrich_min_score') or RADAR_DEFAULT_AI_ENRICH_MIN_SCORE))}">
+        </label>
+      </div>
       <div class="radar-number-row">
         <label>
           <span class="muted">Conference year</span>
@@ -3435,7 +3458,7 @@ def render_radar_paper_latest_signal(latest: Any) -> str:
     effective_scoring = radar_effective_recommendation_scoring(source)
     return f"""
     <div class="radar-ai-summary">
-      <p><strong>Latest signal:</strong> {relevance_pill(str(effective_scoring.get("label") or "needs_review"))} <span class="pill">Score: {html_escape(int(float(effective_scoring.get("score") or 0)))}</span></p>
+      <p><strong>Latest signal:</strong> {relevance_pill(str(effective_scoring.get("label") or "needs_review"))} <span class="pill">Priority: {html_escape(int(float(effective_scoring.get("score") or 0)))}</span></p>
       {signal_rows}
     </div>
     {render_radar_attention_summary(raw_latest)}
@@ -3598,6 +3621,20 @@ def normalize_radar_settings(settings: dict[str, Any]) -> dict[str, Any]:
         normalized["summary_min_score"] = clean_positive_int(
             str(settings.get("summary_min_score") or ""),
             default=RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+            maximum=100,
+        )
+    if "ai_enrich" in settings:
+        normalized["ai_enrich"] = truthy_setting(settings.get("ai_enrich"))
+    if "ai_enrich_limit" in settings:
+        normalized["ai_enrich_limit"] = clean_positive_int(
+            str(settings.get("ai_enrich_limit") or ""),
+            default=RADAR_DEFAULT_AI_ENRICH_LIMIT,
+            maximum=50,
+        )
+    if "ai_enrich_min_score" in settings:
+        normalized["ai_enrich_min_score"] = clean_positive_int(
+            str(settings.get("ai_enrich_min_score") or ""),
+            default=RADAR_DEFAULT_AI_ENRICH_MIN_SCORE,
             maximum=100,
         )
     if "cache_pdfs" in settings:
@@ -3941,6 +3978,8 @@ def render_radar_collection_config(config: Any) -> str:
         ("conference_year", "conference year"),
         ("summary_provider", "summary provider"),
         ("summary_limit", "summary limit"),
+        ("ai_enrich_limit", "AI enrich limit"),
+        ("ai_enrich_min_score", "AI min score"),
         ("pdf_cache_max_bytes", "PDF max bytes"),
         ("import_limit", "import limit"),
         ("min_import_score", "min import score"),
@@ -3965,6 +4004,7 @@ def render_radar_collection_config(config: Any) -> str:
             chips.append(render_radar_metric_chip(label, radar_list_preview(value)))
     bool_fields = [
         ("summarize", "summaries"),
+        ("ai_enrich", "AI enrichment"),
         ("cache_pdfs", "cache legal PDFs"),
         ("import_results", "auto import"),
         ("openreview_accepted_only", "accepted OpenReview only"),
@@ -4225,7 +4265,7 @@ def render_radar_recommendation(record: dict[str, Any]) -> str:
           {relevance_pill(str(scoring.get("label") or record.get("label") or "needs_review"))}
           {render_novelty_pill(novelty)}
           {render_radar_review_pill(review)}
-          <span class="pill">Score: {html_escape(int(float(scoring.get("score") or record.get("score") or 0)))}</span>
+          <span class="pill">Priority: {html_escape(int(float(scoring.get("score") or record.get("score") or 0)))}</span>
           {render_radar_release_pill(paper)}
           {render_pdf_access_pill(pdf_access)}
           <span class="pill">Action: {html_escape(action)}</span>
@@ -5301,7 +5341,7 @@ def render_radar_queue_daily_review_plan(payload: dict[str, Any]) -> str:
     if primary.get("label"):
         chips.append(f'<span class="tag good">action: {html_escape(str(primary.get("label")))}</span>')
     if primary.get("score") is not None:
-        chips.append(f'<span class="tag">score: {int(primary.get("score") or 0)}</span>')
+        chips.append(f'<span class="tag">priority: {int(primary.get("score") or 0)}</span>')
     if primary.get("release_date"):
         chips.append(f'<span class="tag">released: {html_escape(str(primary.get("release_date")))}</span>')
     reason = str(primary.get("reason") or "").strip()
@@ -5611,8 +5651,8 @@ def render_latest_radar_queue_item(
             · seen {int(record.get("seen_count") or 0)} time{'s' if int(record.get("seen_count") or 0) != 1 else ''}
           </div>
         </div>
-        <div class="radar-score-badge" aria-label="Radar score">
-          <span>Score</span>
+        <div class="radar-score-badge" aria-label="Radar priority">
+          <span>Priority</span>
           <strong>{score}</strong>
         </div>
       </div>
@@ -5867,7 +5907,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                 </div>
                 {render_library_source_badges(paper)}
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
-                {render_paper_radar_insight(item, paper.get("radar_history"))}
+                {render_paper_radar_insight(item, paper.get("radar_history"), card=paper.get("card"), screening=screening)}
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
                 {render_paper_comments(paper)}
               </div>
@@ -5888,10 +5928,34 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
-def render_paper_radar_insight(item: dict[str, Any], radar_history: dict[str, Any] | None = None) -> str:
+def render_paper_radar_insight(
+    item: dict[str, Any],
+    radar_history: dict[str, Any] | None = None,
+    *,
+    card: dict[str, Any] | None = None,
+    screening: dict[str, Any] | None = None,
+) -> str:
     radar = item.get("radar") if isinstance(item.get("radar"), dict) else {}
     recommendation = radar.get("recommendation") if isinstance(radar.get("recommendation"), dict) else {}
     review_note = render_radar_review_reason(radar_review_from_record(radar_history or {})) if radar_history else ""
+    ai_enrichment = (
+        recommendation.get("ai_enrichment")
+        if isinstance(recommendation.get("ai_enrichment"), dict)
+        and recommendation.get("ai_enrichment", {}).get("status") == "succeeded"
+        else {}
+    )
+    ai_card = card if ai_research_card_available(card) else ai_enrichment.get("research_card")
+    ai_screening = screening
+    if not ai_research_card_available(card) and isinstance(ai_enrichment.get("screening"), dict):
+        ai_screening = ai_enrichment["screening"]
+    ai_html = render_ai_first_radar_insight(
+        card=ai_card,
+        screening=ai_screening,
+        recommendation=recommendation,
+        review_note=review_note,
+    )
+    if ai_html:
+        return ai_html
     if not recommendation:
         return review_note
     summary = recommendation.get("summary") if isinstance(recommendation.get("summary"), dict) else {}
@@ -5953,6 +6017,111 @@ def render_paper_radar_insight(item: dict[str, Any], radar_history: dict[str, An
     </div>
     {review_note}
     """
+
+
+def render_ai_first_radar_insight(
+    *,
+    card: dict[str, Any] | None,
+    screening: dict[str, Any] | None,
+    recommendation: dict[str, Any],
+    review_note: str,
+) -> str:
+    if not ai_research_card_available(card):
+        return ""
+    selected_card = card or {}
+    selected_screening = screening if isinstance(screening, dict) else {}
+    summary_text = first_meaningful_text(selected_card.get("findings") or [])
+    if not summary_text:
+        summary_text = meaningful_inline_text(selected_card.get("research_question"))
+    why_text = meaningful_inline_text(selected_card.get("relevance"))
+    if not why_text:
+        why_text = " ".join(inline_text_list(selected_screening.get("reasons")))
+    method_text = "; ".join(
+        text
+        for text in [
+            meaningful_inline_text(selected_card.get("method")),
+            meaningful_inline_text(selected_card.get("data")),
+        ]
+        if text
+    )
+    use_text = "; ".join(inline_text_list(selected_card.get("possible_use"))[:2])
+    context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+    attention = (
+        recommendation.get("attention_summary")
+        if isinstance(recommendation.get("attention_summary"), dict)
+        else {}
+    )
+    context_text = meaningful_inline_text(context.get("relationship_summary"))
+    now_text = meaningful_inline_text(attention.get("why_now"))
+    matched_terms = inline_text_list(
+        selected_screening.get("matched_terms")
+        or recommendation.get("matched_positive_keywords")
+        or []
+    )
+    if not any([summary_text, why_text, method_text, use_text, context_text, now_text, matched_terms]):
+        return ""
+    label = str(selected_screening.get("label") or recommendation.get("label") or "needs_review")
+    score = selected_screening.get("score")
+    if score is None:
+        score = recommendation.get("score")
+    matched_html = (
+        f"<p><strong>Matched:</strong> {html_escape(', '.join(matched_terms[:6]))}</p>"
+        if matched_terms
+        else ""
+    )
+    return f"""
+    <div class="radar-ai-summary paper-radar-insight">
+      <p><strong>Radar insight:</strong> {relevance_pill(label)}<span class="pill">AI enriched{html_escape(radar_score_text(score))}</span></p>
+      {f'<p><strong>Summary:</strong> {html_escape(summary_text)}</p>' if summary_text else ''}
+      {f'<p><strong>Why:</strong> {html_escape(why_text)}</p>' if why_text else ''}
+      {f'<p><strong>Method:</strong> {html_escape(method_text)}</p>' if method_text else ''}
+      {f'<p><strong>Use:</strong> {html_escape(use_text)}</p>' if use_text else ''}
+      {f'<p><strong>Context:</strong> {html_escape(context_text)}</p>' if context_text else ''}
+      {f'<p><strong>Now:</strong> {html_escape(now_text)}</p>' if now_text else ''}
+      {matched_html}
+    </div>
+    {review_note}
+    """
+
+
+def ai_research_card_available(card: dict[str, Any] | None) -> bool:
+    if not isinstance(card, dict):
+        return False
+    model = str(card.get("ai_model_used") or "").strip().lower()
+    return bool(model and model != "none")
+
+
+def first_meaningful_text(values: Any) -> str:
+    if isinstance(values, list):
+        for value in values:
+            text = meaningful_inline_text(value)
+            if text:
+                return text
+    return meaningful_inline_text(values)
+
+
+def inline_text_list(values: Any) -> list[str]:
+    if isinstance(values, list):
+        candidates = values
+    elif values in (None, ""):
+        candidates = []
+    else:
+        candidates = [values]
+    return [text for value in candidates if (text := meaningful_inline_text(value))]
+
+
+def meaningful_inline_text(value: Any) -> str:
+    text = normalize_inline_text(value)
+    return "" if text.lower() in {"unknown", "none", "n/a"} else text
+
+
+def radar_score_text(score: Any) -> str:
+    if score is None or str(score).strip() == "":
+        return ""
+    try:
+        return f" · {int(float(score))}/100"
+    except (TypeError, ValueError):
+        return f" · {score}"
 
 
 def normalize_inline_text(value: Any) -> str:
@@ -6443,6 +6612,7 @@ def upload_paper_pdf(
     fields: dict[str, str],
     *,
     upload: tuple[str, bytes] | None = None,
+    analyze: bool = True,
 ) -> str:
     item_id = required_field(fields, "item_id")
     if upload is None:
@@ -6460,6 +6630,8 @@ def upload_paper_pdf(
         filename=safe_filename(upload[0]),
         actor=fields.get("actor") or "team-member",
     )
+    if analyze:
+        analyze_submitted_item(database, item_id)
     return item_id
 
 
@@ -6598,6 +6770,7 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
         database,
         recommendation_record.get("recommendation") or {},
         actor=fields.get("actor") or "team-member",
+        analyze=True,
     )
     import_result["dedupe_key"] = dedupe_key
     database.mark_literature_radar_recommendation_imported(
@@ -6725,6 +6898,9 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         summarize=settings["summarize"],
         summary_provider=settings["summary_provider"],
         summary_min_score=settings["summary_min_score"],
+        ai_enrich=settings["ai_enrich"],
+        ai_enrich_limit=settings["ai_enrich_limit"],
+        ai_enrich_min_score=settings["ai_enrich_min_score"],
         semantic_scholar_author_ids=settings["semantic_scholar_author_ids"],
         dblp_author_pids=settings["dblp_author_pids"],
         openalex_author_ids=settings["openalex_author_ids"],
@@ -6760,6 +6936,17 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "summary_min_score": clean_positive_int(
             fields.get("summary_min_score", ""),
             default=RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
+            maximum=100,
+        ),
+        "ai_enrich": checkbox_enabled(fields, "ai_enrich"),
+        "ai_enrich_limit": clean_positive_int(
+            fields.get("ai_enrich_limit", ""),
+            default=RADAR_DEFAULT_AI_ENRICH_LIMIT,
+            maximum=50,
+        ),
+        "ai_enrich_min_score": clean_positive_int(
+            fields.get("ai_enrich_min_score", ""),
+            default=RADAR_DEFAULT_AI_ENRICH_MIN_SCORE,
             maximum=100,
         ),
         "conference_year": clean_optional_year(fields.get("conference_year", "")),

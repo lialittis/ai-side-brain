@@ -23,12 +23,14 @@ from shared.literature_radar.ai import (
 from team import research_cli
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
+    apply_team_radar_selection_model,
     apply_team_radar_source_preset,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
     import_radar_recommendation,
     run_team_literature_radar,
     score_team_radar_paper,
+    sort_radar_recommendations,
     team_radar_context_items,
     team_radar_queue_review_context,
     team_radar_source_preset,
@@ -66,6 +68,45 @@ class FlakySummaryClient:
         if len(self.calls) == 1:
             raise RuntimeError("temporary OpenRouter outage")
         return self.response
+
+
+def ai_analysis_response() -> dict[str, object]:
+    return {
+        "document_classification": {
+            "document_type": "research_paper",
+            "is_research_paper": True,
+            "rejection_reason": "",
+        },
+        "metadata": {
+            "title": "AI enriched radar paper",
+            "authors": ["AI Author"],
+            "abstract": "AI-enriched metadata for a memory safety radar paper.",
+            "year": 2026,
+            "venue": "AI Test Venue",
+            "identifiers": {"arxiv_id": "2601.00003"},
+        },
+        "research_card": {
+            "research_question": "How does the radar paper improve memory safety?",
+            "method": "static and empirical analysis",
+            "data": "public benchmark",
+            "findings": ["AI found a strong memory safety signal."],
+            "innovation": "Unified Radar enrichment.",
+            "limitations": ["Synthetic test response."],
+            "relevance": "Strong match to team memory safety interests.",
+            "possible_use": ["add to review queue"],
+            "confidence": "high",
+        },
+        "relevance_screening": {
+            "score": 91,
+            "label": "highly_relevant",
+            "reasons": ["Strong match to memory safety."],
+            "matched_terms": ["memory safety"],
+            "suggested_contexts": ["team-literature-radar"],
+            "suggested_actions": ["review_today"],
+            "confidence": "high",
+        },
+        "tags": ["memory-safety", "system-security"],
+    }
 
 
 class TeamLiteratureRadarTest(unittest.TestCase):
@@ -217,6 +258,108 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn("recommendation system only", scoring["matched_negative_keywords"])
         self.assertLess(scoring["score"], 70)
 
+    def test_team_radar_selection_dampens_raw_keyword_only_scores(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00778",
+            title="Memory Safety for Compilers",
+            abstract="Memory safety.",
+            identifiers={"arxiv_id": "2601.00778"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00778"},
+            discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        )
+        raw_scoring = score_team_radar_paper(
+            paper,
+            [{"keyword": "memory safety", "weight": 100}],
+        )
+
+        selected = apply_team_radar_selection_model(
+            [
+                {
+                    "paper": paper,
+                    "scoring": raw_scoring,
+                    "pdf_access": {"can_download": True, "source_url": "https://arxiv.org/pdf/2601.00778"},
+                }
+            ],
+            now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(raw_scoring["score"], 100)
+        self.assertLess(selected["scoring"]["score"], raw_scoring["score"])
+        self.assertLess(selected["scoring"]["score"], 85)
+        self.assertEqual(selected["selection"]["source"], "local_fallback")
+        self.assertEqual(selected["scoring"]["raw_relevance_score"], 100)
+        self.assertEqual(selected["scoring"]["selection_source"], "local_fallback")
+        self.assertIn("Priority combines relevance", " ".join(selected["selection"]["reasons"]))
+
+    def test_team_radar_selection_prefers_ai_enriched_screening_for_ranking(self) -> None:
+        local_paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00779",
+            title="Memory Safety and System Security",
+            abstract="Memory safety and system security for low-level software.",
+            identifiers={"arxiv_id": "2601.00779"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00779"},
+            discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+        )
+        ai_paper = create_radar_paper(
+            source_id="openreview",
+            source_paper_id="ai-priority",
+            title="Agentic Security Evaluation",
+            abstract="A benchmark for agentic security failures in autonomous vulnerability research systems.",
+            links={"landing": "https://openreview.net/forum?id=ai-priority"},
+            discovered_at=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        local_scoring = score_team_radar_paper(
+            local_paper,
+            [{"keyword": "memory safety", "weight": 100}, {"keyword": "system security", "weight": 90}],
+        )
+        ai_local_scoring = score_team_radar_paper(
+            ai_paper,
+            [{"keyword": "agentic security", "weight": 60}],
+        )
+
+        selected = sort_radar_recommendations(
+            apply_team_radar_selection_model(
+                [
+                    {
+                        "paper": local_paper,
+                        "scoring": local_scoring,
+                        "pdf_access": {"can_download": True, "source_url": "https://arxiv.org/pdf/2601.00779"},
+                    },
+                    {
+                        "paper": ai_paper,
+                        "scoring": {
+                            **ai_local_scoring,
+                            "score": 92,
+                            "label": "highly_relevant",
+                            "matched_positive_keywords": ["agentic security"],
+                            "source": "ai_enrichment",
+                        },
+                        "local_scoring": ai_local_scoring,
+                        "ai_enrichment": {
+                            "status": "succeeded",
+                            "screening": {
+                                "score": 92,
+                                "label": "highly_relevant",
+                                "reasons": ["AI found direct relevance to the team agenda."],
+                                "matched_terms": ["agentic security"],
+                                "confidence": "high",
+                            },
+                        },
+                        "pdf_access": {"can_download": False, "source_url": "https://openreview.net/forum?id=ai-priority"},
+                    },
+                ],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+        )
+
+        self.assertEqual(selected[0]["paper"]["title"], "Agentic Security Evaluation")
+        self.assertEqual(selected[0]["selection"]["source"], "ai_enrichment")
+        self.assertEqual(selected[0]["scoring"]["source"], "ai_enrichment")
+        self.assertGreater(selected[0]["scoring"]["score"], selected[1]["scoring"]["score"])
+        self.assertEqual(selected[0]["selection"]["components"]["ai_relevance"], 92)
+
     def test_imports_radar_recommendation_into_team_library(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -357,6 +500,42 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertIn("memory safety", arxiv.call_args.kwargs["query_terms"])
             self.assertEqual(dblp.call_count, 3)
             self.assertEqual(len(database.list_latest_relevant_papers()), 1)
+
+    def test_run_team_literature_radar_can_ai_enrich_recommendations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00033",
+                title="Local Radar Title Before AI",
+                abstract="Memory safety and system security for cyber reasoning agents.",
+                identifiers={"arxiv_id": "2601.00033"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00033"},
+            )
+            client = FakeSummaryClient(ai_analysis_response())
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[paper]):
+                result = run_team_literature_radar(
+                    database,
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    max_results=1,
+                    ai_enrich=True,
+                    ai_enrich_limit=1,
+                    ai_enrich_min_score=1,
+                    ai_client=client,
+                    now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                )
+
+            self.assertEqual(len(client.calls), 1)
+            recommendation = result["recommendations"][0]
+            self.assertEqual(recommendation["ai_enrichment"]["status"], "succeeded")
+            self.assertEqual(recommendation["paper"]["title"], "AI enriched radar paper")
+            self.assertEqual(recommendation["scoring"]["source"], "ai_enrichment")
+            self.assertIn("AI found a strong memory safety signal.", recommendation["summary"]["short_summary"])
+            stored_run = database.get_literature_radar_run(result["run_id"])
+            self.assertTrue(stored_run["collection_config"]["ai_enrich"])
+            self.assertEqual(stored_run["collection_config"]["ai_enrich_limit"], 1)
+            self.assertEqual(stored_run["collection_config"]["ai_enrich_min_score"], 1)
 
     def test_run_team_literature_radar_uses_configured_arxiv_categories(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -501,8 +680,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(result["recommendation_count"], 1)
             scoring = result["recommendations"][0]["scoring"]
             self.assertEqual(result["recommendations"][0]["paper"]["title"], "Radiative Cooling Priority for Buildings")
-            self.assertEqual(scoring["score"], 100)
-            self.assertEqual(scoring["label"], "highly_relevant")
+            self.assertEqual(scoring["score"], 68)
+            self.assertEqual(scoring["label"], "possibly_relevant")
+            self.assertEqual(scoring["raw_relevance_score"], 100)
+            self.assertEqual(scoring["selection_source"], "local_fallback")
+            self.assertEqual(result["recommendations"][0]["selection"]["decision"], "skim_today")
             self.assertEqual(scoring["matched_positive_keywords"], ["radiative cooling"])
             self.assertEqual(scoring["topic_scores"][0]["weight"], 100)
             self.assertEqual(scoring["source_trace"]["processor"], "team-interest-radar-scorer-v0.1")
@@ -3500,10 +3682,20 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 query_terms=["memory safety"],
                 now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
             )
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2607.01001",
+                title="Status Queue Memory Safety Paper",
+                abstract="Memory safety and system security for status queue readiness.",
+                links={"arxiv": "https://arxiv.org/abs/2607.01001"},
+                identifiers={"arxiv_id": "2607.01001"},
+                discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            recommendation = recommend_papers([paper], now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))[0]
             run = database.complete_literature_radar_run(
                 run["id"],
-                collected_papers=[],
-                recommendations=[],
+                collected_papers=[paper],
+                recommendations=[recommendation],
                 report="empty",
                 status="succeeded",
                 now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
@@ -3666,7 +3858,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")
-        self.assertEqual(payload["guardrail_readiness"]["checks"]["source_trace"]["status"], "not_applicable")
+        self.assertEqual(payload["guardrail_readiness"]["checks"]["source_trace"]["status"], "passed")
         self.assertEqual(payload["guardrail_readiness"]["checks"]["audit_events"]["status"], "passed")
         self.assertEqual(payload["guardrail_readiness"]["checks"]["personal_memory_boundary"]["status"], "passed")
         self.assertEqual(payload["mvp_readiness"]["status_counts"]["blocked"], 0)
@@ -3693,10 +3885,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             readiness_stages["live_source_validation"]["evidence"]["unvalidated_primary_source_ids"],
         )
         self.assertEqual(readiness_stages["relevance_profile"]["status"], "passed")
-        self.assertEqual(readiness_stages["recommendation_evidence"]["status"], "warning")
+        self.assertEqual(readiness_stages["recommendation_evidence"]["status"], "passed")
         self.assertEqual(
             readiness_stages["recommendation_evidence"]["evidence"]["next_action"],
-            "collect_or_review_queue",
+            "review_reason_to_read",
         )
         self.assertEqual(readiness_stages["engineering_guardrails"]["status"], "passed")
         expected_operations_stage = {

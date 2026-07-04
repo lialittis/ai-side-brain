@@ -2106,11 +2106,19 @@ class TeamResearchDatabase:
         query = f"""
             SELECT
                 i.record_json AS item_json,
+                rc.record_json AS card_json,
                 rs.record_json AS screening_json,
                 tr.record_json AS team_record_json,
                 ple.record_json AS library_json,
                 air.record_json AS ai_run_json
             FROM research_items i
+            LEFT JOIN research_cards rc ON rc.id = (
+                SELECT latest_rc.id
+                FROM research_cards latest_rc
+                WHERE latest_rc.item_id = i.id
+                ORDER BY latest_rc.created_at DESC
+                LIMIT 1
+            )
             JOIN relevance_screenings rs ON rs.item_id = i.id
             LEFT JOIN team_research_records tr ON tr.item_id = i.id
             LEFT JOIN project_library_entries ple ON ple.item_id = i.id
@@ -2165,6 +2173,7 @@ class TeamResearchDatabase:
             papers.append(
                 {
                     "item": item,
+                    "card": loads(row["card_json"]) if row["card_json"] else None,
                     "screening": screening,
                     "team_record": team_record,
                     "library_entry": library_entry,
@@ -2498,8 +2507,11 @@ class TeamResearchDatabase:
                 "rank": rank,
                 "score": scoring.get("score"),
                 "label": scoring.get("label"),
+                "scoring": scoring,
+                "selection": recommendation.get("selection") or {},
                 "signal_lines": radar_latest_signal_lines(recommendation),
                 "matched_positive_keywords": scoring.get("matched_positive_keywords") or [],
+                "matched_negative_keywords": scoring.get("matched_negative_keywords") or [],
                 "novelty": recommendation.get("novelty"),
                 "review": recommendation.get("review"),
                 "context": recommendation.get("context"),

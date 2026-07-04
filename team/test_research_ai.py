@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,12 +9,15 @@ import unittest
 from unittest import mock
 
 from shared.ai.openrouter import OpenRouterClient, OpenRouterConfig
+from shared.literature_radar import create_radar_paper
 from shared.research import topic_profile_by_id
+from team.literature_radar import import_radar_recommendation
 from team.research_adapter import build_team_research_run
 from team.research_ai import (
     TEAM_RESEARCH_ANALYSIS_SCHEMA,
     TeamResearchAnalyzer,
     build_analysis_input,
+    enrich_radar_recommendations_with_ai,
     pdf_url_from_supported_link,
 )
 from team.research_db import TeamResearchDatabase
@@ -287,6 +291,75 @@ class TeamResearchAITest(unittest.TestCase):
             self.assertEqual(run["status"], "succeeded")
             self.assertIsNone(client.calls[0]["plugins"])
             self.assertNotIn('"type": "file"', json.dumps(client.calls[0]["messages"]))
+
+    def test_radar_metadata_item_analysis_uses_metadata_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00420",
+                title="Radar Metadata Memory Safety",
+                authors=["Radar Author"],
+                abstract="Memory safety and agentic security for literature radar testing.",
+                year=2026,
+                identifiers={"semantic_scholar_id": "s2-radar-420"},
+                links={"landing": "https://example.org/radar/2601.00420"},
+                discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            recommendation = {
+                "paper": paper,
+                "scoring": {"score": 72, "label": "highly_relevant", "reasons": ["memory safety"]},
+                "why_relevant": "Matches memory safety interests.",
+            }
+            import_result = import_radar_recommendation(database, recommendation, analyze=False)
+
+            client = FakeOpenRouterClient(ai_response())
+            run = TeamResearchAnalyzer(database, client=client).analyze_item(import_result["item_id"])
+
+            self.assertEqual(run["status"], "succeeded")
+            self.assertIsNone(client.calls[0]["plugins"])
+            prompt_text = client.calls[0]["messages"][1]["content"][0]["text"]
+            self.assertIn('"source_kind": "radar_metadata"', prompt_text)
+            self.assertIn('"radar"', prompt_text)
+            bundle = database.get_bundle(import_result["item_id"])
+            self.assertEqual(bundle["item"]["title"], "AI analyzed tunable emissivity paper")
+            self.assertEqual(bundle["item"]["identifiers"]["semantic_scholar_id"], "s2-radar-420")
+            self.assertEqual(bundle["item"]["identifiers"]["arxiv_id"], "2605.14932")
+
+    def test_radar_recommendation_enrichment_returns_unified_card_shape(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00421",
+            title="Radar Candidate Before AI",
+            abstract="Memory safety and system security for Radar AI enrichment.",
+            year=2026,
+            identifiers={"semantic_scholar_id": "s2-radar-421"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00421"},
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        recommendation = {
+            "paper": paper,
+            "scoring": {"score": 71, "label": "possibly_relevant", "paper_id": paper["id"]},
+            "why_relevant": "Local radar scoring matched memory safety.",
+        }
+        client = FakeOpenRouterClient(ai_response())
+
+        enriched = enrich_radar_recommendations_with_ai(
+            [recommendation],
+            client=client,
+            tag_catalog=[],
+            limit=1,
+            min_score=1,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(enriched["ai_enrichment"]["status"], "succeeded")
+        self.assertEqual(enriched["paper"]["title"], "AI analyzed tunable emissivity paper")
+        self.assertEqual(enriched["scoring"]["source"], "ai_enrichment")
+        self.assertEqual(enriched["scoring"]["score"], 88.0)
+        self.assertEqual(enriched["ai_enrichment"]["research_card"]["ai_model_used"], "test/model")
+        self.assertIn("short_summary", enriched["summary"])
 
     def test_legacy_unsupported_non_pdf_link_records_pending_unsupported_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

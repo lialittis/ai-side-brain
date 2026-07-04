@@ -71,6 +71,8 @@ from shared.literature_radar import (
 from shared.research import topic_profile_by_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
+    RADAR_DEFAULT_AI_ENRICH_LIMIT,
+    RADAR_DEFAULT_AI_ENRICH_MIN_SCORE,
     SEMANTIC_SCHOLAR_SEED_SOURCES,
     TEAM_RADAR_SETTINGS_KEY,
     apply_team_radar_source_preset,
@@ -192,6 +194,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="minimum relevance score for OpenRouter summaries; defaults to highly relevant",
     )
+    radar.add_argument(
+        "--ai-enrich",
+        action="store_true",
+        help="run Team Research AI enrichment on top Radar recommendations",
+    )
+    radar.add_argument("--ai-enrich-limit", type=int, help="maximum recommendations to AI-enrich")
+    radar.add_argument("--ai-enrich-min-score", type=int, help="minimum score required for AI enrichment")
     radar.add_argument("--import-results", action="store_true", help="import recommended papers into the team library")
     radar.add_argument("--import-limit", type=int, default=5, help="maximum recommendations to import")
     radar.add_argument("--min-score", type=int, default=35, help="minimum score required for import")
@@ -352,6 +361,9 @@ def build_parser() -> argparse.ArgumentParser:
     radar_status.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
     radar_status.add_argument("--summary-limit", type=int)
     radar_status.add_argument("--summary-min-score", type=int)
+    radar_status.add_argument("--ai-enrich", action="store_true")
+    radar_status.add_argument("--ai-enrich-limit", type=int)
+    radar_status.add_argument("--ai-enrich-min-score", type=int)
     radar_status.add_argument("--semantic-scholar-api-key")
     radar_status.add_argument("--dblp-author-pid", action="append", default=[])
     radar_status.add_argument("--semantic-scholar-author-id", action="append", default=[])
@@ -413,6 +425,9 @@ def build_parser() -> argparse.ArgumentParser:
     radar_settings.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
     radar_settings.add_argument("--summary-limit", type=int)
     radar_settings.add_argument("--summary-min-score", type=int)
+    radar_settings.add_argument("--ai-enrich", action="store_true")
+    radar_settings.add_argument("--ai-enrich-limit", type=int)
+    radar_settings.add_argument("--ai-enrich-min-score", type=int)
     radar_settings.add_argument("--semantic-scholar-api-key")
     radar_settings.add_argument("--dblp-author-pid", action="append", default=[])
     radar_settings.add_argument("--semantic-scholar-author-id", action="append", default=[])
@@ -460,6 +475,9 @@ def build_parser() -> argparse.ArgumentParser:
     radar_validate.add_argument("--summary-provider", choices=["local", "openrouter"], default=None)
     radar_validate.add_argument("--summary-limit", type=int)
     radar_validate.add_argument("--summary-min-score", type=int)
+    radar_validate.add_argument("--ai-enrich", action="store_true")
+    radar_validate.add_argument("--ai-enrich-limit", type=int)
+    radar_validate.add_argument("--ai-enrich-min-score", type=int)
     radar_validate.add_argument("--semantic-scholar-api-key")
     radar_validate.add_argument("--dblp-author-pid", action="append", default=[])
     radar_validate.add_argument("--semantic-scholar-author-id", action="append", default=[])
@@ -1098,6 +1116,10 @@ def print_radar_settings(result: dict[str, Any]) -> None:
     print(f"Summaries: {'yes' if settings.get('summarize') else 'no'}")
     print(f"Provider: {settings.get('summary_provider') or 'local'}")
     print(f"Summary min score: {int(settings.get('summary_min_score') or 0)}")
+    print(f"AI enrichment: {'yes' if settings.get('ai_enrich') else 'no'}")
+    if settings.get("ai_enrich"):
+        print(f"AI enrich limit: {int(settings.get('ai_enrich_limit') or 0)}")
+        print(f"AI enrich min score: {int(settings.get('ai_enrich_min_score') or 0)}")
     scoring_profile_summary = (
         result.get("scoring_profile_summary") if isinstance(result.get("scoring_profile_summary"), dict) else {}
     )
@@ -1561,6 +1583,14 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
             "summary_min_score",
             RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
         ),
+        "ai_enrich": bool(getattr(args, "ai_enrich", False))
+        or (saved_radar_bool(saved_defaults, "ai_enrich") if "ai_enrich" in saved_defaults else True),
+        "ai_enrich_limit": getattr(args, "ai_enrich_limit", None)
+        if getattr(args, "ai_enrich_limit", None) is not None
+        else saved_radar_int(saved_defaults, "ai_enrich_limit", RADAR_DEFAULT_AI_ENRICH_LIMIT),
+        "ai_enrich_min_score": getattr(args, "ai_enrich_min_score", None)
+        if getattr(args, "ai_enrich_min_score", None) is not None
+        else saved_radar_int(saved_defaults, "ai_enrich_min_score", RADAR_DEFAULT_AI_ENRICH_MIN_SCORE),
         "cache_pdfs": args.cache_pdfs or saved_radar_bool(saved_defaults, "cache_pdfs"),
         "pdf_cache_dir": str(args.pdf_cache_dir or saved_radar_path(saved_defaults, "pdf_cache_dir") or ""),
         "pdf_cache_max_bytes": args.pdf_cache_max_bytes
@@ -1778,6 +1808,14 @@ def main(argv: list[str] | None = None) -> int:
                 "summary_min_score",
                 RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
             ),
+            ai_enrich=args.ai_enrich
+            or (saved_radar_bool(saved_defaults, "ai_enrich") if "ai_enrich" in saved_defaults else True),
+            ai_enrich_limit=args.ai_enrich_limit
+            if args.ai_enrich_limit is not None
+            else saved_radar_int(saved_defaults, "ai_enrich_limit", RADAR_DEFAULT_AI_ENRICH_LIMIT),
+            ai_enrich_min_score=args.ai_enrich_min_score
+            if args.ai_enrich_min_score is not None
+            else saved_radar_int(saved_defaults, "ai_enrich_min_score", RADAR_DEFAULT_AI_ENRICH_MIN_SCORE),
             import_results=args.import_results,
             import_limit=args.import_limit,
             min_import_score=args.min_score,

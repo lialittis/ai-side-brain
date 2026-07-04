@@ -104,13 +104,17 @@ from team.research_interests import (
     score_team_interests,
 )
 from team.literature_radar_ai import summarize_radar_recommendations_with_openrouter
+from team.research_ai import analyze_submitted_item, enrich_radar_recommendations_with_ai
 
 
 TEAM_RADAR_SCORER_PROCESSOR = "team-interest-radar-scorer-v0.1"
+TEAM_RADAR_SELECTION_PROCESSOR = "team-radar-selection-v0.1"
 TEAM_RADAR_SETTINGS_KEY = "literature_radar_defaults"
 TEAM_RADAR_DEFAULT_PDF_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / "team" / "data" / "literature-radar-pdfs"
 )
+RADAR_DEFAULT_AI_ENRICH_LIMIT = 5
+RADAR_DEFAULT_AI_ENRICH_MIN_SCORE = 35
 TEAM_RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 TEAM_RADAR_DISCUSSION_STOP_WORDS = {"team", "interests", "context", "attention"}
 TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
@@ -210,6 +214,10 @@ def run_team_literature_radar(
     summary_limit: int | None = None,
     summary_min_score: int | None = None,
     summary_client: Any | None = None,
+    ai_enrich: bool = False,
+    ai_enrich_limit: int | None = None,
+    ai_enrich_min_score: int | None = None,
+    ai_client: Any | None = None,
     import_results: bool = False,
     import_limit: int = 5,
     min_import_score: int = 35,
@@ -291,9 +299,12 @@ def run_team_literature_radar(
         max_results=max_results,
         recommendation_limit=recommendation_limit,
         summarize=summarize,
-            summary_provider=summary_provider,
-            summary_limit=summary_limit,
-            summary_min_score=summary_min_score,
+        summary_provider=summary_provider,
+        summary_limit=summary_limit,
+        summary_min_score=summary_min_score,
+        ai_enrich=ai_enrich,
+        ai_enrich_limit=ai_enrich_limit,
+        ai_enrich_min_score=ai_enrich_min_score,
         import_results=import_results,
         import_limit=import_limit,
         min_import_score=min_import_score,
@@ -369,7 +380,7 @@ def run_team_literature_radar(
             limit=max(recommendation_limit + 20, recommendation_limit * 3),
             now=now,
         )
-        recommendations = apply_team_radar_review_feedback(database, recommendations)[:recommendation_limit]
+        recommendations = apply_team_radar_review_feedback(database, recommendations)
         recommendations = database.annotate_literature_radar_recommendation_novelty(
             recommendations,
             now=now,
@@ -399,16 +410,29 @@ def run_team_literature_radar(
                 query_terms=selected_terms,
                 now=now,
             )
+        if ai_enrich:
+            recommendations = enrich_radar_recommendations_with_ai(
+                recommendations,
+                client=ai_client,
+                tag_catalog=database.list_tag_catalog(),
+                topic_id=str(TEAM_RADAR_TOPIC_PROFILE["id"]),
+                limit=ai_enrich_limit,
+                min_score=ai_enrich_min_score,
+                now=now,
+            )
+        recommendations = apply_team_radar_selection_model(recommendations, now=now)
+        recommendations = sort_radar_recommendations(recommendations)[:recommendation_limit]
         recommendations = add_recommendation_attention_summaries(recommendations, now=now)
         if import_results:
             for recommendation in recommendations[:import_limit]:
-                if int(recommendation["scoring"]["score"]) < min_import_score:
+                if radar_recommendation_score(recommendation) < min_import_score:
                     continue
                 import_result = import_radar_recommendation(
                     database,
                     recommendation,
                     project_id=project_id,
                     actor=actor,
+                    analyze=True,
                     now=now,
                 )
                 import_result["dedupe_key"] = (recommendation.get("paper") or {}).get("dedupe_key")
@@ -516,6 +540,408 @@ def summarize_team_radar_recommendations(
     raise ValueError("Unsupported radar summary provider.")
 
 
+def sort_radar_recommendations(recommendations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        recommendations,
+        key=lambda item: (
+            radar_recommendation_score(item),
+            paper_release_date(item.get("paper") or {}),
+            (item.get("paper") or {}).get("discovered_at", ""),
+        ),
+        reverse=True,
+    )
+
+
+def radar_recommendation_score(recommendation: dict[str, Any]) -> int:
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    try:
+        return int(float(recommendation.get("score", scoring.get("score", 0)) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def apply_team_radar_selection_model(
+    recommendations: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    selected = []
+    for recommendation in recommendations:
+        selection = build_team_radar_selection(recommendation, now=now)
+        selected.append(
+            {
+                **recommendation,
+                "selection": selection,
+                "scoring": team_radar_scoring_from_selection(recommendation, selection),
+            }
+        )
+    return selected
+
+
+def build_team_radar_selection(
+    recommendation: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else recommendation
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    local_scoring = recommendation.get("local_scoring") if isinstance(recommendation.get("local_scoring"), dict) else {}
+    if not local_scoring or scoring.get("source") != "ai_enrichment":
+        local_scoring = scoring
+    ai_enrichment = (
+        recommendation.get("ai_enrichment")
+        if isinstance(recommendation.get("ai_enrichment"), dict)
+        and recommendation.get("ai_enrichment", {}).get("status") == "succeeded"
+        else {}
+    )
+    ai_screening = (
+        ai_enrichment.get("screening")
+        if isinstance(ai_enrichment.get("screening"), dict)
+        else {}
+    )
+    ai_score = clean_selection_score(ai_screening.get("score")) if ai_screening else None
+    local_score = calibrated_local_radar_score(local_scoring, paper)
+    metadata_score = radar_metadata_quality_score(paper)
+    source_score = radar_source_confidence_score(paper)
+    freshness_score = radar_freshness_score(paper, now=now)
+    access_score = radar_access_score(recommendation.get("pdf_access") if isinstance(recommendation.get("pdf_access"), dict) else {})
+    context_score = radar_context_score(recommendation)
+    components = {
+        "ai_relevance": ai_score,
+        "team_interest_match": local_score,
+        "metadata_quality": metadata_score,
+        "source_confidence": source_score,
+        "freshness": freshness_score,
+        "access": access_score,
+        "context_match": context_score,
+    }
+    if ai_score is not None:
+        weighted = (
+            ai_score * 0.60
+            + local_score * 0.14
+            + metadata_score * 0.08
+            + source_score * 0.07
+            + freshness_score * 0.06
+            + access_score * 0.03
+            + context_score * 0.02
+        )
+        source = "ai_enrichment"
+    else:
+        weighted = (
+            local_score * 0.56
+            + metadata_score * 0.15
+            + source_score * 0.10
+            + freshness_score * 0.10
+            + access_score * 0.05
+            + context_score * 0.04
+        )
+        source = "local_fallback"
+    penalty = radar_selection_penalty(recommendation, local_scoring)
+    score = max(0, min(100, int(round(weighted - penalty))))
+    return {
+        "score": score,
+        "label": label_for_score(score, bool(radar_selection_has_text(paper))),
+        "decision": radar_selection_decision(score),
+        "confidence": radar_selection_confidence(
+            ai_screening=ai_screening,
+            local_scoring=local_scoring,
+            metadata_score=metadata_score,
+        ),
+        "source": source,
+        "components": components,
+        "penalty": penalty,
+        "reasons": radar_selection_reasons(
+            source=source,
+            score=score,
+            ai_screening=ai_screening,
+            local_scoring=local_scoring,
+            components=components,
+            penalty=penalty,
+        ),
+        "source_trace": {
+            "processor": TEAM_RADAR_SELECTION_PROCESSOR,
+            "ai_available": ai_score is not None,
+            "local_processor": (local_scoring.get("source_trace") or {}).get("processor")
+            if isinstance(local_scoring.get("source_trace"), dict)
+            else "",
+        },
+    }
+
+
+def team_radar_scoring_from_selection(
+    recommendation: dict[str, Any],
+    selection: dict[str, Any],
+) -> dict[str, Any]:
+    previous = dict(recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {})
+    local_scoring = (
+        recommendation.get("local_scoring")
+        if isinstance(recommendation.get("local_scoring"), dict)
+        else previous
+    )
+    previous_source_trace = previous.get("source_trace") if isinstance(previous.get("source_trace"), dict) else {}
+    source_trace = {
+        **previous_source_trace,
+        "selection": selection.get("source_trace") or {},
+        "selection_components": selection.get("components") or {},
+        "selection_penalty": selection.get("penalty") or 0,
+    }
+    return {
+        **previous,
+        "score": selection["score"],
+        "label": selection["label"],
+        "selection_score": selection["score"],
+        "selection_decision": selection["decision"],
+        "selection_confidence": selection["confidence"],
+        "selection_source": selection["source"],
+        "raw_relevance_score": clean_selection_score(previous.get("score")),
+        "local_relevance_score": clean_selection_score(local_scoring.get("score")),
+        "source": "ai_enrichment" if selection["source"] == "ai_enrichment" else "team_radar_selection",
+        "reasons": list(selection.get("reasons") or previous.get("reasons") or []),
+        "source_trace": source_trace,
+    }
+
+
+def calibrated_local_radar_score(scoring: dict[str, Any], paper: dict[str, Any]) -> int:
+    raw_score = clean_selection_score(scoring.get("score")) or 0
+    matched = unique_preserving_order(scoring.get("matched_positive_keywords") or scoring.get("matched_terms") or [])
+    if not matched:
+        return 0
+    negative_count = len(unique_preserving_order(scoring.get("matched_negative_keywords") or []))
+    match_count = len(matched)
+    cap = 88 if match_count >= 3 else 78 if match_count == 2 else 68
+    score = int(round(raw_score * 0.58 + min(30, match_count * 10)))
+    if paper_has_substantial_abstract(paper):
+        score += 4
+    score -= min(28, negative_count * 12)
+    return max(0, min(cap, score))
+
+
+def clean_selection_score(value: Any) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def radar_metadata_quality_score(paper: dict[str, Any]) -> int:
+    score = 0
+    if str(paper.get("title") or "").strip():
+        score += 20
+    abstract = str(paper.get("abstract") or "").strip()
+    if len(abstract) >= 120:
+        score += 30
+    elif abstract:
+        score += 15
+    if paper.get("authors"):
+        score += 15
+    if paper.get("venue"):
+        score += 10
+    identifiers = paper.get("identifiers") if isinstance(paper.get("identifiers"), dict) else {}
+    if any(str(value or "").strip() for value in identifiers.values()):
+        score += 15
+    links = paper.get("links") if isinstance(paper.get("links"), dict) else {}
+    if any(str(value or "").strip() for value in links.values()):
+        score += 10
+    return max(0, min(100, score))
+
+
+def radar_source_confidence_score(paper: dict[str, Any]) -> int:
+    provenance = paper_source_provenance(paper)
+    source_id = str(paper.get("source_id") or provenance.get("source_id") or "").strip().lower()
+    if provenance.get("authoritative_metadata"):
+        score = 90
+    elif source_id in {
+        "arxiv",
+        "dblp",
+        "dblp_venues",
+        "openreview",
+        "openreview_venues",
+        "usenix_security",
+        "ndss",
+        "semantic_scholar",
+        "semantic_scholar_recommendations",
+        "openalex",
+        "crossref",
+    }:
+        score = 75
+    elif source_id:
+        score = 60
+    else:
+        score = 40
+    source_records = paper.get("source_records") if isinstance(paper.get("source_records"), list) else []
+    if len(source_records) >= 2:
+        score += 5
+    return max(0, min(100, score))
+
+
+def radar_freshness_score(paper: dict[str, Any], *, now: datetime | None = None) -> int:
+    release = paper_release_date(paper)
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    release_date = parse_radar_release_date(release)
+    if release_date is None:
+        discovered_date = parse_radar_release_date(str(paper.get("discovered_at") or ""))
+        if discovered_date is None:
+            return 45
+        release_date = discovered_date
+    age_days = (reference.date() - release_date).days
+    if age_days <= 14:
+        return 100
+    if age_days <= 60:
+        return 85
+    if age_days <= 180:
+        return 65
+    if age_days <= 365:
+        return 50
+    return 35
+
+
+def parse_radar_release_date(value: str) -> Any | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for pattern, suffix in (
+        (r"^\d{4}-\d{2}-\d{2}$", ""),
+        (r"^\d{4}-\d{2}$", "-01"),
+        (r"^\d{4}$", "-07-01"),
+    ):
+        if re.fullmatch(pattern, text):
+            try:
+                return datetime.fromisoformat(text + suffix).date()
+            except ValueError:
+                return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def radar_access_score(pdf_access: dict[str, Any]) -> int:
+    if pdf_access.get("downloaded"):
+        return 100
+    if pdf_access.get("can_download"):
+        return 90
+    access_kind = str(pdf_access.get("access_kind") or "").strip()
+    if access_kind in {"arxiv_pdf", "open_repository_pdf", "cached_pdf"}:
+        return 90
+    if pdf_access.get("source_url"):
+        return 65
+    if access_kind == "metadata_only_no_legal_pdf_found":
+        return 45
+    return 50
+
+
+def radar_context_score(recommendation: dict[str, Any]) -> int:
+    context = recommendation.get("context") if isinstance(recommendation.get("context"), dict) else {}
+    related = context.get("related_items") if isinstance(context.get("related_items"), list) else []
+    review = recommendation.get("review") if isinstance(recommendation.get("review"), dict) else {}
+    if review.get("status") == "watch":
+        return 90
+    if related:
+        return min(90, 55 + len(related) * 10)
+    if context.get("relationship_summary"):
+        return 55
+    return 0
+
+
+def radar_selection_penalty(recommendation: dict[str, Any], local_scoring: dict[str, Any]) -> int:
+    negative_count = len(unique_preserving_order(local_scoring.get("matched_negative_keywords") or []))
+    penalty = min(30, negative_count * 10)
+    novelty = recommendation.get("novelty") if isinstance(recommendation.get("novelty"), dict) else {}
+    if novelty and not novelty.get("is_new") and not novelty.get("previously_imported_item_id"):
+        penalty += 5
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else recommendation
+    if not paper_has_substantial_abstract(paper):
+        penalty += 5
+    return max(0, min(40, penalty))
+
+
+def radar_selection_has_text(paper: dict[str, Any]) -> bool:
+    return bool(str(paper.get("title") or "").strip() or str(paper.get("abstract") or "").strip())
+
+
+def paper_has_substantial_abstract(paper: dict[str, Any]) -> bool:
+    return len(str(paper.get("abstract") or "").split()) >= 12
+
+
+def radar_selection_decision(score: int) -> str:
+    if score >= 78:
+        return "review_today"
+    if score >= 60:
+        return "skim_today"
+    if score >= 40:
+        return "watch"
+    return "low_priority"
+
+
+def radar_selection_confidence(
+    *,
+    ai_screening: dict[str, Any],
+    local_scoring: dict[str, Any],
+    metadata_score: int,
+) -> str:
+    confidence = str(ai_screening.get("confidence") or "").strip().lower()
+    if confidence in {"high", "medium", "low"}:
+        return confidence
+    matched_count = len(unique_preserving_order(local_scoring.get("matched_positive_keywords") or []))
+    if matched_count >= 2 and metadata_score >= 70:
+        return "high"
+    if matched_count >= 1 and metadata_score >= 45:
+        return "medium"
+    return "low"
+
+
+def radar_selection_reasons(
+    *,
+    source: str,
+    score: int,
+    ai_screening: dict[str, Any],
+    local_scoring: dict[str, Any],
+    components: dict[str, Any],
+    penalty: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if source == "ai_enrichment":
+        reasons.append("AI enrichment drives the review priority.")
+        ai_reasons = [str(reason).strip() for reason in ai_screening.get("reasons") or [] if str(reason).strip()]
+        reasons.extend(ai_reasons[:2])
+    else:
+        reasons.append("Local Team Interest matching is used because AI enrichment is unavailable.")
+    matched = unique_preserving_order(local_scoring.get("matched_positive_keywords") or local_scoring.get("matched_terms") or [])
+    if matched:
+        reasons.append(f"Matched team interests: {', '.join(matched[:4])}.")
+    negative = unique_preserving_order(local_scoring.get("matched_negative_keywords") or [])
+    if negative:
+        reasons.append(f"Negative context lowered priority: {', '.join(negative[:4])}.")
+    reasons.append(
+        "Priority combines relevance, metadata quality, source confidence, freshness, access, and team context."
+    )
+    if penalty:
+        reasons.append(f"Applied selection penalty: {penalty}.")
+    reasons.append(f"Final review priority: {score}/100.")
+    return reasons
+
+
+def radar_reference_time_from_run(run: dict[str, Any] | None) -> datetime | None:
+    if not isinstance(run, dict):
+        return None
+    for key in ("completed_at", "started_at"):
+        value = str(run.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
 def build_team_literature_radar_queue_payload(
     database: TeamResearchDatabase,
     *,
@@ -531,20 +957,21 @@ def build_team_literature_radar_queue_payload(
     counts = database.literature_radar_paper_review_counts()
     latest_runs = database.list_literature_radar_runs(limit=1)
     latest_run = latest_runs[0] if latest_runs else None
+    selected_now = now or radar_reference_time_from_run(latest_run)
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
         limit=selected_limit,
         review_counts=counts,
         triage_action=triage_action,
         recent_days=selected_recent_days,
-        now=now,
+        now=selected_now,
     )
     queue_papers = queue.get("papers") or []
     triage_summary = radar_triage_summary(queue_papers)
     access_summary = radar_pdf_access_summary(queue_papers)
     latest_run_summary = team_literature_radar_run_summary(
         latest_run,
-        now=now,
+        now=selected_now,
         freshness_max_age_hours=freshness_max_age_hours,
     ) or {}
     daily_source_health = radar_daily_source_health(
@@ -707,8 +1134,9 @@ def build_team_literature_radar_brief_payload(
     selected_limit = max(1, int(limit))
     selected_run_limit = max(1, int(run_limit))
     selected_queue_recent_days = max(0, int(queue_recent_days or 0))
-    selected_now = now or datetime.now(timezone.utc)
     review_counts = database.literature_radar_paper_review_counts()
+    runs = database.list_literature_radar_runs(limit=selected_run_limit)
+    selected_now = now or radar_reference_time_from_run(runs[0] if runs else None) or datetime.now(timezone.utc)
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
         limit=selected_limit,
@@ -717,7 +1145,6 @@ def build_team_literature_radar_brief_payload(
         now=selected_now,
     )
     queue_papers = queue.get("papers") or []
-    runs = database.list_literature_radar_runs(limit=selected_run_limit)
     run_bundles = [
         {
             "run": run,
@@ -1301,6 +1728,9 @@ def team_radar_collection_config(
     summary_provider: str,
     summary_limit: int | None,
     summary_min_score: int | None,
+    ai_enrich: bool,
+    ai_enrich_limit: int | None,
+    ai_enrich_min_score: int | None,
     import_results: bool,
     import_limit: int,
     min_import_score: int,
@@ -1335,6 +1765,9 @@ def team_radar_collection_config(
         summary_provider=summary_provider,
         summary_limit=summary_limit,
         summary_min_score=summary_min_score,
+        ai_enrich=ai_enrich,
+        ai_enrich_limit=ai_enrich_limit,
+        ai_enrich_min_score=ai_enrich_min_score,
         import_results=import_results,
         import_limit=import_limit if import_results else None,
         min_import_score=min_import_score if import_results else None,
@@ -1959,6 +2392,8 @@ def build_radar_import_metadata(
         "recommendation": {
             "score": scoring.get("score"),
             "label": scoring.get("label"),
+            "selection": selected_recommendation.get("selection") or {},
+            "scoring": scoring,
             "why_relevant": selected_recommendation.get("why_relevant") or "",
             "recommended_action": selected_recommendation.get("recommended_action") or "",
             "signal_lines": radar_latest_signal_lines(selected_recommendation),
@@ -1968,6 +2403,7 @@ def build_radar_import_metadata(
             "context": selected_recommendation.get("context") or {},
             "summary": selected_recommendation.get("summary") or {},
             "attention_summary": selected_recommendation.get("attention_summary") or {},
+            "ai_enrichment": selected_recommendation.get("ai_enrichment") or {},
         },
     }
 
@@ -1978,6 +2414,8 @@ def import_radar_recommendation(
     *,
     project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
     actor: str = "literature-radar",
+    analyze: bool = False,
+    analyzer: Callable[[TeamResearchDatabase, str], dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     paper = recommendation.get("paper") or recommendation
@@ -1995,7 +2433,10 @@ def import_radar_recommendation(
             sorted({*database.get_item_tags(existing_item["id"]), *tags_from_radar_paper(paper)}),
         )
         screening = database.apply_team_interest_relevance(existing_item["id"], now=selected_now)
-        return {"item_id": existing_item["id"], "status": "existing", "screening": screening}
+        ai_run = enrich_imported_item(database, existing_item["id"], analyze=analyze, analyzer=analyzer)
+        if ai_run and ai_run.get("status") == "succeeded":
+            screening = database.get_bundle(existing_item["id"]).get("screening") or screening
+        return {"item_id": existing_item["id"], "status": "existing", "screening": screening, "ai_analysis": ai_run}
 
     result = build_team_run_from_radar_paper(
         paper,
@@ -2014,13 +2455,30 @@ def import_radar_recommendation(
         now=selected_now,
     )
     screening = database.apply_team_interest_relevance(result.item["id"], now=selected_now)
+    ai_run = enrich_imported_item(database, result.item["id"], analyze=analyze, analyzer=analyzer)
+    if ai_run and ai_run.get("status") == "succeeded":
+        screening = database.get_bundle(result.item["id"]).get("screening") or screening
     return {
         "item_id": result.item["id"],
         "status": "imported",
         "team_record": accepted["team_record"],
         "library_entry": accepted["library_entry"],
         "screening": screening,
+        "ai_analysis": ai_run,
     }
+
+
+def enrich_imported_item(
+    database: TeamResearchDatabase,
+    item_id: str,
+    *,
+    analyze: bool,
+    analyzer: Callable[[TeamResearchDatabase, str], dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not analyze:
+        return None
+    selected_analyzer = analyzer or analyze_submitted_item
+    return selected_analyzer(database, item_id)
 
 
 def import_radar_paper_record(
@@ -2065,6 +2523,7 @@ def import_radar_paper_record(
         recommendation,
         project_id=project_id,
         actor=actor,
+        analyze=True,
         now=now,
     )
     import_result["dedupe_key"] = dedupe_key

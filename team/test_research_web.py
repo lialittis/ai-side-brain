@@ -12,7 +12,11 @@ from urllib.request import urlopen
 from unittest import mock
 
 from shared.literature_radar import create_radar_paper, radar_context_summary, radar_supported_source_ids, recommend_papers
-from team.literature_radar import build_team_literature_radar_activity_payload, build_team_literature_radar_queue_payload
+from team.literature_radar import (
+    build_team_literature_radar_activity_payload,
+    build_team_literature_radar_queue_payload,
+    import_radar_recommendation,
+)
 from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
@@ -96,11 +100,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("AI agent security", html)
             self.assertIn("prompt injection", html)
             self.assertNotIn("needs_review", html)
-            self.assertNotIn("Score: 0", html)
+            self.assertNotIn("Priority: 0", html)
 
-        self.assertIn('aria-label="Radar score"', queue_html)
+        self.assertIn('aria-label="Radar priority"', queue_html)
         self.assertIn("<strong>54</strong>", queue_html)
-        self.assertIn("Score: 54", history_html)
+        self.assertIn("Priority: 54", history_html)
         self.assertIn("Suggestion: Skim metadata", queue_html)
         self.assertIn("Priority: Skim metadata", queue_html)
         self.assertIn("source: ndss", history_html)
@@ -1142,13 +1146,14 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('action="/radar/papers"', papers_html)
             self.assertIn('action="/radar/papers/import"', papers_html)
 
-            item_id = import_radar_paper_to_library(
-                database,
-                {
-                    "dedupe_key": paper["dedupe_key"],
-                    "actor": "alice",
-                },
-            )
+            with mock.patch("team.literature_radar.analyze_submitted_item", return_value={"status": "pending"}):
+                item_id = import_radar_paper_to_library(
+                    database,
+                    {
+                        "dedupe_key": paper["dedupe_key"],
+                        "actor": "alice",
+                    },
+                )
 
             latest = database.list_latest_relevant_papers()
             self.assertEqual(latest[0]["item"]["id"], item_id)
@@ -1267,6 +1272,9 @@ class TeamResearchWebTest(unittest.TestCase):
                         "summarize": "1",
                         "summary_provider": "local",
                         "summary_min_score": "80",
+                        "ai_enrich": "1",
+                        "ai_enrich_limit": "7",
+                        "ai_enrich_min_score": "66",
                         "conference_year": "2026",
                         "usenix_security_cycles": "1, 2",
                         "include_openreview_unaccepted": "1",
@@ -1306,6 +1314,9 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertTrue(kwargs["summarize"])
         self.assertEqual(kwargs["summary_provider"], "local")
         self.assertEqual(kwargs["summary_min_score"], 80)
+        self.assertTrue(kwargs["ai_enrich"])
+        self.assertEqual(kwargs["ai_enrich_limit"], 7)
+        self.assertEqual(kwargs["ai_enrich_min_score"], 66)
         self.assertEqual(kwargs["conference_year"], 2026)
         self.assertEqual(kwargs["usenix_security_cycles"], [1, 2])
         self.assertFalse(kwargs["openreview_accepted_only"])
@@ -2082,14 +2093,15 @@ class TeamResearchWebTest(unittest.TestCase):
                 now=datetime(2026, 7, 1, 10, 2, tzinfo=timezone.utc),
             )
 
-            item_id = import_radar_recommendation_to_library(
-                database,
-                {
-                    "run_id": run["id"],
-                    "dedupe_key": paper["dedupe_key"],
-                    "actor": "alice",
-                },
-            )
+            with mock.patch("team.literature_radar.analyze_submitted_item", return_value={"status": "pending"}):
+                item_id = import_radar_recommendation_to_library(
+                    database,
+                    {
+                        "run_id": run["id"],
+                        "dedupe_key": paper["dedupe_key"],
+                        "actor": "alice",
+                    },
+                )
 
             latest = database.list_latest_relevant_papers()
             self.assertEqual(len(latest), 1)
@@ -2199,6 +2211,93 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Relevance: highly_relevant -&gt; highly_relevant (score 100 -&gt; 94)", activity_html)
             self.assertIn("Updated importance:", activity_html)
             self.assertIn("Importance: 0 -&gt; 5", activity_html)
+
+    def test_library_radar_insight_prefers_ai_research_card_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="semantic_scholar",
+                source_paper_id="paper-ai-1",
+                title="Local Radar Title",
+                abstract="Memory safety and LLM security for agent workflows.",
+                identifiers={"semantic_scholar_id": "paper-ai-1"},
+                links={"landing": "https://www.semanticscholar.org/paper/paper-ai-1"},
+                release_date="2026-06-28",
+            )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["summary"] = {
+                "short_summary": "Local deterministic summary should not lead the card.",
+                "relationship_to_interests": "Local deterministic reason.",
+            }
+            recommendation["context"] = {
+                "relationship_summary": "Related to existing context: Agentic baseline.",
+                "related_items": [],
+            }
+            recommendation["attention_summary"] = {
+                "why_attention": "Local deterministic attention should not lead the card.",
+                "why_now": "new this run",
+            }
+
+            def analyzer(db: TeamResearchDatabase, item_id: str) -> dict[str, object]:
+                bundle = db.get_bundle(item_id)
+                timestamp = "2026-07-01T10:03:00+00:00"
+                item = dict(bundle["item"])
+                item["updated_at"] = timestamp
+                card = {
+                    "id": "card_ai_radar_test",
+                    "item_id": item_id,
+                    "research_question": "How does the paper harden agent memory safety?",
+                    "method": "AI-extracted comparative evaluation",
+                    "data": "agent workflow benchmark",
+                    "findings": ["AI finding: the paper evaluates memory-safe agent workflows."],
+                    "innovation": "AI-extracted architecture comparison.",
+                    "limitations": ["Synthetic fixture."],
+                    "relevance": "AI reason: directly supports the team memory-safety agenda.",
+                    "possible_use": ["Use as a review seed"],
+                    "confidence": "high",
+                    "review_status": "draft",
+                    "source_trace": {"ai_provider": "openrouter", "ai_model": "test/model"},
+                    "ai_model_used": "test/model",
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                }
+                screening = {
+                    "id": "screen_ai_radar_test",
+                    "item_id": item_id,
+                    "topic_profile_id": "team-literature-radar",
+                    "score": 94,
+                    "label": "highly_relevant",
+                    "reasons": ["AI reason: direct memory-safety match."],
+                    "matched_terms": ["memory safety", "agent workflow"],
+                    "suggested_contexts": ["team-literature-radar"],
+                    "suggested_actions": ["review_today"],
+                    "confidence": "high",
+                    "source_trace": {"ai_provider": "openrouter", "ai_model": "test/model"},
+                    "screened_at": timestamp,
+                }
+                db.apply_ai_analysis_records(item=item, card=card, screening=screening, tags=["memory-safety"])
+                return {"status": "succeeded", "item_id": item_id}
+
+            import_radar_recommendation(
+                database,
+                recommendation,
+                analyze=True,
+                analyzer=analyzer,
+                now=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+            )
+
+            latest = database.list_latest_relevant_papers()
+            self.assertEqual(latest[0]["card"]["ai_model_used"], "test/model")
+            latest_html = render_latest_papers_page(database)
+            self.assertIn("AI enriched · 94/100", latest_html)
+            self.assertIn("AI finding: the paper evaluates memory-safe agent workflows.", latest_html)
+            self.assertIn("AI reason: directly supports the team memory-safety agenda.", latest_html)
+            self.assertIn("AI-extracted comparative evaluation; agent workflow benchmark", latest_html)
+            self.assertIn("Use as a review seed", latest_html)
+            self.assertIn("Related to existing context: Agentic baseline.", latest_html)
+            self.assertIn("<strong>Now:</strong> new this run", latest_html)
+            self.assertNotIn("Local deterministic summary should not lead the card.", latest_html)
+            self.assertNotIn("<strong>Attention:</strong> Local deterministic attention should not lead the card.", latest_html)
 
     def test_radar_review_marks_recommendation_and_paper_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2668,11 +2767,13 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Upload PDF", before_html)
 
             with mock.patch("team.research_web.UPLOAD_DIR", upload_dir):
-                upload_paper_pdf(
-                    database,
-                    {"item_id": item_id},
-                    upload=("attached.pdf", b"%PDF-1.4 attached content"),
-                )
+                with mock.patch("team.research_web.analyze_submitted_item") as analyze:
+                    upload_paper_pdf(
+                        database,
+                        {"item_id": item_id},
+                        upload=("attached.pdf", b"%PDF-1.4 attached content"),
+                    )
+                    analyze.assert_called_once_with(database, item_id)
 
             paper = database.list_latest_relevant_papers()[0]
             self.assertEqual(paper["item"]["id"], item_id)
