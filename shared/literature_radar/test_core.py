@@ -2814,6 +2814,47 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("allocator project", watch_queue["papers"][0]["triage_hint"]["reason"])
         self.assertEqual(radar_review_counts(records)["dismissed"], 1)
 
+    def test_review_queue_prioritizes_strong_ai_enriched_candidates(self) -> None:
+        records = [
+            {
+                "title": "Local Only Max Score",
+                "latest_seen_at": "2026-07-01T13:00:00+00:00",
+                "latest_recommendation": {
+                    "score": 100,
+                    "label": "highly_relevant",
+                    "scoring": {"score": 100, "source": "team_radar_selection"},
+                },
+            },
+            {
+                "title": "AI Reviewed Strong Candidate",
+                "latest_seen_at": "2026-07-01T12:00:00+00:00",
+                "latest_recommendation": {
+                    "score": 95,
+                    "label": "highly_relevant",
+                    "ai_enrichment": {"status": "succeeded"},
+                    "scoring": {"score": 95, "source": "ai_enrichment"},
+                },
+            },
+            {
+                "title": "AI Reviewed Low Candidate",
+                "latest_seen_at": "2026-07-01T14:00:00+00:00",
+                "latest_recommendation": {
+                    "score": 20,
+                    "label": "low_relevance",
+                    "ai_enrichment": {"status": "succeeded"},
+                    "scoring": {"score": 20, "source": "ai_enrichment"},
+                },
+            },
+        ]
+
+        queue = build_radar_review_queue(records, limit=3)
+
+        self.assertEqual(
+            [record["title"] for record in queue["papers"]],
+            ["AI Reviewed Strong Candidate", "Local Only Max Score", "AI Reviewed Low Candidate"],
+        )
+        self.assertEqual(queue["papers"][0]["latest_recommendation"]["score"], 95)
+
     def test_review_queue_derives_reason_from_title_only_topic_matches(self) -> None:
         queue = build_radar_review_queue(
             [

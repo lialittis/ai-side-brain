@@ -35,6 +35,20 @@ class FakeOpenRouterClient:
         return self.response
 
 
+class SequentialOpenRouterClient:
+    def __init__(self, results: list[object], model: str = "test/model") -> None:
+        self.results = list(results)
+        self.config = SimpleNamespace(model=model)
+        self.calls: list[dict[str, object]] = []
+
+    def chat_completion(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result  # type: ignore[return-value]
+
+
 def ai_response() -> dict[str, object]:
     return {
         "document_classification": {
@@ -360,6 +374,49 @@ class TeamResearchAITest(unittest.TestCase):
         self.assertEqual(enriched["scoring"]["score"], 88.0)
         self.assertEqual(enriched["ai_enrichment"]["research_card"]["ai_model_used"], "test/model")
         self.assertIn("short_summary", enriched["summary"])
+
+    def test_radar_ai_enrichment_retries_metadata_only_when_pdf_parse_fails(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00422",
+            title="Radar Candidate With Unparseable PDF",
+            abstract="Memory safety and system security for Radar AI enrichment.",
+            year=2026,
+            identifiers={"arxiv_id": "2601.00422"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00422"},
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        recommendation = {
+            "paper": paper,
+            "scoring": {"score": 82, "label": "highly_relevant", "paper_id": paper["id"]},
+            "why_relevant": "Local radar scoring matched memory safety.",
+        }
+        client = SequentialOpenRouterClient(
+            [
+                RuntimeError("OpenRouter request failed with HTTP 400: Failed to parse 2601.00422v1.pdf; code=400"),
+                ai_response(),
+            ]
+        )
+
+        enriched = enrich_radar_recommendations_with_ai(
+            [recommendation],
+            client=client,
+            tag_catalog=[],
+            limit=1,
+            min_score=1,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertIsNotNone(client.calls[0]["plugins"])
+        self.assertIsNone(client.calls[1]["plugins"])
+        retry_prompt = client.calls[1]["messages"][1]["content"][0]["text"]
+        self.assertIn('"source_kind": "radar_pdf_url_metadata_fallback"', retry_prompt)
+        self.assertEqual(enriched["ai_enrichment"]["status"], "succeeded")
+        self.assertTrue(enriched["ai_enrichment"]["fallback"]["used"])
+        self.assertEqual(enriched["ai_enrichment"]["fallback"]["from_source_kind"], "radar_pdf_url")
+        self.assertEqual(enriched["scoring"]["source"], "ai_enrichment")
+        self.assertEqual(enriched["scoring"]["score"], 88.0)
 
     def test_legacy_unsupported_non_pdf_link_records_pending_unsupported_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

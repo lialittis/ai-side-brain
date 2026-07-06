@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 
 from shared.literature_radar import (
     build_radar_preflight_payload,
+    build_radar_review_queue,
     DEFAULT_ARXIV_CATEGORIES,
     RADAR_DEFAULT_OPENROUTER_SUMMARY_MIN_SCORE,
     evaluate_radar_relevance_cases,
@@ -62,6 +63,7 @@ from shared.literature_radar import (
     radar_primary_source_coverage_summary,
     radar_relevance_evaluation_cases_for_interests,
     radar_history_record_source_ids,
+    radar_history_review_status,
     radar_latest_signal_lines,
     radar_guardrail_readiness,
     radar_mvp_readiness_summary,
@@ -526,16 +528,95 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 8px;
       min-width: 0;
     }}
+    .submit-panel {{
+      display: grid;
+      gap: 14px;
+      padding: 16px;
+    }}
+    .submit-panel-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+      padding-bottom: 2px;
+    }}
+    .submit-panel-head h2 {{ margin-bottom: 3px; }}
+    .submit-panel-badge {{
+      border: 1px solid #b9d8d4;
+      background: #eef8f6;
+      color: #0b5f58;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }}
     .submit-options {{
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-      align-items: start;
+      grid-template-columns: minmax(280px, 0.9fr) minmax(340px, 1.1fr);
+      gap: 14px;
+      align-items: stretch;
+    }}
+    .submit-secondary {{
+      display: grid;
+      gap: 12px;
+      min-width: 0;
     }}
     .submit-option {{
       display: grid;
       gap: 10px;
       min-width: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      padding: 13px;
+      background: #fbfcfe;
+    }}
+    .submit-option-upload {{
+      align-content: start;
+      background: #f7fbfa;
+      border-color: #cfe4e1;
+    }}
+    .submit-card-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }}
+    .submit-card-head h3 {{ margin: 0; }}
+    .dropzone {{
+      display: grid;
+      gap: 7px;
+      align-content: center;
+      min-height: 172px;
+      border: 1.5px dashed #9fcac5;
+      border-radius: 8px;
+      padding: 18px;
+      background: #ffffff;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    }}
+    .dropzone:hover, .dropzone.is-dragging {{
+      border-color: var(--accent);
+      background: #eef8f6;
+      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.16);
+    }}
+    .dropzone-kicker {{
+      color: #0b5f58;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }}
+    .dropzone strong {{
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }}
+    .file-name {{
+      min-height: 20px;
+      overflow-wrap: anywhere;
     }}
     .paper {{
       display: grid;
@@ -950,6 +1031,21 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 6px;
       color: #344054;
     }}
+    .today-ai-read {{
+      display: grid;
+      gap: 7px;
+      max-width: 920px;
+      border: 1px solid #d4e8e5;
+      border-radius: 8px;
+      background: #f7fbfa;
+      padding: 10px 12px;
+    }}
+    .today-ai-label {{
+      color: #0b5f58;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }}
     .today-paper-reasons p {{
       margin: 0;
       overflow-wrap: anywhere;
@@ -1193,6 +1289,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .interest-add {{ grid-template-columns: 1fr; }}
       .actions, .radar-queue-actions, .radar-overview-actions, .radar-queue-review-actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
+      .dropzone {{ min-height: 136px; }}
       .radar-score-badge {{ width: fit-content; text-align: left; }}
     }}
   </style>
@@ -1206,6 +1303,49 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     </aside>
     <main class="content">{body}</main>
   </div>
+  <script>
+  (function () {{
+    function setFileName(dropzone, input) {{
+      var target = dropzone.querySelector("[data-file-name]");
+      if (!target) {{
+        return;
+      }}
+      if (input.files && input.files.length) {{
+        target.textContent = input.files[0].name;
+      }} else {{
+        target.textContent = "No file selected";
+      }}
+    }}
+    document.querySelectorAll("[data-file-drop]").forEach(function (dropzone) {{
+      var input = document.getElementById(dropzone.getAttribute("data-file-input") || "");
+      if (!input) {{
+        return;
+      }}
+      input.addEventListener("change", function () {{
+        setFileName(dropzone, input);
+      }});
+      ["dragenter", "dragover"].forEach(function (eventName) {{
+        dropzone.addEventListener(eventName, function (event) {{
+          event.preventDefault();
+          dropzone.classList.add("is-dragging");
+        }});
+      }});
+      ["dragleave", "dragend"].forEach(function (eventName) {{
+        dropzone.addEventListener(eventName, function () {{
+          dropzone.classList.remove("is-dragging");
+        }});
+      }});
+      dropzone.addEventListener("drop", function (event) {{
+        event.preventDefault();
+        dropzone.classList.remove("is-dragging");
+        if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) {{
+          input.files = event.dataTransfer.files;
+          setFileName(dropzone, input);
+        }}
+      }});
+    }});
+  }})();
+  </script>
 </body>
 </html>"""
 
@@ -4632,6 +4772,10 @@ def ai_status_pill(status: str | None) -> str:
     return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
 
 
+TODAY_AI_MIN_SCORE = 60
+TODAY_LOCAL_MIN_SCORE = 75
+
+
 def render_today_page(
     database: TeamResearchDatabase,
     *,
@@ -4639,13 +4783,10 @@ def render_today_page(
     limit: int = 6,
 ) -> str:
     selected_limit = max(1, int(limit or 6))
-    payload = build_team_literature_radar_queue_payload(
-        database,
-        limit=selected_limit,
-        configured_primary_source_coverage=team_saved_primary_source_coverage(database),
-    )
+    payload = build_today_radar_selection_payload(database, limit=selected_limit)
     records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
     counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    today_selection = payload.get("today_selection") if isinstance(payload.get("today_selection"), dict) else {}
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
     selected_review = str(payload.get("review") or "all")
     queue_window = {"limit": selected_limit, "triage_action": "", "recent_days": 0}
@@ -4656,7 +4797,7 @@ def render_today_page(
       <div class="today-head">
         <div>
           <h2 class="today-title">Worth Reading Today</h2>
-          <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records)))}</div>
+          <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records), today_selection))}</div>
         </div>
         <div class="radar-overview-actions">
           <a class="button primary" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
@@ -4671,16 +4812,119 @@ def render_today_page(
     return page("Today", body, active="today")
 
 
-def radar_today_status_line(counts: dict[str, Any], visible_count: int) -> str:
-    new_count = int(counts.get("unreviewed") or 0)
-    saved_count = int(counts.get("watch") or 0)
-    if new_count:
+def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit: int) -> dict[str, Any]:
+    selected_limit = max(1, int(limit or 6))
+    payload = build_team_literature_radar_queue_payload(
+        database,
+        limit=1,
+        configured_primary_source_coverage=team_saved_primary_source_coverage(database),
+    )
+    counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    unreviewed_queue = build_today_review_queue(database, counts, review_status="unreviewed")
+    unreviewed_records = unreviewed_queue.get("papers") if isinstance(unreviewed_queue.get("papers"), list) else []
+    high_signal_new = [record for record in unreviewed_records if today_record_worth_attention(record)]
+    mode = "new"
+    selected_records = high_signal_new
+    saved_records: list[dict[str, Any]] = []
+    if not selected_records:
+        watch_queue = build_today_review_queue(database, counts, review_status="watch")
+        saved_records = watch_queue.get("papers") if isinstance(watch_queue.get("papers"), list) else []
+        if saved_records:
+            selected_records = saved_records
+            mode = "saved"
+        else:
+            mode = "empty"
+    visible_records = selected_records[:selected_limit]
+    payload = dict(payload)
+    payload["papers"] = visible_records
+    payload["review"] = "watch" if mode == "saved" else "unreviewed"
+    payload["today_selection"] = {
+        "mode": mode,
+        "visible_count": len(visible_records),
+        "new_active_count": len(unreviewed_records),
+        "new_high_signal_count": len(high_signal_new),
+        "saved_active_count": len(saved_records),
+        "thresholds": {
+            "ai_min_score": TODAY_AI_MIN_SCORE,
+            "local_min_score": TODAY_LOCAL_MIN_SCORE,
+        },
+    }
+    return payload
+
+
+def build_today_review_queue(
+    database: TeamResearchDatabase,
+    counts: dict[str, Any],
+    *,
+    review_status: str,
+) -> dict[str, Any]:
+    records = database.list_literature_radar_papers(limit=None, review_status=review_status)
+    return build_radar_review_queue(
+        records,
+        limit=max(1, len(records)),
+        review_counts={key: int(value or 0) for key, value in counts.items()},
+    )
+
+
+def today_record_worth_attention(record: dict[str, Any]) -> bool:
+    if radar_history_review_status(record) == "watch":
+        return True
+    score = today_effective_score(record)
+    if today_has_ai_support(record):
+        return score >= TODAY_AI_MIN_SCORE
+    return score >= TODAY_LOCAL_MIN_SCORE
+
+
+def today_effective_score(record: dict[str, Any]) -> float:
+    scoring = radar_effective_recommendation_scoring(record)
+    try:
+        return float(scoring.get("score") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def today_has_ai_support(record: dict[str, Any]) -> bool:
+    if today_ai_enrichment(record).get("status") == "succeeded":
+        return True
+    scoring = radar_effective_recommendation_scoring(record)
+    source = str(scoring.get("source") or scoring.get("selection_source") or "").strip().lower()
+    return source == "ai_enrichment"
+
+
+def radar_today_status_line(
+    counts: dict[str, Any],
+    visible_count: int,
+    selection: dict[str, Any] | None = None,
+) -> str:
+    selected = selection if isinstance(selection, dict) else {}
+    mode = str(selected.get("mode") or "")
+    new_active_count = int(selected.get("new_active_count") or counts.get("unreviewed") or 0)
+    new_high_signal_count = int(selected.get("new_high_signal_count") or visible_count or 0)
+    saved_active_count = int(selected.get("saved_active_count") or counts.get("watch") or 0)
+    if visible_count and mode == "new":
+        visible_text = f"{visible_count} of {new_high_signal_count}" if new_high_signal_count > visible_count else str(visible_count)
         return (
-            f"Showing {visible_count} worth a look from {new_count} new Radar item"
-            f"{'' if new_count == 1 else 's'}."
+            f"Showing {visible_text} high-signal new paper"
+            f"{'' if visible_count == 1 else 's'} from {new_active_count} active Radar candidate"
+            f"{'' if new_active_count == 1 else 's'}."
         )
-    if saved_count:
-        return f"No new high-signal items right now. {saved_count} item{'' if saved_count == 1 else 's'} saved for later."
+    if visible_count and mode == "saved":
+        return (
+            f"No new papers meet today's threshold. Showing {visible_count} saved follow-up paper"
+            f"{'' if visible_count == 1 else 's'}."
+        )
+    if new_active_count:
+        active_suffix = "" if new_active_count == 1 else "s"
+        active_verb = "remains" if new_active_count == 1 else "remain"
+        return (
+            f"No new papers meet today's high-signal threshold. {new_active_count} active Radar candidate"
+            f"{active_suffix} {active_verb} in the full Radar feed."
+        )
+    if saved_active_count:
+        return (
+            f"No new high-signal papers right now. {saved_active_count} saved paper"
+            f"{'' if saved_active_count == 1 else 's'} available for follow-up."
+        )
     return "No new Radar items are waiting in today's feed."
 
 
@@ -4782,6 +5026,9 @@ def today_research_summary(record: dict[str, Any]) -> str:
     summary = latest.get("summary") if isinstance(latest.get("summary"), dict) else {}
     attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
     reason = record.get("reason_to_read") if isinstance(record.get("reason_to_read"), dict) else {}
+    ai_summary = today_ai_summary_text(record)
+    if ai_summary:
+        return truncate_member_text(ai_summary, limit=380)
     candidates = [
         summary.get("short_summary"),
         attention.get("why_attention"),
@@ -4801,6 +5048,9 @@ def today_research_summary(record: dict[str, Any]) -> str:
 
 
 def render_today_reason_rows(record: dict[str, Any]) -> str:
+    ai_rows = render_today_ai_reason_rows(record)
+    if ai_rows:
+        return ai_rows
     latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
     attention = latest.get("attention_summary") if isinstance(latest.get("attention_summary"), dict) else {}
     connection = clean_today_research_text(
@@ -4832,6 +5082,88 @@ def render_today_reason_rows(record: dict[str, Any]) -> str:
         )
         + "</div>"
     )
+
+
+def render_today_ai_reason_rows(record: dict[str, Any]) -> str:
+    ai_enrichment = today_ai_enrichment(record)
+    if not ai_enrichment:
+        return ""
+    card = today_ai_research_card(record)
+    screening = today_ai_screening(record)
+    ai_summary = ai_enrichment.get("summary") if isinstance(ai_enrichment.get("summary"), dict) else {}
+    why = (
+        meaningful_inline_text(card.get("relevance"))
+        or " ".join(inline_text_list(screening.get("reasons"))[:2])
+        or meaningful_inline_text(ai_summary.get("relationship_to_interests"))
+    )
+    method = " · ".join(
+        part
+        for part in (
+            meaningful_inline_text(card.get("method")),
+            meaningful_inline_text(card.get("data")),
+        )
+        if part
+    )
+    possible_use = first_meaningful_text(card.get("possible_use") or [])
+    if not possible_use:
+        possible_use = meaningful_inline_text(ai_summary.get("suggested_next_step"))
+    rows = []
+    if why:
+        rows.append(("Why chosen", why))
+    if method:
+        rows.append(("Method", method))
+    if possible_use:
+        rows.append(("Use", possible_use))
+    if not rows:
+        return ""
+    return (
+        '<div class="today-ai-read">'
+        '<div class="today-ai-label">AI quick read</div>'
+        '<div class="today-paper-reasons">'
+        + "".join(
+            f"<p><strong>{html_escape(label)}:</strong> {html_escape(truncate_member_text(text, limit=230))}</p>"
+            for label, text in rows[:3]
+        )
+        + "</div></div>"
+    )
+
+
+def today_ai_summary_text(record: dict[str, Any]) -> str:
+    ai_enrichment = today_ai_enrichment(record)
+    if not ai_enrichment:
+        return ""
+    card = today_ai_research_card(record)
+    ai_summary = ai_enrichment.get("summary") if isinstance(ai_enrichment.get("summary"), dict) else {}
+    for candidate in (
+        first_meaningful_text(card.get("findings") or []),
+        meaningful_inline_text(card.get("research_question")),
+        meaningful_inline_text(ai_summary.get("short_summary")),
+        meaningful_inline_text(card.get("relevance")),
+    ):
+        text = clean_today_research_text(candidate)
+        if text and not today_text_looks_operational(text):
+            return text
+    return ""
+
+
+def today_ai_enrichment(record: dict[str, Any]) -> dict[str, Any]:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    ai_enrichment = latest.get("ai_enrichment") if isinstance(latest.get("ai_enrichment"), dict) else {}
+    if ai_enrichment.get("status") == "succeeded":
+        return ai_enrichment
+    return {}
+
+
+def today_ai_research_card(record: dict[str, Any]) -> dict[str, Any]:
+    ai_enrichment = today_ai_enrichment(record)
+    card = ai_enrichment.get("research_card") if isinstance(ai_enrichment.get("research_card"), dict) else {}
+    return card
+
+
+def today_ai_screening(record: dict[str, Any]) -> dict[str, Any]:
+    ai_enrichment = today_ai_enrichment(record)
+    screening = ai_enrichment.get("screening") if isinstance(ai_enrichment.get("screening"), dict) else {}
+    return screening
 
 
 def today_reason_point(record: dict[str, Any], label: str) -> str:
@@ -6384,13 +6716,37 @@ def render_paper_link(link: str | None) -> str:
     return f'<a class="button" href="/files/{quote(link)}" target="_blank" rel="noreferrer">Open PDF</a>'
 
 
-def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
-    body = f"""
-    {render_topline("Submit Research", "Add a paper, PDF, or promising link for the team.", "/", "Today")}
-    {render_notice(notice)}
-    <div class="panel">
+def render_submit_panel() -> str:
+    return """
+    <section class="panel submit-panel" aria-label="Submit research">
+      <div class="submit-panel-head">
+        <div>
+          <h2>Submit Research</h2>
+          <div class="muted">Add full papers, direct PDFs, or promising research links.</div>
+        </div>
+        <span class="submit-panel-badge">AI analysis queued</span>
+      </div>
       <div class="submit-options">
+        <form class="submit-option submit-option-upload" method="post" action="/submit" enctype="multipart/form-data">
+          <div class="submit-card-head">
+            <h3>PDF Upload</h3>
+            <span class="tag">full paper</span>
+          </div>
+          <input type="hidden" name="source_type" value="pdf_upload">
+          <label class="dropzone" for="submit-pdf" data-file-drop data-file-input="submit-pdf">
+            <span class="dropzone-kicker">PDF</span>
+            <strong>Drop PDF or browse</strong>
+            <span class="muted file-name" data-file-name>No file selected</span>
+          </label>
+          <input class="sr-only" id="submit-pdf" name="pdf" type="file" accept="application/pdf,.pdf" required>
+          <button class="primary" type="submit">Add PDF</button>
+        </form>
+        <div class="submit-secondary">
         <form class="submit-option" method="post" action="/submit">
+          <div class="submit-card-head">
+            <h3>PDF Link</h3>
+            <span class="tag">direct URL</span>
+          </div>
           <input type="hidden" name="source_type" value="pdf_url">
           <div class="field">
             <label for="pdf-url">Direct PDF link</label>
@@ -6399,15 +6755,11 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
           </div>
           <button class="primary" type="submit">Add PDF Link</button>
         </form>
-        <form class="submit-option" method="post" action="/submit" enctype="multipart/form-data">
-          <input type="hidden" name="source_type" value="pdf_upload">
-          <div class="field">
-            <label for="pdf">PDF file</label>
-            <input id="pdf" name="pdf" type="file" accept="application/pdf,.pdf" required>
+        <form class="submit-option submit-option-manual" method="post" action="/submit">
+          <div class="submit-card-head">
+            <h3>Manual Link</h3>
+            <span class="tag">metadata first</span>
           </div>
-          <button class="primary" type="submit">Add PDF</button>
-        </form>
-        <form class="submit-option" method="post" action="/submit">
           <input type="hidden" name="source_type" value="manual_link">
           <div class="field">
             <label for="manual-url">Manual link</label>
@@ -6423,8 +6775,17 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
           </div>
           <button class="primary" type="submit">Add Manual Link</button>
         </form>
+        </div>
       </div>
-    </div>
+    </section>
+    """
+
+
+def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
+    body = f"""
+    {render_topline("Submit Research", "Add a paper, PDF, or promising link for the team.", "/library", "Library")}
+    {render_notice(notice)}
+    {render_submit_panel()}
     """
     return page("Submit Research", body, active="submit")
 

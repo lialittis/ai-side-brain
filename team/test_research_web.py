@@ -172,6 +172,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Worth Reading Today", today)
         self.assertIn("Team Library", latest)
         self.assertIn("No relevant papers yet", latest)
+        self.assertNotIn("Submit Research", latest)
         self.assertIn("Submit Research", submit)
         self.assertIn("Topics", latest)
         self.assertIn("Filter by source", latest)
@@ -179,15 +180,21 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn('href="/">Today</a>', latest)
         self.assertIn('href="/library">Library</a>', latest)
         self.assertIn('href="/radar/brief?days=7&amp;limit=20">Digest</a>', latest)
+        self.assertIn('href="/submit">Submit</a>', latest)
         self.assertNotIn("Radar Today", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
         self.assertIn("Direct PDF link", submit)
-        self.assertIn("PDF file", submit)
+        self.assertIn("PDF Upload", submit)
+        self.assertIn("Drop PDF or browse", submit)
+        self.assertIn("data-file-drop", submit)
+        self.assertIn('data-file-input="submit-pdf"', submit)
+        self.assertIn("No file selected", submit)
         self.assertIn("Manual link", submit)
         self.assertIn("Add PDF Link", submit)
         self.assertIn("Add PDF", submit)
         self.assertIn("Add Manual Link", submit)
+        self.assertIn("AI analysis queued", submit)
         self.assertNotIn("Customized tags", submit)
         self.assertNotIn("Screening topic", submit)
         self.assertNotIn("Submitted by", submit)
@@ -395,6 +402,12 @@ class TeamResearchWebTest(unittest.TestCase):
                     setup_env_text = response.read().decode("utf-8")
                     setup_env_content_type = response.headers.get("Content-Type")
                     setup_env_status = response.status
+                with urlopen(
+                    f"http://127.0.0.1:{port}/submit",
+                    timeout=5,
+                ) as response:
+                    submit_page_url = response.geturl()
+                    submit_page_html = response.read().decode("utf-8")
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -579,6 +592,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("radar-validate-sources", setup_env_text)
             self.assertIn("--source-preset team_security_daily", setup_env_text)
             self.assertIn("--venue-profile security", setup_env_text)
+            self.assertTrue(submit_page_url.endswith("/submit"))
+            self.assertIn("Submit Research", submit_page_html)
+            self.assertIn("Drop PDF or browse", submit_page_html)
             self.assertIn("--openreview-venue-profile iclr", setup_env_text)
             self.assertIn("--usenix-cycle 1", setup_env_text)
             self.assertIn("--live --validation-max-results 1 --json", setup_env_text)
@@ -2384,7 +2400,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 {
                     "paper": other_paper,
                     "scoring": {
-                        "score": 72,
+                        "score": 82,
                         "label": "highly_relevant",
                         "matched_positive_keywords": ["system security"],
                         "matched_negative_keywords": [],
@@ -2441,7 +2457,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("<strong>Matched:</strong>", unreviewed_history_html)
             latest_html = render_today_page(database)
             self.assertIn("Worth Reading Today", latest_html)
-            self.assertIn("Showing 1 worth a look from 1 new Radar item.", latest_html)
+            self.assertIn("Showing 1 high-signal new paper from 1 active Radar candidate.", latest_html)
             self.assertIn("Unreviewed Radar History Paper", latest_html)
             self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
             self.assertIn("today-paper-card", latest_html)
@@ -2484,6 +2500,95 @@ class TeamResearchWebTest(unittest.TestCase):
             )
             self.assertIn("Signal: Stored queue signal for daily radar review.", queue_payload["papers"][0]["signal_lines"])
             self.assertEqual(queue_payload["links"]["radar"], "/radar")
+
+    def test_today_page_prefers_concise_ai_enriched_research_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01337",
+                title="AI Enriched Today Radar Paper",
+                abstract="Memory safety and agentic security for autonomous vulnerability research.",
+                identifiers={"arxiv_id": "2601.01337"},
+                links={"arxiv": "https://arxiv.org/abs/2601.01337"},
+                release_date="2026-07-01",
+                discovered_at=datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
+            )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["scoring"]["score"] = 93
+            recommendation["scoring"]["label"] = "highly_relevant"
+            recommendation["summary"] = {
+                "short_summary": "Local summary should not lead today's card.",
+                "relationship_to_interests": "Local interest relationship.",
+            }
+            recommendation["attention_summary"] = {
+                "why_attention": "Local attention should stay behind the AI quick read.",
+                "relationship_to_interests": "Local attention relationship.",
+                "why_now": "new this run",
+            }
+            recommendation["ai_enrichment"] = {
+                "status": "succeeded",
+                "research_card": {
+                    "research_question": "Can agents identify memory-safety exploit paths?",
+                    "method": "Hybrid static and dynamic analysis",
+                    "data": "Agent traces and vulnerability benchmarks",
+                    "findings": ["AI finding: agents expose memory-safety failure modes quickly."],
+                    "relevance": "AI reason: directly supports agentic security triage.",
+                    "possible_use": ["Use this to prioritize unsafe-agent evaluation tasks."],
+                    "confidence": "high",
+                    "ai_model_used": "test/model",
+                },
+                "screening": {
+                    "score": 93,
+                    "label": "highly_relevant",
+                    "reasons": ["AI screening reason should be available as fallback."],
+                    "matched_terms": ["agentic security"],
+                    "confidence": "high",
+                },
+                "summary": {
+                    "short_summary": "AI summary fallback.",
+                    "relationship_to_interests": "AI summary relationship.",
+                    "suggested_next_step": "AI suggested next step.",
+                },
+            }
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["agentic security"],
+                now=datetime(2026, 7, 1, 9, 5, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=[recommendation],
+                now=datetime(2026, 7, 1, 9, 6, tzinfo=timezone.utc),
+            )
+            with database.connect() as connection:
+                row = connection.execute(
+                    "SELECT record_json FROM literature_radar_papers WHERE dedupe_key = ?",
+                    (paper["dedupe_key"],),
+                ).fetchone()
+                legacy_record = json.loads(row["record_json"])
+                legacy_record["latest_recommendation"].pop("ai_enrichment", None)
+                connection.execute(
+                    "UPDATE literature_radar_papers SET record_json = ? WHERE dedupe_key = ?",
+                    (json.dumps(legacy_record, ensure_ascii=True, sort_keys=True), paper["dedupe_key"]),
+                )
+
+            stored = database.list_literature_radar_papers(limit=1)[0]
+            latest_html = render_today_page(database)
+
+            self.assertEqual(stored["latest_recommendation"]["ai_enrichment"]["status"], "succeeded")
+            self.assertIn("AI Enriched Today Radar Paper", latest_html)
+            self.assertIn("AI finding: agents expose memory-safety failure modes quickly.", latest_html)
+            self.assertIn("AI quick read", latest_html)
+            self.assertIn("<strong>Why chosen:</strong> AI reason: directly supports agentic security triage.", latest_html)
+            self.assertIn("<strong>Method:</strong> Hybrid static and dynamic analysis", latest_html)
+            self.assertIn("Agent traces and vulnerability benchmarks", latest_html)
+            self.assertIn("<strong>Use:</strong> Use this to prioritize unsafe-agent evaluation tasks.", latest_html)
+            self.assertNotIn("Local summary should not lead today's card.", latest_html)
+            self.assertNotIn("Local attention should stay behind the AI quick read.", latest_html)
+            self.assertNotIn("<strong>Matched:</strong>", latest_html)
+            self.assertNotIn("PDF: arxiv_or_open_repository", latest_html)
 
     def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2565,11 +2670,164 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_today_page(database)
 
             self.assertIn("Older Higher Priority Radar Paper", latest_html)
-            self.assertIn("Recent Lower Priority Radar Paper", latest_html)
-            self.assertLess(
-                latest_html.index("Older Higher Priority Radar Paper"),
-                latest_html.index("Recent Lower Priority Radar Paper"),
+            self.assertNotIn("Recent Lower Priority Radar Paper", latest_html)
+            self.assertIn("Showing 1 high-signal new paper from 2 active Radar candidates.", latest_html)
+
+    def test_today_page_hides_low_signal_new_radar_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00043",
+                title="Low Signal Radar Candidate",
+                abstract="A weakly related systems paper without enough relevance for the Today page.",
+                identifiers={"arxiv_id": "2601.00043"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00043"},
             )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["scoring"]["score"] = 20
+            recommendation["scoring"]["label"] = "low_relevance"
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=[recommendation],
+                now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
+            )
+
+            latest_html = render_today_page(database)
+            queue_payload = build_team_literature_radar_queue_payload(database, limit=5)
+
+            self.assertIn("Low Signal Radar Candidate", queue_payload["papers"][0]["title"])
+            self.assertNotIn("Low Signal Radar Candidate", latest_html)
+            self.assertNotIn('<article class="today-paper-card">', latest_html)
+            self.assertIn(
+                "No new papers meet today&#x27;s high-signal threshold. 1 active Radar candidate remains in the full Radar feed.",
+                latest_html,
+            )
+
+    def test_today_page_falls_back_to_saved_papers_when_no_new_paper_qualifies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            new_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00044",
+                title="Low Signal New Radar Candidate",
+                abstract="A weakly related systems paper without enough relevance for the Today page.",
+                identifiers={"arxiv_id": "2601.00044"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00044"},
+            )
+            saved_paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00045",
+                title="Saved Follow Up Radar Paper",
+                abstract="A reviewer explicitly saved this memory-safety paper for follow-up.",
+                identifiers={"arxiv_id": "2601.00045"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00045"},
+            )
+            recommendations = recommend_papers([new_paper, saved_paper], limit=2)
+            for recommendation in recommendations:
+                recommendation["scoring"]["score"] = 20
+                recommendation["scoring"]["label"] = "low_relevance"
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[new_paper, saved_paper],
+                recommendations=recommendations,
+                now=datetime(2026, 7, 1, 12, 1, tzinfo=timezone.utc),
+            )
+            database.mark_literature_radar_paper_review(
+                saved_paper["dedupe_key"],
+                status="watch",
+                actor="alice",
+                reason="Worth revisiting in the next project discussion.",
+                now=datetime(2026, 7, 1, 12, 2, tzinfo=timezone.utc),
+            )
+
+            latest_html = render_today_page(database)
+
+            self.assertIn("No new papers meet today&#x27;s threshold. Showing 1 saved follow-up paper.", latest_html)
+            self.assertIn("Saved Follow Up Radar Paper", latest_html)
+            self.assertNotIn("Low Signal New Radar Candidate", latest_html)
+
+    def test_today_page_prioritizes_strong_ai_enriched_radar_papers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+
+            def store_radar_paper(
+                title: str,
+                paper_id: str,
+                score: int,
+                completed_at: datetime,
+                *,
+                ai_enriched: bool = False,
+            ) -> None:
+                paper = create_radar_paper(
+                    source_id="arxiv",
+                    source_paper_id=paper_id,
+                    title=title,
+                    abstract="Memory safety and system security for low-level software research.",
+                    identifiers={"arxiv_id": paper_id},
+                    links={"arxiv": f"https://arxiv.org/abs/{paper_id}"},
+                )
+                recommendation = recommend_papers([paper], limit=1)[0]
+                recommendation["scoring"]["score"] = score
+                recommendation["scoring"]["label"] = "highly_relevant"
+                if ai_enriched:
+                    recommendation["scoring"]["source"] = "ai_enrichment"
+                    recommendation["ai_enrichment"] = {
+                        "status": "succeeded",
+                        "research_card": {
+                            "findings": ["AI reviewed this candidate against the team focus."],
+                            "relevance": "AI confirmed this is worth reading today.",
+                        },
+                        "screening": {
+                            "score": score,
+                            "label": "highly_relevant",
+                            "confidence": "high",
+                        },
+                    }
+                run = database.create_literature_radar_run(
+                    sources=["arxiv"],
+                    query_terms=["memory safety"],
+                    now=completed_at - timedelta(minutes=1),
+                )
+                database.complete_literature_radar_run(
+                    run["id"],
+                    collected_papers=[paper],
+                    recommendations=[recommendation],
+                    now=completed_at,
+                )
+
+            store_radar_paper(
+                "Local Only Max Score Radar Paper",
+                "2601.00041",
+                100,
+                datetime(2026, 7, 1, 13, 0, tzinfo=timezone.utc),
+            )
+            store_radar_paper(
+                "AI Reviewed Strong Radar Paper",
+                "2601.00042",
+                95,
+                datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+                ai_enriched=True,
+            )
+
+            latest_html = render_today_page(database)
+
+            self.assertLess(
+                latest_html.index("AI Reviewed Strong Radar Paper"),
+                latest_html.index("Local Only Max Score Radar Paper"),
+            )
+            self.assertIn("AI quick read", latest_html)
 
     def test_manual_link_submission_creates_tagged_latest_relevant_paper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

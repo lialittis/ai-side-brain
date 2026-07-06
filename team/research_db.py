@@ -2065,6 +2065,8 @@ class TeamResearchDatabase:
                 """
             ).fetchall()
         papers = [loads(row["record_json"]) for row in rows]
+        with self.connect() as connection:
+            papers = self._hydrate_literature_radar_paper_ai_enrichment(connection, papers)
         if review_status:
             selected_status = normalize_literature_radar_review_status(review_status)
             papers = [
@@ -2073,6 +2075,65 @@ class TeamResearchDatabase:
                 if literature_radar_review_record(paper)["status"] == selected_status
             ]
         return papers if limit is None else papers[:limit]
+
+    def _hydrate_literature_radar_paper_ai_enrichment(
+        self,
+        connection: sqlite3.Connection,
+        papers: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        missing_keys = [
+            str(paper.get("dedupe_key") or "")
+            for paper in papers
+            if str(paper.get("dedupe_key") or "")
+            and not literature_radar_latest_ai_enrichment(paper)
+        ]
+        if not missing_keys:
+            return papers
+        placeholders = ",".join("?" for _key in missing_keys)
+        rows = connection.execute(
+            f"""
+            SELECT recommendation.dedupe_key, recommendation.record_json
+            FROM literature_radar_recommendations recommendation
+            JOIN literature_radar_runs run ON run.id = recommendation.run_id
+            WHERE recommendation.dedupe_key IN ({placeholders})
+            ORDER BY COALESCE(run.completed_at, run.started_at) DESC, recommendation.rank ASC
+            """,
+            missing_keys,
+        ).fetchall()
+        enrichment_by_key: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            dedupe_key = str(row["dedupe_key"] or "")
+            if dedupe_key in enrichment_by_key:
+                continue
+            record = loads(row["record_json"])
+            recommendation = record.get("recommendation") if isinstance(record.get("recommendation"), dict) else {}
+            ai_enrichment = (
+                recommendation.get("ai_enrichment")
+                if isinstance(recommendation.get("ai_enrichment"), dict)
+                and recommendation.get("ai_enrichment", {}).get("status") == "succeeded"
+                else {}
+            )
+            if ai_enrichment:
+                enrichment_by_key[dedupe_key] = ai_enrichment
+        if not enrichment_by_key:
+            return papers
+        hydrated = []
+        for paper in papers:
+            dedupe_key = str(paper.get("dedupe_key") or "")
+            ai_enrichment = enrichment_by_key.get(dedupe_key)
+            if not ai_enrichment:
+                hydrated.append(paper)
+                continue
+            updated = dict(paper)
+            latest = dict(
+                updated.get("latest_recommendation")
+                if isinstance(updated.get("latest_recommendation"), dict)
+                else {}
+            )
+            latest["ai_enrichment"] = ai_enrichment
+            updated["latest_recommendation"] = latest
+            hydrated.append(updated)
+        return hydrated
 
     def literature_radar_paper_review_counts(self) -> dict[str, int]:
         self.initialize()
@@ -2517,6 +2578,7 @@ class TeamResearchDatabase:
                 "context": recommendation.get("context"),
                 "summary": recommendation.get("summary"),
                 "attention_summary": recommendation.get("attention_summary"),
+                "ai_enrichment": recommendation.get("ai_enrichment") or {},
                 "why_relevant": recommendation.get("why_relevant"),
                 "recommended_action": recommendation.get("recommended_action"),
             }
@@ -2990,6 +3052,15 @@ def literature_radar_review_record(record: dict[str, Any] | None) -> dict[str, A
         "reviewed_at": source.get("reviewed_at") or "",
         "reason": source.get("review_reason") or "",
     }
+
+
+def literature_radar_latest_ai_enrichment(record: dict[str, Any] | None) -> dict[str, Any]:
+    source = record or {}
+    latest = source.get("latest_recommendation") if isinstance(source.get("latest_recommendation"), dict) else {}
+    ai_enrichment = latest.get("ai_enrichment") if isinstance(latest.get("ai_enrichment"), dict) else {}
+    if ai_enrichment.get("status") == "succeeded":
+        return ai_enrichment
+    return {}
 
 
 def library_importance(library_entry: dict[str, Any] | None) -> int:

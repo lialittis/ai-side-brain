@@ -10561,11 +10561,27 @@ def radar_history_priority_key(record: dict[str, Any]) -> tuple[float, str, str]
         score = float(effective_scoring.get("score") or 0)
     except (TypeError, ValueError):
         score = 0.0
+    score += radar_history_ai_priority_boost(record, effective_scoring)
     return (
         score,
         str(record.get("latest_seen_at") or ""),
         str(record.get("title") or "").lower(),
     )
+
+
+def radar_history_ai_priority_boost(record: dict[str, Any], scoring: dict[str, Any] | None = None) -> float:
+    latest = record.get("latest_recommendation") if isinstance(record.get("latest_recommendation"), dict) else {}
+    ai_enrichment = latest.get("ai_enrichment") if isinstance(latest.get("ai_enrichment"), dict) else {}
+    effective_scoring = scoring if isinstance(scoring, dict) else radar_effective_recommendation_scoring(record)
+    source = normalize_spaces(
+        effective_scoring.get("source")
+        or effective_scoring.get("selection_source")
+        or latest.get("source")
+        or ""
+    ).lower()
+    if ai_enrichment.get("status") == "succeeded" or source == "ai_enrichment":
+        return 8.0
+    return 0.0
 
 
 def radar_latest_signal_lines(source: Any, *, max_matched_terms: int = 6) -> list[str]:

@@ -338,13 +338,32 @@ def enrich_single_radar_recommendation_with_ai(
                 "error": analysis_input.reason,
             },
         }
-    response = client.chat_completion(
-        messages=analysis_messages(bundle, analysis_input, tag_catalog=tag_catalog),
-        response_schema=TEAM_RESEARCH_ANALYSIS_SCHEMA,
-        schema_name="team_research_analysis",
-        plugins=pdf_plugins(selected_pdf_engine()) if analysis_input.file_data else None,
-        model=model,
-    )
+    fallback_trace: dict[str, Any] = {}
+    try:
+        response = request_team_research_analysis(
+            client,
+            model=model,
+            bundle=bundle,
+            analysis_input=analysis_input,
+            tag_catalog=tag_catalog,
+        )
+    except Exception as error:
+        if not should_retry_radar_ai_as_metadata_only(error, analysis_input):
+            raise
+        fallback_input = metadata_only_analysis_input(analysis_input)
+        response = request_team_research_analysis(
+            client,
+            model=model,
+            bundle=bundle,
+            analysis_input=fallback_input,
+            tag_catalog=tag_catalog,
+        )
+        fallback_trace = {
+            "used": True,
+            "from_source_kind": analysis_input.source_kind,
+            "to_source_kind": fallback_input.source_kind,
+            "reason": str(error),
+        }
     item_record, card, screening, tags = build_records_from_ai_response(
         bundle,
         response,
@@ -367,6 +386,8 @@ def enrich_single_radar_recommendation_with_ai(
         "tags": tags,
         "summary": ai_summary,
     }
+    if fallback_trace:
+        ai_enrichment["fallback"] = fallback_trace
     enriched = {
         **recommendation,
         "paper": paper,
@@ -379,6 +400,39 @@ def enrich_single_radar_recommendation_with_ai(
     if not enriched.get("why_relevant"):
         enriched["why_relevant"] = " ".join(screening.get("reasons") or [])
     return enriched
+
+
+def request_team_research_analysis(
+    client: Any,
+    *,
+    model: str,
+    bundle: dict[str, Any],
+    analysis_input: AnalysisInput,
+    tag_catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return client.chat_completion(
+        messages=analysis_messages(bundle, analysis_input, tag_catalog=tag_catalog),
+        response_schema=TEAM_RESEARCH_ANALYSIS_SCHEMA,
+        schema_name="team_research_analysis",
+        plugins=pdf_plugins(selected_pdf_engine()) if analysis_input.file_data else None,
+        model=model,
+    )
+
+
+def metadata_only_analysis_input(analysis_input: AnalysisInput) -> AnalysisInput:
+    source_kind = analysis_input.source_kind or "metadata"
+    if not source_kind.endswith("_metadata_fallback"):
+        source_kind = f"{source_kind}_metadata_fallback"
+    return AnalysisInput(True, "", filename="", file_data="", source_kind=source_kind)
+
+
+def should_retry_radar_ai_as_metadata_only(error: Exception, analysis_input: AnalysisInput) -> bool:
+    if not analysis_input.file_data:
+        return False
+    message = str(error).lower()
+    if "failed to parse" in message and "pdf" in message:
+        return True
+    return "file-parser" in message and "pdf" in message
 
 
 def radar_recommendation_analysis_bundle(
