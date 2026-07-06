@@ -37,6 +37,7 @@ from team.literature_radar import (
 )
 from team.literature_radar_ai import TEAM_RADAR_SUMMARY_SCHEMA, summarize_radar_recommendations_with_openrouter
 from team.research_db import TeamResearchDatabase
+from team.radar_schedule import format_env_exports, weekday_radar_source_plan
 
 
 class FakeSummaryClient:
@@ -202,13 +203,14 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 ).fetchone()
 
         self.assertEqual(status["status"], "current")
-        self.assertEqual(status["current_version"], 2)
-        self.assertEqual(status["expected_version"], 2)
-        self.assertEqual(status["applied_count"], 2)
+        self.assertEqual(status["current_version"], 3)
+        self.assertEqual(status["expected_version"], 3)
+        self.assertEqual(status["applied_count"], 3)
         self.assertEqual(status["pending_count"], 0)
         self.assertEqual(status["applied_migrations"][0]["id"], "001_initial_team_research_schema")
         self.assertEqual(status["applied_migrations"][1]["id"], "002_team_interest_profile_versions")
-        self.assertEqual(row["count"], 2)
+        self.assertEqual(status["applied_migrations"][2]["id"], "003_literature_radar_today_snapshots")
+        self.assertEqual(row["count"], 3)
         self.assertEqual(profile_version["id"], stable_profile_version["id"])
         self.assertNotEqual(profile_version["id"], updated_profile_version["id"])
         self.assertGreaterEqual(profile_row["count"], 2)
@@ -239,6 +241,24 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
         self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
         self.assertEqual(settings["usenix_security_cycles"], [1])
+
+    def test_weekday_radar_source_plan_rotates_source_families(self) -> None:
+        monday = weekday_radar_source_plan("2026-07-06")
+        wednesday = weekday_radar_source_plan("2026-07-08")
+        friday = weekday_radar_source_plan("2026-07-10")
+        saturday = weekday_radar_source_plan("2026-07-11")
+
+        self.assertEqual(monday["id"], "monday_preprints")
+        self.assertEqual(monday["sources"], ["arxiv"])
+        self.assertEqual(wednesday["sources"], ["dblp", "dblp_venues", "openalex_venues"])
+        self.assertEqual(wednesday["venue_profiles"], ["security", "systems", "programming_languages_memory_safety"])
+        self.assertEqual(friday["sources"], ["usenix_security", "ndss"])
+        self.assertEqual(saturday["sources"], ["semantic_scholar_recommendations", "semantic_scholar_citations", "semantic_scholar_references"])
+
+        env_text = format_env_exports(friday)
+        self.assertIn("export RADAR_USE_SAVED_DEFAULTS=0", env_text)
+        self.assertIn("export RADAR_SOURCE_PRESET=''", env_text)
+        self.assertIn("export RADAR_SOURCES='usenix_security ndss'", env_text)
 
     def test_team_radar_scorer_preserves_curated_negative_keyword_matches(self) -> None:
         paper = create_radar_paper(
@@ -3854,7 +3874,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["operations_readiness"]["non_executable_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 2)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 3)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")

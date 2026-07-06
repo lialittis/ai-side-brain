@@ -43,8 +43,9 @@ systemctl --user enable --now ai-side-brain-team-literature-radar-cycle.timer
 ```
 
 The Team cycle timer runs `team/scripts/run_literature_radar_cycle.sh`, which
-first runs the offline readiness check, then collects with the saved `/radar`
-defaults, refreshes the active queue snapshots, and builds the stored brief.
+first runs the offline readiness check, then collects with weekday-rotated
+source families at 06:00, refreshes active queue and Today-history snapshots,
+and builds the stored brief.
 Before enabling the timer for daily use, run
 `RADAR_BACKUP_DRY_RUN=1 team/scripts/backup_literature_radar.sh` and configure
 `RADAR_BACKUP_TARGETS` so `operations_readiness` does not warn about missing
@@ -120,11 +121,14 @@ phase evidence, run `python scripts/personal_literature_radar.py backfill-pipeli
 before enabling the timer. The repair is local-only: it rebuilds phase evidence
 from `indexes/literature-radar-runs.json` and `indexes/literature-radar-papers.json`.
 
-The Team cycle and Team collection services set `RADAR_USE_SAVED_DEFAULTS=1`,
-so scheduled runs start from the defaults saved in `/radar`. Environment
-variables in `.env` can still override the script behavior; `.env.example`
-includes a commented Literature Radar section with source presets, contact
-email variables, legal PDF-cache toggles, and official accepted-page examples.
+The Team cycle timer runs at 06:00 local time. The cycle script defaults to
+`RADAR_WEEKDAY_ROTATION=1`, so it ignores saved `/radar` source defaults for
+scheduled collection and rotates source families by weekday. Set
+`RADAR_WEEKDAY_ROTATION=0` when a deployment should instead use saved defaults
+or an explicit `RADAR_SOURCE_PRESET`. Environment variables in `.env` can still
+override non-source behavior; `.env.example` includes a commented Literature
+Radar section with source presets, contact email variables, legal PDF-cache
+toggles, and official accepted-page examples.
 Brief timers write Markdown and JSON roll-ups to `team/logs/` and
 `memory/06_Logs/` by default; they do not call external paper sources.
 Collection timers also write read-only settings/readiness snapshots and active
@@ -145,13 +149,14 @@ aliases, or notification jobs. Set `RADAR_WRITE_LATEST=0` or
 `PERSONAL_RADAR_WRITE_LATEST=0` to keep only timestamped history.
 
 For a simpler cron-style setup, `team/scripts/run_literature_radar_cycle.sh`
-runs Team readiness, collection, and then the Team brief in one command. It
-defaults to `RADAR_USE_SAVED_DEFAULTS=1`, so it is usually the right command for
-a single daily team job. Its readiness phase writes to
+runs Team readiness, weekday-rotated collection, Today snapshot persistence, and
+then the Team brief in one command. It is usually the right command for a single
+daily team job. Its readiness phase writes to
 `${RADAR_OUTPUT_DIR:-team/logs}/readiness` by default so pre-collection
 snapshots do not overwrite post-collection status files. Set
 `RADAR_CYCLE_CHECK_READINESS=0` to skip that phase, or set
-`RADAR_STATUS_OUTPUT_DIR` to choose another readiness directory.
+`RADAR_STATUS_OUTPUT_DIR` to choose another readiness directory. Set
+`RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0` to skip writing `/today/history` snapshots.
 `scripts/run_personal_literature_radar_cycle.sh` does the same for Personal
 Literature Radar, using `PERSONAL_RADAR_CYCLE_CHECK_READINESS`,
 `PERSONAL_RADAR_CYCLE_RUN_COLLECTION`, and

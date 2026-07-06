@@ -31,6 +31,7 @@ from team.research_web import (
     render_interests_page,
     render_latest_papers_page,
     render_submit_page,
+    render_today_history_page,
     render_today_page,
     parse_post_form,
     recover_paper,
@@ -48,6 +49,7 @@ from team.research_web import (
     review_radar_queue_usefulness,
     review_radar_paper,
     run_literature_radar_from_web,
+    save_today_snapshot,
     save_team_interest,
     submit_research_item,
     team_radar_source_validation_args,
@@ -955,7 +957,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("estimate:", html)
             self.assertIn("Guardrail readiness:", html)
             self.assertIn("Schema migrations:", html)
-            self.assertIn("version: 2/2", html)
+            self.assertIn("version: 3/3", html)
             self.assertIn("profile version:", html)
             self.assertIn("Validation commands:", html)
             self.assertIn("radar-validate-sources", html)
@@ -1758,7 +1760,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["script_count"], 7)
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 2)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 3)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")
@@ -2589,6 +2591,55 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertNotIn("Local attention should stay behind the AI quick read.", latest_html)
             self.assertNotIn("<strong>Matched:</strong>", latest_html)
             self.assertNotIn("PDF: arxiv_or_open_repository", latest_html)
+
+    def test_today_snapshot_persists_previous_morning_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.01338",
+                title="Saved Morning Today Radar Paper",
+                abstract="Memory safety and agentic security for automatic morning literature radar.",
+                identifiers={"arxiv_id": "2601.01338"},
+                links={"arxiv": "https://arxiv.org/abs/2601.01338"},
+                release_date="2026-07-02",
+                discovered_at=datetime(2026, 7, 2, 5, 55, tzinfo=timezone.utc),
+            )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            recommendation["scoring"]["score"] = 88
+            recommendation["scoring"]["label"] = "highly_relevant"
+            recommendation["summary"] = {
+                "short_summary": "Morning snapshot signal.",
+                "relationship_to_interests": "Matches automatic security Radar review.",
+            }
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["agentic security"],
+                now=datetime(2026, 7, 2, 6, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=[recommendation],
+                now=datetime(2026, 7, 2, 6, 1, tzinfo=timezone.utc),
+            )
+
+            snapshot = save_today_snapshot(
+                database,
+                snapshot_date="2026-07-02",
+                now=datetime(2026, 7, 2, 6, 2, tzinfo=timezone.utc),
+            )
+            history_html = render_today_history_page(database)
+
+            self.assertEqual(snapshot["snapshot_date"], "2026-07-02")
+            self.assertEqual(snapshot["paper_count"], 1)
+            self.assertEqual(snapshot["run_id"], run["id"])
+            self.assertEqual(database.list_literature_radar_today_snapshots()[0]["snapshot_date"], "2026-07-02")
+            self.assertIn("Today History", history_html)
+            self.assertIn("Previous Selections", history_html)
+            self.assertIn("Saved Morning Today Radar Paper", history_html)
+            self.assertIn("Morning snapshot signal.", history_html)
+            self.assertIn("Showing 1 saved morning selection with 1 paper.", history_html)
 
     def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy
 import hashlib
@@ -87,6 +88,7 @@ from shared.literature_radar import (
     radar_review_triage_hint,
     parse_official_accepted_page_specs,
 )
+from shared.research.core import iso_timestamp, stable_id
 from team.literature_radar import (
     DEFAULT_RADAR_SOURCES,
     RADAR_DEFAULT_AI_ENRICH_LIMIT,
@@ -326,6 +328,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
             f'<a class="nav-item {"active" if today_active else ""}" href="/">Today</a>',
             f'<a class="nav-item {"active" if active in {"papers", "library"} else ""}" href="/library">Library</a>',
             f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
+            f'<a class="nav-item {"active" if active == "today_history" else ""}" href="/today/history">History</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
         ]
@@ -4801,6 +4804,7 @@ def render_today_page(
         </div>
         <div class="radar-overview-actions">
           <a class="button primary" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
+          <a class="button" href="/today/history">History</a>
           <a class="button" href="/library">Library</a>
         </div>
       </div>
@@ -4926,6 +4930,140 @@ def radar_today_status_line(
             f"{'' if saved_active_count == 1 else 's'} available for follow-up."
         )
     return "No new Radar items are waiting in today's feed."
+
+
+def build_today_snapshot_payload(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 6,
+    snapshot_date: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_now = now or datetime.now(timezone.utc)
+    if selected_now.tzinfo is None:
+        selected_now = selected_now.replace(tzinfo=timezone.utc)
+    selected_date = snapshot_date or selected_now.date().isoformat()
+    payload = build_today_radar_selection_payload(database, limit=limit)
+    records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
+    counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    selection = payload.get("today_selection") if isinstance(payload.get("today_selection"), dict) else {}
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    summary = radar_today_status_line(counts, len(records), selection)
+    return {
+        "id": stable_id("literature-radar-today-snapshot", selected_date),
+        "snapshot_date": selected_date,
+        "created_at": iso_timestamp(selected_now),
+        "run_id": str(latest_run.get("id") or ""),
+        "summary": summary,
+        "selection": selection,
+        "review": payload.get("review") or "",
+        "review_counts": counts,
+        "latest_run": latest_run,
+        "paper_count": len(records),
+        "papers": records,
+    }
+
+
+def save_today_snapshot(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 6,
+    snapshot_date: str = "",
+    actor: str = "literature-radar-cycle",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_now = now or datetime.now(timezone.utc)
+    snapshot = build_today_snapshot_payload(
+        database,
+        limit=limit,
+        snapshot_date=snapshot_date,
+        now=selected_now,
+    )
+    return database.save_literature_radar_today_snapshot(snapshot, actor=actor, now=selected_now)
+
+
+def render_today_history_page(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 14,
+    notice: str = "",
+) -> str:
+    snapshots = database.list_literature_radar_today_snapshots(limit=limit)
+    body = f"""
+    {render_topline("Today History", "Previous morning selections saved from the automatic Radar cycle.", "/", "Today")}
+    {render_notice(notice)}
+    <section class="panel today-hero" aria-label="Today history">
+      <div class="today-head">
+        <div>
+          <h2 class="today-title">Previous Selections</h2>
+          <div class="today-summary">{html_escape(today_history_status_line(snapshots))}</div>
+        </div>
+        <div class="radar-overview-actions">
+          <a class="button primary" href="/">Today</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
+        </div>
+      </div>
+    </section>
+    {render_today_history_snapshots(snapshots)}
+    """
+    return page("Today History", body, active="today_history")
+
+
+def today_history_status_line(snapshots: list[dict[str, Any]]) -> str:
+    if not snapshots:
+        return "No saved morning selections yet. The 6:00 cycle will create the first snapshot after it runs."
+    total_papers = sum(int(snapshot.get("paper_count") or 0) for snapshot in snapshots)
+    return (
+        f"Showing {len(snapshots)} saved morning selection"
+        f"{'' if len(snapshots) == 1 else 's'} with {total_papers} paper"
+        f"{'' if total_papers == 1 else 's'}."
+    )
+
+
+def render_today_history_snapshots(snapshots: list[dict[str, Any]]) -> str:
+    if not snapshots:
+        return '<section class="panel"><div class="empty">No previous Today selections have been saved yet.</div></section>'
+    return "".join(render_today_history_snapshot(snapshot) for snapshot in snapshots)
+
+
+def render_today_history_snapshot(snapshot: dict[str, Any]) -> str:
+    records = snapshot.get("papers") if isinstance(snapshot.get("papers"), list) else []
+    snapshot_date = str(snapshot.get("snapshot_date") or "unknown")
+    created_at = display_radar_datetime(str(snapshot.get("created_at") or ""))
+    run_id = str(snapshot.get("run_id") or "")
+    cards = "".join(render_today_history_paper_card(record) for record in records)
+    return f"""
+    <section class="panel today-history-day">
+      <div class="today-head">
+        <div>
+          <h2>{html_escape(snapshot_date)}</h2>
+          <div class="muted">{html_escape(snapshot.get("summary") or "")}</div>
+          {f'<div class="muted">Saved {html_escape(created_at)}</div>' if created_at else ''}
+        </div>
+        {f'<a class="button" href="/radar?run={quote(run_id, safe="")}">Open run</a>' if run_id else ''}
+      </div>
+      {f'<div class="today-paper-list">{cards}</div>' if records else '<div class="empty">No papers met the Today threshold for this snapshot.</div>'}
+    </section>
+    """
+
+
+def render_today_history_paper_card(record: dict[str, Any]) -> str:
+    summary = today_research_summary(record)
+    reason_rows = render_today_reason_rows(record)
+    primary_link = render_primary_radar_link(record)
+    title = html_escape(record.get("title") or "Untitled radar paper")
+    return f"""
+    <article class="today-paper-card">
+      <div class="today-paper-head">
+        <h3 class="today-paper-title">{title}</h3>
+      </div>
+      {f'<p class="today-paper-summary">{html_escape(summary)}</p>' if summary else ''}
+      {reason_rows}
+      <div class="today-paper-actions">
+        {primary_link}
+      </div>
+    </article>
+    """
 
 
 def render_today_update_note(latest_run: dict[str, Any]) -> str:
@@ -7555,6 +7693,23 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             notice = query.get("notice", [""])[0]
             if parsed.path == "/":
                 self.respond_html(render_today_page(self.database, notice=notice))
+            elif parsed.path == "/today/history":
+                self.respond_html(
+                    render_today_history_page(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=14, maximum=90),
+                        notice=notice,
+                    )
+                )
+            elif parsed.path == "/today/history.json":
+                self.respond_json(
+                    {
+                        "success": True,
+                        "snapshots": self.database.list_literature_radar_today_snapshots(
+                            limit=clean_positive_int(query.get("limit", [""])[0], default=14, maximum=90)
+                        ),
+                    }
+                )
             elif parsed.path == "/library":
                 tag = query.get("tag", [None])[0] or None
                 source = query.get("source", [None])[0] or None

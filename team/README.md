@@ -117,8 +117,10 @@ Web UI surfaces:
 For daily radar usage, run `team/scripts/run_literature_radar_cycle.sh` from
 cron, enable the user-level systemd
 `ai-side-brain-team-literature-radar-cycle.timer`, or open `/radar` and use
-`Run Radar` for an ad hoc check. The cycle script runs collection, queue
-snapshot generation, combined status snapshots, and the stored brief in one command; use
+`Run Radar` for an ad hoc check. The recommended timer runs at 06:00 local time.
+By default the cycle rotates source families by weekday, collects papers, saves
+the member-facing Today selection to `/today/history`, generates queue/status
+snapshots, and builds the stored brief in one command; use
 `team/scripts/run_literature_radar.sh` or
 `team/scripts/build_literature_radar_brief.sh` when you need only one phase.
 Install the recommended user timer with
@@ -142,7 +144,7 @@ leave queue feedback without blocking readiness. Set
 `RADAR_THIN_MVP_RUN_COMMAND`, `RADAR_THIN_MVP_REVIEW_URL`, or
 `RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND` when the server uses a different wrapper
 or URL.
-Use `/radar/brief` for a weekly or daily roll-up over stored runs without
+Use `/today/history` for prior morning Today selections. Use `/radar/brief` for a weekly or daily roll-up over stored runs without
 collecting again. `/radar/brief.json?days=7&limit=20` exposes the same stored
 brief for local dashboards or notification scripts. Use `/radar/papers` to
 inspect deduplicated collected-paper history and add stored papers to the library. The
@@ -159,10 +161,12 @@ when a scheduled run exists, even if no papers were stored. The Radar form can s
 papers, venue profiles, conference year, USENIX cycles, source contact email,
 official accepted-paper pages, PDF cache settings, source presets, and run
 limits as reusable Team defaults.
-Use the `Team Security Daily` preset for the current security, memory-safety,
-and agentic-security workflow; it combines latest paper APIs with DBLP/OpenReview
-venue profiles plus USENIX Security and NDSS accepted-paper pages. Scheduled
-runs can also set `RADAR_SOURCE_PRESET=team_security_daily`.
+Use the weekday rotation for normal scheduled runs: Monday arXiv preprints,
+Tuesday metadata APIs, Wednesday DBLP/OpenAlex venue proceedings, Thursday
+OpenReview venues, Friday USENIX/NDSS accepted pages, Saturday Semantic Scholar
+seed expansion, and Sunday catch-up. Set `RADAR_WEEKDAY_ROTATION=0` if a job
+should instead reuse `/radar` saved defaults or an explicit `RADAR_SOURCE_PRESET`
+such as `team_security_daily`.
 For venue pages that do not yet have a dedicated wrapper, scheduled runs can set
 `RADAR_OFFICIAL_ACCEPTED_PAGES` with one newline-delimited
 `source_id | venue name | year | URL` entry per official accepted-paper page;

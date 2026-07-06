@@ -151,7 +151,7 @@ render_unit() {
 echo "Installing profile: $PROFILE"
 echo "Repository root: $ROOT_DIR"
 if [[ "$PROFILE" == "team-cycle" || "$PROFILE" == "recommended" ]]; then
-  echo "Team cycle uses saved /radar defaults and runs collection plus brief generation."
+  echo "Team cycle rotates source families by weekday, saves Today history, and runs brief generation."
   echo "Do not also enable ai-side-brain-team-literature-radar.timer."
 fi
 if [[ "$PROFILE" == "personal-cycle" || "$PROFILE" == "recommended" ]]; then

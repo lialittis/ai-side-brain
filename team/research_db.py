@@ -51,6 +51,11 @@ TEAM_RESEARCH_SCHEMA_MIGRATIONS = [
         "version": 2,
         "description": "Persist deterministic Team interest profile versions for scoring traceability.",
     },
+    {
+        "id": "003_literature_radar_today_snapshots",
+        "version": 3,
+        "description": "Persist member-facing Today selections for historical review.",
+    },
 ]
 TEAM_RESEARCH_SCHEMA_VERSION = TEAM_RESEARCH_SCHEMA_MIGRATIONS[-1]["version"]
 
@@ -285,6 +290,14 @@ class TeamResearchDatabase:
                     UNIQUE(run_id, dedupe_key)
                 );
 
+                CREATE TABLE IF NOT EXISTS literature_radar_today_snapshots (
+                    snapshot_date TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    run_id TEXT,
+                    paper_count INTEGER NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
@@ -311,6 +324,8 @@ class TeamResearchDatabase:
                     ON literature_radar_papers(latest_seen_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_literature_radar_recommendations_run
                     ON literature_radar_recommendations(run_id, rank);
+                CREATE INDEX IF NOT EXISTS idx_literature_radar_today_snapshots_created
+                    ON literature_radar_today_snapshots(created_at DESC);
                 """
             )
             self._record_schema_migrations(connection)
@@ -1592,6 +1607,82 @@ class TeamResearchDatabase:
         with self.connect() as connection:
             row = connection.execute(query, params).fetchone()
         return loads(row["record_json"]) if row else None
+
+    def save_literature_radar_today_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        actor: str = "literature-radar-cycle",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        snapshot_date = str(snapshot.get("snapshot_date") or timestamp[:10])
+        papers = snapshot.get("papers") if isinstance(snapshot.get("papers"), list) else []
+        record = {
+            **snapshot,
+            "id": snapshot.get("id") or stable_id("literature-radar-today-snapshot", snapshot_date),
+            "snapshot_date": snapshot_date,
+            "created_at": snapshot.get("created_at") or timestamp,
+            "run_id": snapshot.get("run_id") or "",
+            "paper_count": len(papers),
+        }
+        with self.connect() as connection:
+            before_row = connection.execute(
+                "SELECT record_json FROM literature_radar_today_snapshots WHERE snapshot_date = ?",
+                (snapshot_date,),
+            ).fetchone()
+            before = loads(before_row["record_json"]) if before_row else None
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO literature_radar_today_snapshots
+                (snapshot_date, created_at, run_id, paper_count, record_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    record["snapshot_date"],
+                    record["created_at"],
+                    record.get("run_id") or "",
+                    int(record.get("paper_count") or 0),
+                    dumps(record),
+                ),
+            )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="literature_radar_today_snapshot_saved",
+                    object_type="literature_radar_today_snapshot",
+                    object_id=snapshot_date,
+                    before=before,
+                    after=record,
+                    now=now,
+                ),
+            )
+        return record
+
+    def get_literature_radar_today_snapshot(self, snapshot_date: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM literature_radar_today_snapshots WHERE snapshot_date = ?",
+                (snapshot_date,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def list_literature_radar_today_snapshots(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM literature_radar_today_snapshots
+                ORDER BY snapshot_date DESC, created_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
 
     def list_literature_radar_recommendations(self, run_id: str) -> list[dict[str, Any]]:
         self.initialize()

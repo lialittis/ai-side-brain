@@ -94,7 +94,9 @@ from team.research_web import (
     build_literature_radar_settings_payload,
     build_literature_radar_status_payload,
     radar_settings_collection_config,
+    save_today_snapshot,
 )
+from team.radar_schedule import weekday_radar_source_plan
 
 
 DEMO_METADATA = {
@@ -297,6 +299,26 @@ def build_parser() -> argparse.ArgumentParser:
     radar_queue.add_argument("--triage-action", default="", help="only show queued papers with this triage action")
     radar_queue.add_argument("--recent-days", type=int, default=0, help="only show papers released or first seen in the last N days")
     radar_queue.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_schedule = subparsers.add_parser("radar-schedule", help="show the weekday Literature Radar source plan")
+    add_db_args(radar_schedule)
+    radar_schedule.add_argument("--date", default="", help="date to resolve, YYYY-MM-DD; defaults to today")
+    radar_schedule.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_today_snapshot = subparsers.add_parser(
+        "radar-today-snapshot",
+        help="save the current member-facing Today selection for history",
+    )
+    add_db_args(radar_today_snapshot)
+    radar_today_snapshot.add_argument("--limit", type=int, default=6)
+    radar_today_snapshot.add_argument("--date", default="", help="snapshot date, YYYY-MM-DD; defaults to today")
+    radar_today_snapshot.add_argument("--actor", default="literature-radar-cycle")
+    radar_today_snapshot.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    radar_today_history = subparsers.add_parser("radar-today-history", help="list saved Today selections")
+    add_db_args(radar_today_history)
+    radar_today_history.add_argument("--limit", type=int, default=14)
+    radar_today_history.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_eval = subparsers.add_parser(
         "radar-evaluate-relevance",
@@ -1923,6 +1945,57 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print_radar_queue(result)
+        return 0
+
+    if args.command == "radar-schedule":
+        result = weekday_radar_source_plan(args.date or None)
+        if args.json:
+            print_json(result)
+        else:
+            print(f"{result['date']} {result['label']}")
+            print(f"Sources: {', '.join(result.get('sources') or [])}")
+            if result.get("venue_profiles"):
+                print(f"Venue profiles: {', '.join(result['venue_profiles'])}")
+            if result.get("openreview_venue_profiles"):
+                print(f"OpenReview venues: {', '.join(result['openreview_venue_profiles'])}")
+            if result.get("usenix_security_cycles"):
+                print(f"USENIX cycles: {', '.join(str(value) for value in result['usenix_security_cycles'])}")
+            print(str(result.get("description") or ""))
+        return 0
+
+    if args.command == "radar-today-snapshot":
+        result = save_today_snapshot(
+            database,
+            limit=args.limit,
+            snapshot_date=args.date,
+            actor=args.actor,
+        )
+        if args.json:
+            print_json(result)
+        else:
+            print(
+                f"Saved Today snapshot {result['snapshot_date']}: "
+                f"{int(result.get('paper_count') or 0)} paper(s)."
+            )
+        return 0
+
+    if args.command == "radar-today-history":
+        result = {
+            "kind": "team_literature_radar_today_history",
+            "snapshots": database.list_literature_radar_today_snapshots(limit=args.limit),
+        }
+        if args.json:
+            print_json(result)
+        else:
+            snapshots = result["snapshots"]
+            if not snapshots:
+                print("No saved Today snapshots.")
+            for snapshot in snapshots:
+                print(
+                    f"{snapshot.get('snapshot_date')}: "
+                    f"{int(snapshot.get('paper_count') or 0)} paper(s) | "
+                    f"{snapshot.get('summary') or ''}"
+                )
         return 0
 
     if args.command == "radar-import-queue":

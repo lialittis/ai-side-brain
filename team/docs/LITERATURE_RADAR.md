@@ -785,12 +785,14 @@ team/scripts/build_literature_radar_brief.sh
 ```
 
 The cycle script is the recommended team-facing scheduled command. It runs a
-readiness check, then a collection pass, then immediately builds a stored-run
-brief. By default it sets `RADAR_USE_SAVED_DEFAULTS=1`, so scheduled runs reuse
-the sources, limits, authors, positive and negative seed papers, venue profiles,
-summary settings, source contact email, and PDF-cache settings
-saved from the `/radar` page. Set `RADAR_USE_SAVED_DEFAULTS=0` for jobs that
-should ignore web-saved defaults and use only explicit environment variables.
+readiness check, then a weekday-rotated collection pass, saves the member-facing
+Today selection, and immediately builds a stored-run brief. By default it sets
+`RADAR_WEEKDAY_ROTATION=1`, which forces `RADAR_USE_SAVED_DEFAULTS=0` for the
+collection phase and rotates source families by day: Monday arXiv, Tuesday
+metadata APIs, Wednesday DBLP/OpenAlex venues, Thursday OpenReview venues,
+Friday USENIX/NDSS accepted pages, Saturday Semantic Scholar seed expansion,
+and Sunday catch-up. Set `RADAR_WEEKDAY_ROTATION=0` for jobs that should reuse
+web-saved source defaults or an explicit `RADAR_SOURCE_PRESET`.
 The readiness phase writes status/settings/queue/source-validation/relevance
 snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness` unless
 `RADAR_STATUS_OUTPUT_DIR` is set.
@@ -800,6 +802,9 @@ the cycle run `radar-import-queue` after collection and before the brief. Use
 `RADAR_IMPORT_QUEUE_TRIAGE_ACTION`, `RADAR_IMPORT_QUEUE_RECENT_DAYS`, and
 `RADAR_IMPORT_QUEUE_ACTOR` to tune that opt-in promotion step; timestamped and
 latest queue-import JSON/text snapshots are written under `RADAR_OUTPUT_DIR`.
+Today snapshot persistence is on by default. Set
+`RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0` to skip writing the current high-signal
+Today cards to `/today/history`.
 
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
@@ -921,14 +926,21 @@ wrapper, host path, or environment prefix. The MVP is proven when it reports
 `ready`.
 It reads `.env` first and supports these optional variables:
 
+- `RADAR_WEEKDAY_ROTATION=1`: use the scheduled weekday source rotation. This is
+  the default for `run_literature_radar_cycle.sh`; it clears fixed source
+  presets and saved source defaults for collection.
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
   `/radar` form, then let explicit environment variables override them.
+  Set `RADAR_WEEKDAY_ROTATION=0` before relying on saved source defaults in the
+  cycle script.
 - `RADAR_CYCLE_CHECK_READINESS=0`: skip the offline readiness phase in
   `run_literature_radar_cycle.sh`. By default the cycle runs
   `check_literature_radar_status.sh` before collection and writes readiness
   snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness`.
 - `RADAR_CYCLE_RUN_COLLECTION=0`: skip collection when using
   `run_literature_radar_cycle.sh`.
+- `RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0`: skip saving the morning Today selection
+  after collection.
 - `RADAR_CYCLE_BUILD_BRIEF=0`: skip brief generation when using
   `run_literature_radar_cycle.sh`.
 - `RADAR_SOURCES`: space-separated sources. Default:
@@ -1145,19 +1157,19 @@ The prune script only targets timestamped `literature-radar-*` JSON/text/Markdow
 snapshots under the configured output directory and preserves `*-latest.*`
 snapshots and unrelated logs.
 
-Example cron entry for 07:30 daily:
+Example cron entry for 06:00 daily:
 
 ```cron
-30 7 * * * cd /home/tianchi/workspace/ai-side-brain && team/scripts/run_literature_radar_cycle.sh >> team/logs/literature-radar-cron.log 2>&1
+0 6 * * * cd /home/tianchi/workspace/ai-side-brain && team/scripts/run_literature_radar_cycle.sh >> team/logs/literature-radar-cron.log 2>&1
 ```
 
 User-level systemd timer templates are also available under
 `infra/systemd/user/`; see `infra/systemd/README.md`. The recommended Team
 daily timer is `ai-side-brain-team-literature-radar-cycle.timer`. It runs
-`team/scripts/run_literature_radar_cycle.sh` with `RADAR_USE_SAVED_DEFAULTS=1`,
-so it can reuse the source/author/seed defaults saved from the `/radar` page,
-run offline readiness, refresh queue snapshots, and build the stored brief in
-one scheduled job. Do not enable it together with
+`team/scripts/run_literature_radar_cycle.sh` at 06:00 local time. The cycle uses
+weekday source rotation by default, runs offline readiness, refreshes queue and
+Today-history snapshots, and builds the stored brief in one scheduled job. Do
+not enable it together with
 `ai-side-brain-team-literature-radar.timer`, because both run Team collection.
 Use the separate Team collection and Team brief timers only when those phases
 need independent schedules. Install the recommended Team
