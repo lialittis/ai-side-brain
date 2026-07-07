@@ -320,6 +320,25 @@ def build_parser() -> argparse.ArgumentParser:
     radar_today_history.add_argument("--limit", type=int, default=14)
     radar_today_history.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    radar_reset = subparsers.add_parser(
+        "radar-reset-current-data",
+        help="dry-run or reset current Literature Radar collection data before the next scheduled collection",
+    )
+    add_db_args(radar_reset)
+    radar_reset.add_argument("--actor", default="team-admin")
+    radar_reset.add_argument("--backup-path", type=Path, help="write a JSON backup before confirmed deletion")
+    radar_reset.add_argument(
+        "--skip-backup",
+        action="store_true",
+        help="allow confirmed deletion without writing a JSON backup",
+    )
+    radar_reset.add_argument(
+        "--confirm-delete-current-radar-data",
+        action="store_true",
+        help="actually delete Radar runs, deduplicated papers, recommendations, and Today snapshots",
+    )
+    radar_reset.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     radar_eval = subparsers.add_parser(
         "radar-evaluate-relevance",
         help="run offline golden relevance checks against current Team Interest weights",
@@ -1394,6 +1413,31 @@ def print_radar_status(result: dict[str, Any]) -> None:
         print(f"Status JSON: {links.get('status_json') or '/radar/status.json?limit=20'}")
 
 
+def print_radar_reset_current_data(result: dict[str, Any]) -> None:
+    action = "Dry run" if result.get("dry_run") else "Deleted"
+    print(f"{action}: Team Literature Radar current data reset")
+    before = result.get("before_counts") if isinstance(result.get("before_counts"), dict) else {}
+    after = result.get("after_counts") if isinstance(result.get("after_counts"), dict) else {}
+    print(
+        "Before: "
+        f"runs={int(before.get('runs') or 0)} "
+        f"papers={int(before.get('papers') or 0)} "
+        f"recommendations={int(before.get('recommendations') or 0)} "
+        f"today_snapshots={int(before.get('today_snapshots') or 0)}"
+    )
+    print(
+        "After: "
+        f"runs={int(after.get('runs') or 0)} "
+        f"papers={int(after.get('papers') or 0)} "
+        f"recommendations={int(after.get('recommendations') or 0)} "
+        f"today_snapshots={int(after.get('today_snapshots') or 0)}"
+    )
+    if result.get("backup_path"):
+        print(f"Backup: {result['backup_path']}")
+    if result.get("dry_run"):
+        print("No data deleted. Pass --confirm-delete-current-radar-data with --backup-path to reset.")
+
+
 def print_radar_source_validation(result: dict[str, Any]) -> None:
     print("Team Literature Radar Source Validation")
     print(f"Mode: {'live' if result.get('live') else 'dry-run'}")
@@ -1996,6 +2040,32 @@ def main(argv: list[str] | None = None) -> int:
                     f"{int(snapshot.get('paper_count') or 0)} paper(s) | "
                     f"{snapshot.get('summary') or ''}"
                 )
+        return 0
+
+    if args.command == "radar-reset-current-data":
+        confirmed = bool(args.confirm_delete_current_radar_data)
+        if confirmed and not args.backup_path and not args.skip_backup:
+            print(
+                "Refusing to delete Radar data without --backup-path or --skip-backup.",
+                file=sys.stderr,
+            )
+            return 2
+        backup_path = None
+        if args.backup_path:
+            backup = database.export_literature_radar_current_data()
+            args.backup_path.parent.mkdir(parents=True, exist_ok=True)
+            args.backup_path.write_text(json.dumps(backup, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+            backup_path = str(args.backup_path)
+        result = database.reset_literature_radar_current_data(
+            actor=args.actor,
+            dry_run=not confirmed,
+        )
+        if backup_path:
+            result["backup_path"] = backup_path
+        if args.json:
+            print_json(result)
+        else:
+            print_radar_reset_current_data(result)
         return 0
 
     if args.command == "radar-import-queue":

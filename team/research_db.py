@@ -34,12 +34,19 @@ from team.research_interests import (
     clean_interest_weight,
     normalize_interest_keyword,
     screening_is_manual_override,
+    unique_normalized_terms,
 )
 
 
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
+LITERATURE_RADAR_CURRENT_DATA_TABLES = (
+    ("literature_radar_recommendations", "recommendations"),
+    ("literature_radar_today_snapshots", "today_snapshots"),
+    ("literature_radar_papers", "papers"),
+    ("literature_radar_runs", "runs"),
+)
 TEAM_RESEARCH_SCHEMA_MIGRATIONS = [
     {
         "id": "001_initial_team_research_schema",
@@ -931,6 +938,8 @@ class TeamResearchDatabase:
         keyword: str,
         weight: int,
         interest_id: str | None = None,
+        positive_keywords: list[Any] | None = None,
+        negative_keywords: list[Any] | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         self.initialize()
@@ -946,6 +955,10 @@ class TeamResearchDatabase:
             "created_at": timestamp,
             "updated_at": timestamp,
         }
+        if positive_keywords is not None:
+            record["positive_keywords"] = unique_normalized_terms(positive_keywords)
+        if negative_keywords is not None:
+            record["negative_keywords"] = unique_normalized_terms(negative_keywords)
         with self.connect() as connection:
             if interest_id:
                 row = connection.execute(
@@ -955,6 +968,10 @@ class TeamResearchDatabase:
                 if row:
                     existing = loads(row["record_json"])
                     record["created_at"] = existing.get("created_at") or timestamp
+                    if positive_keywords is None and "positive_keywords" in existing:
+                        record["positive_keywords"] = existing.get("positive_keywords") or []
+                    if negative_keywords is None and "negative_keywords" in existing:
+                        record["negative_keywords"] = existing.get("negative_keywords") or []
             self._upsert_interest_keyword(connection, record)
             self._current_team_interest_profile_version(connection, timestamp=timestamp)
         return record
@@ -1683,6 +1700,82 @@ class TeamResearchDatabase:
                 (max(1, int(limit)),),
             ).fetchall()
         return [loads(row["record_json"]) for row in rows]
+
+    def literature_radar_current_data_counts(self) -> dict[str, int]:
+        self.initialize()
+        with self.connect() as connection:
+            return self._literature_radar_current_data_counts(connection)
+
+    def export_literature_radar_current_data(self) -> dict[str, Any]:
+        self.initialize()
+        with self.connect() as connection:
+            export: dict[str, Any] = {
+                "kind": "team_literature_radar_current_data_export",
+                "counts": self._literature_radar_current_data_counts(connection),
+            }
+            for table_name, label in LITERATURE_RADAR_CURRENT_DATA_TABLES:
+                rows = connection.execute(
+                    f"SELECT record_json FROM {table_name} ORDER BY rowid ASC"
+                ).fetchall()
+                export[label] = [loads(row["record_json"]) for row in rows]
+        return export
+
+    def reset_literature_radar_current_data(
+        self,
+        *,
+        actor: str = "team-admin",
+        dry_run: bool = True,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            before_counts = self._literature_radar_current_data_counts(connection)
+            table_plan = [
+                {
+                    "table": table_name,
+                    "label": label,
+                    "count": int(before_counts.get(label) or 0),
+                }
+                for table_name, label in LITERATURE_RADAR_CURRENT_DATA_TABLES
+            ]
+            if dry_run:
+                return {
+                    "success": True,
+                    "kind": "team_literature_radar_current_data_reset",
+                    "dry_run": True,
+                    "deleted": False,
+                    "created_at": timestamp,
+                    "before_counts": before_counts,
+                    "after_counts": before_counts,
+                    "tables": table_plan,
+                }
+            for table_name, _label in LITERATURE_RADAR_CURRENT_DATA_TABLES:
+                connection.execute(f"DELETE FROM {table_name}")
+            after_counts = self._literature_radar_current_data_counts(connection)
+            result = {
+                "success": True,
+                "kind": "team_literature_radar_current_data_reset",
+                "dry_run": False,
+                "deleted": True,
+                "created_at": timestamp,
+                "before_counts": before_counts,
+                "after_counts": after_counts,
+                "tables": table_plan,
+            }
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="literature_radar_current_data_reset",
+                    object_type="literature_radar_dataset",
+                    object_id="current",
+                    before={"counts": before_counts},
+                    after={"counts": after_counts},
+                    now=now,
+                ),
+            )
+        return result
 
     def list_literature_radar_recommendations(self, run_id: str) -> list[dict[str, Any]]:
         self.initialize()
@@ -2811,6 +2904,16 @@ class TeamResearchDatabase:
             {
                 "keyword": normalize_interest_keyword(str(record.get("keyword") or "")),
                 "weight": clean_interest_weight(record.get("weight")),
+                **(
+                    {"positive_keywords": unique_normalized_terms(record.get("positive_keywords") or [])}
+                    if "positive_keywords" in record
+                    else {}
+                ),
+                **(
+                    {"negative_keywords": unique_normalized_terms(record.get("negative_keywords") or [])}
+                    if "negative_keywords" in record
+                    else {}
+                ),
             }
             for record in (loads(row["record_json"]) for row in rows)
             if normalize_interest_keyword(str(record.get("keyword") or ""))
@@ -2972,6 +3075,13 @@ class TeamResearchDatabase:
                 }
             )
             self._upsert_library_entry(connection, entry)
+
+    def _literature_radar_current_data_counts(self, connection: sqlite3.Connection) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for table_name, label in LITERATURE_RADAR_CURRENT_DATA_TABLES:
+            row = connection.execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()
+            counts[label] = int(row["count"] if row else 0)
+        return counts
 
     def _insert_audit_event(self, connection: sqlite3.Connection, event: dict[str, Any]) -> None:
         connection.execute(

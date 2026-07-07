@@ -128,6 +128,11 @@ Install the recommended user timer with
 first to preview the copy and `systemctl --user` commands.
 Do not enable the Team cycle timer and the separate Team collection timer at
 the same time, because both collect sources.
+Before clearing old evaluation data, run
+`python team/research_cli.py radar-reset-current-data --json` to inspect the
+Radar-only reset plan. Actual deletion requires
+`--confirm-delete-current-radar-data` plus either `--backup-path PATH` or
+`--skip-backup`.
 Use `team/scripts/check_literature_radar_status.sh` to check saved settings and
 latest-run queue health without collecting sources, downloading PDFs, or calling
 AI. The same combined status payload is available from

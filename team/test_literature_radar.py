@@ -260,6 +260,96 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn("export RADAR_SOURCE_PRESET=''", env_text)
         self.assertIn("export RADAR_SOURCES='usenix_security ndss'", env_text)
 
+    def test_radar_reset_current_data_dry_run_and_confirmed_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            database = TeamResearchDatabase(db_path)
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2607.00001",
+                title="Memory Safety for Agentic Security",
+                abstract="Memory safety and LLM security for cyber reasoning agents.",
+                release_date="2026-07-01",
+            )
+            recommendation = recommend_papers([paper], limit=1)[0]
+            run = database.create_literature_radar_run(
+                sources=["arxiv"],
+                query_terms=["memory safety"],
+                now=datetime(2026, 7, 1, 6, 0, tzinfo=timezone.utc),
+            )
+            database.complete_literature_radar_run(
+                run["id"],
+                collected_papers=[paper],
+                recommendations=[recommendation],
+                now=datetime(2026, 7, 1, 6, 1, tzinfo=timezone.utc),
+            )
+            database.save_literature_radar_today_snapshot(
+                {
+                    "snapshot_date": "2026-07-01",
+                    "run_id": run["id"],
+                    "summary": "One selected paper.",
+                    "papers": [{"title": "Memory Safety for Agentic Security"}],
+                },
+                now=datetime(2026, 7, 1, 6, 2, tzinfo=timezone.utc),
+            )
+
+            dry_run = database.reset_literature_radar_current_data(dry_run=True)
+            counts_after_dry_run = database.literature_radar_current_data_counts()
+            dry_run_backup_path = Path(temp_dir) / "radar-reset-dry-run-backup.json"
+            dry_run_stdout = io.StringIO()
+            with contextlib.redirect_stdout(dry_run_stdout):
+                dry_run_exit_code = research_cli.main(
+                    [
+                        "radar-reset-current-data",
+                        "--db-path",
+                        str(db_path),
+                        "--backup-path",
+                        str(dry_run_backup_path),
+                        "--json",
+                    ]
+                )
+            dry_run_cli = json.loads(dry_run_stdout.getvalue())
+            dry_run_backup = json.loads(dry_run_backup_path.read_text(encoding="utf-8"))
+            counts_after_dry_run_backup = database.literature_radar_current_data_counts()
+            backup_path = Path(temp_dir) / "radar-reset-backup.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = research_cli.main(
+                    [
+                        "radar-reset-current-data",
+                        "--db-path",
+                        str(db_path),
+                        "--backup-path",
+                        str(backup_path),
+                        "--confirm-delete-current-radar-data",
+                        "--json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+            backup = json.loads(backup_path.read_text(encoding="utf-8"))
+            events = database.list_audit_events(object_type_prefix="literature_radar_dataset")
+
+        self.assertTrue(dry_run["dry_run"])
+        self.assertFalse(dry_run["deleted"])
+        self.assertEqual(dry_run["before_counts"]["runs"], 1)
+        self.assertEqual(dry_run["before_counts"]["papers"], 1)
+        self.assertEqual(dry_run["before_counts"]["recommendations"], 1)
+        self.assertEqual(dry_run["before_counts"]["today_snapshots"], 1)
+        self.assertEqual(counts_after_dry_run["runs"], 1)
+        self.assertEqual(dry_run_exit_code, 0)
+        self.assertTrue(dry_run_cli["dry_run"])
+        self.assertFalse(dry_run_cli["deleted"])
+        self.assertEqual(dry_run_cli["backup_path"], str(dry_run_backup_path))
+        self.assertEqual(dry_run_backup["counts"]["papers"], 1)
+        self.assertEqual(counts_after_dry_run_backup["papers"], 1)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(result["before_counts"]["papers"], 1)
+        self.assertEqual(result["after_counts"], {"papers": 0, "recommendations": 0, "runs": 0, "today_snapshots": 0})
+        self.assertEqual(result["backup_path"], str(backup_path))
+        self.assertEqual(backup["counts"]["papers"], 1)
+        self.assertEqual(backup["papers"][0]["title"], "Memory Safety for Agentic Security")
+        self.assertEqual(events[0]["action"], "literature_radar_current_data_reset")
+
     def test_team_radar_scorer_preserves_curated_negative_keyword_matches(self) -> None:
         paper = create_radar_paper(
             source_id="arxiv",

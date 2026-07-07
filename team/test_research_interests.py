@@ -49,6 +49,65 @@ class TeamResearchInterestsTest(unittest.TestCase):
         self.assertIn("generic ai application", dampened["matched_negative_keywords"])
         self.assertIn("recommendation system only", dampened["matched_negative_keywords"])
 
+    def test_custom_interest_terms_override_curated_profile(self) -> None:
+        default_scored = score_team_interests(
+            {
+                "id": "item_kernel_security",
+                "title": "Kernel Security Analysis",
+                "abstract": "This paper studies operating system hardening.",
+            },
+            card=None,
+            tags=[],
+            interests=[
+                {
+                    "keyword": "system security",
+                    "weight": 80,
+                    "positive_keywords": ["custom trusted runtime"],
+                    "negative_keywords": ["toy benchmark only"],
+                }
+            ],
+        )
+        custom_scored = score_team_interests(
+            {
+                "id": "item_custom_runtime",
+                "title": "Custom Trusted Runtime",
+                "abstract": "This paper studies a secure runtime for production systems.",
+            },
+            card=None,
+            tags=[],
+            interests=[
+                {
+                    "keyword": "system security",
+                    "weight": 80,
+                    "positive_keywords": ["custom trusted runtime"],
+                    "negative_keywords": ["toy benchmark only"],
+                }
+            ],
+        )
+        dampened = score_team_interests(
+            {
+                "id": "item_custom_runtime_toy",
+                "title": "Custom Trusted Runtime",
+                "abstract": "This is a toy benchmark only.",
+            },
+            card=None,
+            tags=[],
+            interests=[
+                {
+                    "keyword": "system security",
+                    "weight": 80,
+                    "positive_keywords": ["custom trusted runtime"],
+                    "negative_keywords": ["toy benchmark only"],
+                }
+            ],
+        )
+
+        self.assertEqual(default_scored["matched_terms"], [])
+        self.assertEqual(custom_scored["matched_terms"], ["system security"])
+        self.assertGreater(custom_scored["score"], 0)
+        self.assertLess(dampened["score"], custom_scored["score"])
+        self.assertIn("toy benchmark only", dampened["matched_negative_keywords"])
+
 
 if __name__ == "__main__":
     unittest.main()

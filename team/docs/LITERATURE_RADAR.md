@@ -806,6 +806,14 @@ Today snapshot persistence is on by default. Set
 `RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0` to skip writing the current high-signal
 Today cards to `/today/history`.
 
+After validating the scheduled workflow and before waiting for the first clean
+automatic collection, use `python team/research_cli.py radar-reset-current-data
+--json` to inspect the Radar-only reset plan. Confirmed deletion clears stored
+Radar runs, deduplicated Radar papers, Radar recommendations, and Today
+snapshots; it does not remove member-submitted or library papers. Actual
+deletion requires `--confirm-delete-current-radar-data` plus either
+`--backup-path PATH` or `--skip-backup`.
+
 The run script writes a Markdown report and matching JSON result into
 `team/logs/`. It also refreshes stable `literature-radar-latest.*` files for
 local dashboards or shell aliases unless `RADAR_WRITE_LATEST=0`. Before

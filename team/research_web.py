@@ -666,55 +666,105 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       font-size: 13px;
     }}
     .interest-bars {{
-      display: flex;
-      align-items: end;
-      gap: 14px;
-      min-height: 260px;
-      overflow-x: auto;
-      padding: 8px 2px 2px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      grid-auto-rows: 1fr;
+      gap: 12px;
+      align-items: stretch;
+      padding: 2px;
     }}
     .interest-card {{
       display: grid;
-      grid-template-rows: 40px 150px auto auto auto;
-      justify-items: center;
-      gap: 8px;
-      min-width: 128px;
-      border: 1px solid var(--line);
+      grid-template-rows: auto auto 58px auto auto;
+      justify-items: stretch;
+      gap: 10px;
+      min-width: 0;
+      height: 100%;
+      border: 1px solid #dfe5ec;
       border-radius: 8px;
-      padding: 10px;
+      padding: 12px;
       background: #fff;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }}
+    .interest-card-head {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 54px;
+      gap: 8px;
+      align-items: center;
     }}
     .interest-weight {{
+      display: inline-grid;
+      place-items: center;
+      min-height: 36px;
+      border: 1px solid #b6dfcc;
+      border-radius: 7px;
+      background: #edf8f2;
       font-weight: 800;
       color: var(--accent);
     }}
     .interest-range {{
-      writing-mode: vertical-lr;
-      direction: rtl;
-      width: 32px;
-      height: 150px;
+      width: 100%;
       accent-color: var(--accent);
+      margin: 0;
     }}
     .interest-keyword-input {{
       width: 100%;
-      text-align: center;
+      text-align: left;
+      font-size: 14px;
+      font-weight: 800;
+      min-height: 36px;
+      background: #fbfcfe;
+    }}
+    .interest-term-grid {{
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 8px;
+      min-width: 0;
+    }}
+    .interest-term-grid label {{
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }}
+    .interest-term-grid textarea {{
+      height: 116px;
+      min-height: 116px;
+      resize: none;
       font-size: 12px;
-      font-weight: 700;
+      line-height: 1.35;
+      background: #fbfcfe;
+      overflow: auto;
     }}
     .interest-profile {{
       display: flex;
       flex-wrap: wrap;
-      justify-content: center;
+      align-content: flex-start;
+      justify-content: flex-start;
       gap: 4px;
-      min-height: 24px;
+      height: 58px;
+      min-height: 58px;
+      overflow: hidden;
     }}
-    .interest-actions {{ display: flex; gap: 6px; }}
+    .interest-actions {{
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      align-items: center;
+      padding-top: 2px;
+    }}
     .interest-add {{
       display: grid;
       grid-template-columns: minmax(180px, 1fr) 120px auto;
       gap: 8px;
       align-items: end;
       margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line-soft);
     }}
     .radar-grid {{
       display: grid;
@@ -1289,6 +1339,9 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .radar-grid, .radar-dashboard-grid, .radar-recommendation, .radar-pipeline-row, .radar-setup-panel, .radar-kpi-grid, .radar-candidate-head, .radar-queue-review {{ grid-template-columns: 1fr; }}
       .paper-footer {{ align-items: flex-start; }}
       .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
+      .interest-bars {{ grid-template-columns: 1fr; padding: 0; }}
+      .interest-card {{ padding: 10px; }}
+      .interest-card-head {{ grid-template-columns: minmax(0, 1fr) 50px; }}
       .interest-add {{ grid-template-columns: 1fr; }}
       .actions, .radar-queue-actions, .radar-overview-actions, .radar-queue-review-actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
@@ -2418,8 +2471,8 @@ def team_interest_keyword_profiles(database: TeamResearchDatabase) -> list[dict[
                 "keyword": keyword,
                 "weight": int(interest.get("weight") or 0),
                 "topic_ids": list(profile.get("topic_ids") or []),
-                "positive_keywords": list(profile.get("positive_keywords") or []),
-                "negative_keywords": list(profile.get("negative_keywords") or []),
+                "positive_keywords": effective_interest_terms(interest, keyword, "positive_keywords"),
+                "negative_keywords": effective_interest_terms(interest, keyword, "negative_keywords"),
             }
         )
     return profiles
@@ -6948,11 +7001,16 @@ def render_interest_card(interest: dict[str, Any]) -> str:
     keyword_text = str(interest.get("keyword") or "")
     keyword = html_escape(keyword_text)
     interest_id = html_escape(interest.get("id") or "")
-    profile_html = render_interest_keyword_profile(keyword_text)
+    profile_html = render_interest_keyword_profile(interest)
+    positive_value = html_escape(interest_term_form_value(interest, keyword_text, "positive_keywords"))
+    negative_value = html_escape(interest_term_form_value(interest, keyword_text, "negative_keywords"))
     return f"""
     <form class="interest-card" method="post" action="/interests/save">
       <input type="hidden" name="interest_id" value="{interest_id}">
-      <output class="interest-weight">{weight}</output>
+      <div class="interest-card-head">
+        <input class="interest-keyword-input" name="keyword" value="{keyword}" aria-label="Interest keyword">
+        <output class="interest-weight">{weight}</output>
+      </div>
       <input
         class="interest-range"
         type="range"
@@ -6964,8 +7022,17 @@ def render_interest_card(interest: dict[str, Any]) -> str:
         oninput="this.form.querySelector('output').value = this.value"
         onchange="this.form.submit()"
       >
-      <input class="interest-keyword-input" name="keyword" value="{keyword}" aria-label="Interest keyword">
       {profile_html}
+      <div class="interest-term-grid">
+        <label>
+          Match
+          <textarea name="positive_keywords" rows="7" spellcheck="false">{positive_value}</textarea>
+        </label>
+        <label>
+          Dampen
+          <textarea name="negative_keywords" rows="7" spellcheck="false">{negative_value}</textarea>
+        </label>
+      </div>
       <div class="interest-actions">
         <button class="mini-button" type="submit">Save</button>
         <button class="mini-button danger" type="submit" formaction="/interests/remove">Remove</button>
@@ -6974,23 +7041,37 @@ def render_interest_card(interest: dict[str, Any]) -> str:
     """
 
 
-def render_interest_keyword_profile(keyword: str) -> str:
+def render_interest_keyword_profile(interest: dict[str, Any]) -> str:
+    keyword = str(interest.get("keyword") or "")
     profile = radar_topic_keyword_profile(keyword)
-    if not profile.get("topic_ids"):
+    if not profile.get("topic_ids") and "positive_keywords" not in interest and "negative_keywords" not in interest:
         return '<div class="interest-profile"></div>'
     normalized_keyword = normalize_inline_text(keyword).lower()
     positive = [
         str(term)
-        for term in profile.get("positive_keywords") or []
+        for term in effective_interest_terms(interest, keyword, "positive_keywords")
         if normalize_inline_text(term).lower() != normalized_keyword
     ][:4]
-    negative = [str(term) for term in profile.get("negative_keywords") or []][:2]
+    negative = [str(term) for term in effective_interest_terms(interest, keyword, "negative_keywords")][:2]
     chips = []
     for term in positive:
         chips.append(f'<span class="tag" title="Matched by {html_escape(keyword)}">{html_escape(term)}</span>')
     for term in negative:
         chips.append(f'<span class="tag warn" title="Dampens {html_escape(keyword)}">{html_escape(term)}</span>')
     return f'<div class="interest-profile">{"".join(chips)}</div>'
+
+
+def interest_term_form_value(interest: dict[str, Any], keyword: str, field: str) -> str:
+    return "\n".join(effective_interest_terms(interest, keyword, field))
+
+
+def effective_interest_terms(interest: dict[str, Any], keyword: str, field: str) -> list[str]:
+    if field in interest:
+        terms = interest.get(field) if isinstance(interest.get(field), list) else []
+    else:
+        profile = radar_topic_keyword_profile(keyword)
+        terms = profile.get(field) if isinstance(profile.get(field), list) else []
+    return [str(term) for term in terms if str(term).strip()]
 
 
 def render_interest_add_form() -> str:
@@ -7004,6 +7085,8 @@ def render_interest_add_form() -> str:
         <label for="interest-weight">Weight</label>
         <input id="interest-weight" name="weight" type="number" min="0" max="100" value="70" required>
       </div>
+      <input type="hidden" name="positive_keywords" value="">
+      <input type="hidden" name="negative_keywords" value="">
       <button class="primary" type="submit">Add Keyword</button>
     </form>
     """
@@ -7203,6 +7286,8 @@ def save_team_interest(database: TeamResearchDatabase, fields: dict[str, str]) -
         interest_id=interest_id,
         keyword=required_field(fields, "keyword"),
         weight=fields.get("weight", "0"),
+        positive_keywords=parse_interest_terms(fields.get("positive_keywords", "")),
+        negative_keywords=parse_interest_terms(fields.get("negative_keywords", "")),
     )
     return record["keyword"]
 
@@ -7211,6 +7296,8 @@ def add_team_interest(database: TeamResearchDatabase, fields: dict[str, str]) ->
     record = database.upsert_team_interest_keyword(
         keyword=required_field(fields, "keyword"),
         weight=fields.get("weight", "0"),
+        positive_keywords=parse_interest_terms(fields.get("positive_keywords", "")) or None,
+        negative_keywords=parse_interest_terms(fields.get("negative_keywords", "")) or None,
     )
     return record["keyword"]
 
@@ -7593,6 +7680,17 @@ def split_form_list(value: str) -> list[str]:
     ]
 
 
+def parse_interest_terms(value: str) -> list[str]:
+    terms = []
+    seen = set()
+    for part in re.split(r"[\n,;]+", value or ""):
+        term = normalize_inline_text(part).lower()
+        if term and term not in seen:
+            terms.append(term)
+            seen.add(term)
+    return terms
+
+
 def parse_official_accepted_page_lines(value: str) -> list[dict[str, Any]]:
     return parse_official_accepted_page_specs([value])
 
@@ -7691,7 +7789,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             notice = query.get("notice", [""])[0]
-            if parsed.path == "/":
+            if parsed.path in {"/", "/today"}:
                 self.respond_html(render_today_page(self.database, notice=notice))
             elif parsed.path == "/today/history":
                 self.respond_html(

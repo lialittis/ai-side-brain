@@ -219,19 +219,40 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("prompt injection", html)
             self.assertIn("generic AI application", html)
             self.assertIn('class="interest-range"', html)
+            self.assertIn('name="positive_keywords"', html)
+            self.assertIn('name="negative_keywords"', html)
+            self.assertIn("secure systems", html)
+            self.assertIn("pure cryptography", html)
             self.assertIn('action="/interests/add"', html)
 
             memory = next(interest for interest in interests if interest["keyword"] == "memory safety")
+            old_profile_version = database.current_team_interest_profile_version()
             save_team_interest(
                 database,
                 {
                     "interest_id": memory["id"],
                     "keyword": "memory safety",
                     "weight": "40",
+                    "positive_keywords": "temporal memory safety\ncustom allocator safety",
+                    "negative_keywords": "human memory\ncache replacement only",
                 },
             )
+            updated_memory = next(
+                interest for interest in database.list_team_interest_keywords()
+                if interest["id"] == memory["id"]
+            )
+            updated_profile_version = database.current_team_interest_profile_version()
             added = add_team_interest(database, {"keyword": "exploit mitigation", "weight": "75"})
             self.assertEqual(added, "exploit mitigation")
+            updated_html = render_interests_page(database)
+            self.assertIn("custom allocator safety", updated_html)
+            self.assertIn("cache replacement only", updated_html)
+            self.assertEqual(
+                updated_memory["positive_keywords"],
+                ["temporal memory safety", "custom allocator safety"],
+            )
+            self.assertEqual(updated_memory["negative_keywords"], ["human memory", "cache replacement only"])
+            self.assertNotEqual(old_profile_version["id"], updated_profile_version["id"])
             remove_team_interest(database, {"interest_id": memory["id"]})
 
             updated_keywords = [interest["keyword"] for interest in database.list_team_interest_keywords()]
@@ -410,6 +431,12 @@ class TeamResearchWebTest(unittest.TestCase):
                 ) as response:
                     submit_page_url = response.geturl()
                     submit_page_html = response.read().decode("utf-8")
+                with urlopen(
+                    f"http://127.0.0.1:{port}/today",
+                    timeout=5,
+                ) as response:
+                    today_page_status = response.status
+                    today_page_html = response.read().decode("utf-8")
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -597,6 +624,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertTrue(submit_page_url.endswith("/submit"))
             self.assertIn("Submit Research", submit_page_html)
             self.assertIn("Drop PDF or browse", submit_page_html)
+            self.assertEqual(today_page_status, 200)
+            self.assertIn("Worth Reading Today", today_page_html)
             self.assertIn("--openreview-venue-profile iclr", setup_env_text)
             self.assertIn("--usenix-cycle 1", setup_env_text)
             self.assertIn("--live --validation-max-results 1 --json", setup_env_text)

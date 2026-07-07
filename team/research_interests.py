@@ -188,12 +188,16 @@ def match_interest_profile(
 
 def interest_positive_keywords(keyword: str, interest: dict[str, Any]) -> list[str]:
     configured = interest.get("positive_keywords") if isinstance(interest.get("positive_keywords"), list) else []
+    if "positive_keywords" in interest:
+        return unique_normalized_terms(configured)
     profile = radar_topic_keyword_profile(keyword)
     return unique_normalized_terms([*profile.get("positive_keywords", []), *configured])
 
 
 def interest_negative_keywords(keyword: str, interest: dict[str, Any]) -> list[str]:
     configured = interest.get("negative_keywords") if isinstance(interest.get("negative_keywords"), list) else []
+    if "negative_keywords" in interest:
+        return unique_normalized_terms(configured)
     profile = radar_topic_keyword_profile(keyword)
     return unique_normalized_terms([*profile.get("negative_keywords", []), *configured])
 
