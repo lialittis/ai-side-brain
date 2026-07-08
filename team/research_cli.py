@@ -680,17 +680,21 @@ def build_parser() -> argparse.ArgumentParser:
     news_items = subparsers.add_parser("security-news", help="list Security News Radar items")
     add_db_args(news_items)
     news_items.add_argument("--limit", type=int, default=20)
-    news_items.add_argument("--review", choices=["all", "unreviewed", "watch", "dismissed"], default="unreviewed")
+    news_items.add_argument(
+        "--review",
+        choices=["all", "unreviewed", "library", "expired", "watch", "dismissed"],
+        default="unreviewed",
+    )
     news_items.add_argument("--source-id", default="", help="filter by stored source id")
     news_items.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     news_review = subparsers.add_parser(
         "security-news-review",
-        help="mark one Security News Radar item as watch, dismissed, or unreviewed",
+        help="mark one Security News Radar item as library, expired, watch, dismissed, or unreviewed",
     )
     add_db_args(news_review)
     news_review.add_argument("dedupe_key")
-    news_review.add_argument("--status", choices=["watch", "dismissed", "unreviewed"], required=True)
+    news_review.add_argument("--status", choices=["library", "expired", "watch", "dismissed", "unreviewed"], required=True)
     news_review.add_argument("--actor", default="team-member")
     news_review.add_argument("--reason", default="")
     news_review.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -1656,10 +1660,10 @@ def print_security_news_run(result: dict[str, Any]) -> None:
 def print_security_news_items(payload: dict[str, Any]) -> None:
     counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     print(
-        "Review queues: "
+        "News stack: "
         + ", ".join(
             f"{status}={int(counts.get(status) or 0)}"
-            for status in ("all", "unreviewed", "watch", "dismissed")
+            for status in ("all", "unreviewed", "library", "expired", "watch", "dismissed")
         )
     )
     items = payload.get("items") if isinstance(payload.get("items"), list) else []

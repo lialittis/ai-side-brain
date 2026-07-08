@@ -115,7 +115,7 @@ from team.literature_radar import (
 )
 from team.research_ai import analyze_queued_item, analyze_submitted_item, queue_submitted_item_analysis
 from team.research_adapter import build_team_research_run
-from team.research_db import TeamResearchDatabase, default_db_path
+from team.research_db import SECURITY_NEWS_STACK_RETENTION_DAYS, TeamResearchDatabase, default_db_path
 from team.security_news import (
     TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE,
     TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
@@ -143,6 +143,11 @@ SORT_OPTIONS = [
     ("name", "Name"),
     ("relevance", "Relevance"),
     ("importance", "Importance"),
+]
+LIBRARY_CONTENT_FILTER_OPTIONS = [
+    ("all", "All"),
+    ("papers", "Papers"),
+    ("news", "News"),
 ]
 RADAR_REVIEW_FILTER_OPTIONS = [
     ("all", "All"),
@@ -641,11 +646,40 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 10px;
       padding: 14px 0;
       border-top: 1px solid var(--line);
+      position: relative;
     }}
     .paper:first-child {{ border-top: 0; padding-top: 0; }}
     .paper.removed {{ opacity: 0.56; }}
+    .library-card-head {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }}
     .paper-title {{ font-size: 16px; font-weight: 750; color: var(--text); }}
     .paper.removed .paper-title {{ color: var(--muted); text-decoration: line-through; }}
+    .library-type-badge {{
+      justify-self: end;
+      border: 1px solid #b7c3d2;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 850;
+      text-transform: uppercase;
+      color: #344054;
+      background: #f8fafc;
+      white-space: nowrap;
+    }}
+    .library-type-badge.news {{
+      border-color: #f2c7a8;
+      background: #fff7ed;
+      color: #9a3412;
+    }}
+    .library-type-badge.paper {{
+      border-color: #c6d7f2;
+      background: #f3f7ff;
+      color: #24427a;
+    }}
     .meta {{ color: var(--muted); font-size: 12px; margin-top: 3px; }}
     .abstract {{ margin: 8px 0 0; color: #344054; }}
     .tags {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }}
@@ -1309,6 +1343,13 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       background: #f3f7ff;
       color: #24427a;
     }}
+    .news-stack-warning {{
+      border: 1px solid #f5d29b;
+      background: #fffaf1;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #7a4d00;
+    }}
     .tag, .pill {{
       display: inline-block;
       border: 1px solid var(--line);
@@ -1456,7 +1497,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .sidebar {{ position: static; }}
       .content {{ padding: 18px; }}
       .paper, .topline {{ grid-template-columns: 1fr; display: grid; }}
-      .radar-grid, .radar-dashboard-grid, .radar-recommendation, .radar-pipeline-row, .radar-setup-panel, .radar-kpi-grid, .radar-candidate-head, .radar-queue-review {{ grid-template-columns: 1fr; }}
+      .radar-grid, .radar-dashboard-grid, .radar-recommendation, .radar-pipeline-row, .radar-setup-panel, .radar-kpi-grid, .radar-candidate-head, .radar-queue-review, .library-card-head {{ grid-template-columns: 1fr; }}
       .paper-footer {{ align-items: flex-start; }}
       .comment-line, .comment-form {{ grid-template-columns: 1fr; }}
       .interest-bars {{ grid-template-columns: 1fr; padding: 0; }}
@@ -1493,6 +1534,17 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
         target.textContent = "No file selected";
       }}
     }}
+    document.querySelectorAll("[data-auto-submit]").forEach(function (form) {{
+      form.querySelectorAll("select").forEach(function (select) {{
+        select.addEventListener("change", function () {{
+          if (form.requestSubmit) {{
+            form.requestSubmit();
+          }} else {{
+            form.submit();
+          }}
+        }});
+      }});
+    }});
     document.querySelectorAll("[data-file-drop]").forEach(function (dropzone) {{
       var input = document.getElementById(dropzone.getAttribute("data-file-input") || "");
       if (!input) {{
@@ -1792,7 +1844,7 @@ def render_literature_radar_queue_page(
 
 def security_news_path(*, notice: str = "", limit: int = 20, review_filter: str = "unreviewed") -> str:
     params = {"limit": max(1, int(limit or 20))}
-    selected_review = clean_radar_review_filter(review_filter)
+    selected_review = clean_security_news_status_filter(review_filter)
     if selected_review != "unreviewed":
         params["review"] = selected_review
     if notice:
@@ -1808,7 +1860,7 @@ def render_security_news_page(
     notice: str = "",
 ) -> str:
     selected_limit = max(1, int(limit or 20))
-    selected_review = clean_radar_review_filter(review_status)
+    selected_review = clean_security_news_status_filter(review_status)
     payload = build_team_security_news_latest_payload(
         database,
         limit=selected_limit,
@@ -1824,16 +1876,16 @@ def render_security_news_page(
     <section class="panel radar-queue" aria-label="News latest stack">
       <div class="radar-queue-head">
         <div>
-          <h2>Worth Reading</h2>
+          <h2>News Stack</h2>
           <div class="muted">{html_escape(security_news_status_line(counts, len(items), latest_run))}</div>
         </div>
         <div class="radar-queue-actions">
           <a class="button primary" href="/security-news/config">Configure</a>
           <a class="button" href="/security-news.json?limit={selected_limit}&amp;review={html_escape(selected_review)}">JSON</a>
-          <a class="button" href="/radar/brief?days=7&amp;limit=20">Research Digest</a>
+          <a class="button" href="/library?content=news">Saved News</a>
         </div>
       </div>
-      {render_security_news_review_count_links(counts, selected_review=selected_review, limit=selected_limit)}
+      {render_security_news_stack_warning(payload)}
       {render_security_news_run_form(settings)}
       {render_security_news_source_health(payload)}
       {render_security_news_items(items, review_filter=selected_review, limit=selected_limit)}
@@ -1849,12 +1901,37 @@ def security_news_status_line(
 ) -> str:
     total = int(counts.get("all") or 0)
     unreviewed = int(counts.get("unreviewed") or 0)
-    saved = int(counts.get("watch") or 0)
+    saved = int(counts.get("library") or 0) + int(counts.get("watch") or 0)
+    expired = int(counts.get("expired") or 0)
     if not total:
         return "No news collected yet."
     run_text = display_radar_datetime(str(latest_run.get("started_at") or "")) if latest_run else ""
     suffix = f" Latest run {run_text}." if run_text else ""
-    return f"Showing {visible_count} item(s). {unreviewed} new, {saved} saved, {total} total.{suffix}"
+    return f"Showing {visible_count} active item(s). {unreviewed} in stack, {saved} saved, {expired} expired.{suffix}"
+
+
+def render_security_news_stack_warning(payload: dict[str, Any]) -> str:
+    expiration = payload.get("expiration") if isinstance(payload.get("expiration"), dict) else {}
+    retention = payload.get("stack_retention") if isinstance(payload.get("stack_retention"), dict) else {}
+    expired_count = int(expiration.get("expired_count") or 0)
+    expiring_count = int(retention.get("expiring_count") or 0)
+    retention_days = int(retention.get("retention_days") or SECURITY_NEWS_STACK_RETENTION_DAYS)
+    if not expired_count and not expiring_count:
+        return f"""
+        <div class="news-stack-warning">
+          Unhandled news stays in this stack for {retention_days} days. Save useful items to the Library before they age out.
+        </div>
+        """
+    details = []
+    if expired_count:
+        details.append(f"{expired_count} old item{'' if expired_count == 1 else 's'} auto-removed from the stack")
+    if expiring_count:
+        details.append(f"{expiring_count} item{'' if expiring_count == 1 else 's'} will age out within 7 days")
+    return f"""
+    <div class="news-stack-warning">
+      {html_escape('; '.join(details))}. Save useful items to the Library before the {retention_days}-day window closes.
+    </div>
+    """
 
 
 def render_security_news_review_count_links(
@@ -1863,7 +1940,7 @@ def render_security_news_review_count_links(
     selected_review: str,
     limit: int,
 ) -> str:
-    labels = [("all", "All"), ("unreviewed", "New"), ("watch", "Saved"), ("dismissed", "Dismissed")]
+    labels = [("unreviewed", "Stack"), ("library", "Library"), ("expired", "Expired")]
     links = []
     for value, label in labels:
         count = int(counts.get(value) or 0)
@@ -2234,8 +2311,14 @@ def render_security_news_ai(ai: dict[str, Any]) -> str:
 
 def render_security_news_review_pill(record: dict[str, Any]) -> str:
     status = str(record.get("review_status") or "unreviewed")
-    css = "good" if status == "watch" else "warn" if status == "dismissed" else ""
-    label = {"unreviewed": "New", "watch": "Saved", "dismissed": "Dismissed"}.get(status, status)
+    css = "good" if status in {"library", "watch"} else "warn" if status in {"expired", "dismissed"} else ""
+    label = {
+        "unreviewed": "In stack",
+        "library": "In Library",
+        "watch": "Saved",
+        "expired": "Expired",
+        "dismissed": "Dismissed",
+    }.get(status, status)
     return f'<span class="pill {css}">{html_escape(label)}</span>'
 
 
@@ -2250,14 +2333,12 @@ def render_security_news_review_controls(dedupe_key: str, *, review_filter: str,
     if not dedupe_key:
         return ""
     return f"""
-    <form class="radar-review-controls" method="post" action="/security-news/review">
+    <form class="radar-review-controls" method="post" action="/security-news/save">
       <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
-      <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
+      <input type="hidden" name="review_filter" value="{html_escape(clean_security_news_status_filter(review_filter))}">
       <input type="hidden" name="limit" value="{max(1, int(limit or 20))}">
       <input type="hidden" name="actor" value="team-member">
-      <button class="mini-button primary" type="submit" name="status" value="watch">Save</button>
-      <button class="mini-button" type="submit" name="status" value="unreviewed">Keep New</button>
-      <button class="mini-button" type="submit" name="status" value="dismissed">Dismiss</button>
+      <button class="mini-button primary" type="submit">Save to Library</button>
     </form>
     """
 
@@ -2268,6 +2349,7 @@ def member_security_news_label(label: str) -> str:
         "worth_reading": "Worth Reading",
         "watch": "Watch",
         "low_priority": "Low Priority",
+        "ignore": "Ignore",
     }.get(label, label.replace("_", " ").title())
 
 
@@ -4523,6 +4605,12 @@ def clean_radar_review_filter(value: str | None) -> str:
     return selected if selected in allowed else "all"
 
 
+def clean_security_news_status_filter(value: str | None) -> str:
+    selected = str(value or "unreviewed").strip().lower()
+    allowed = {"all", "unreviewed", "library", "expired", "watch", "dismissed"}
+    return selected if selected in allowed else "unreviewed"
+
+
 def checked_attr(enabled: bool) -> str:
     return " checked" if enabled else ""
 
@@ -6130,6 +6218,7 @@ def render_latest_papers_page(
     *,
     tag: str | None = None,
     source: str | None = None,
+    content: str | None = None,
     sort_by: str = "latest",
     show_removed: bool = False,
     notice: str = "",
@@ -6138,22 +6227,36 @@ def render_latest_papers_page(
         tag=tag,
         sort_by=sort_by,
         show_removed=show_removed,
+        limit=500,
     )
+    saved_news = list_saved_security_news_for_library(database)
+    content_filter = clean_library_content_filter(content)
+    base_records = build_library_records(base_papers, saved_news, content_filter=content_filter, tag=tag)
     source_filter = clean_library_source_filter(source)
-    papers = filter_library_papers_by_source(base_papers, source_filter)
+    records = sort_library_records(
+        filter_library_records_by_source(base_records, source_filter),
+        sort_by=sort_by,
+    )
     hidden_source_tags = library_source_tag_keys_for_papers(
         database.list_latest_relevant_papers(sort_by=sort_by, show_removed=show_removed, limit=500)
     )
-    tags = [
-        candidate_tag
-        for candidate_tag in database.list_tags()
-        if source_filter_key(candidate_tag.get("tag")) not in hidden_source_tags
-    ]
+    tags = library_filter_tags(
+        paper_tags=database.list_tags(),
+        news_tags=database.list_security_news_tags(),
+        hidden_source_tags=hidden_source_tags,
+        content_filter=content_filter,
+    )
     body = f"""
-    {render_topline("Team Library", "Saved papers and resources the team decided to keep.", "/submit", "Submit")}
+    {render_topline("Team Library", "Saved papers and news the team decided to keep.", "/submit", "Submit")}
     {render_notice(notice)}
     <div class="panel">
-      <form class="toolbar" method="get" action="/library">
+      <form class="toolbar" method="get" action="/library" data-auto-submit>
+        <div class="field">
+          <label for="content">Content</label>
+          <select id="content" name="content">
+            {render_library_content_options(content_filter)}
+          </select>
+        </div>
         <div class="field">
           <label for="tag">Filter by tag</label>
           <select id="tag" name="tag">
@@ -6165,7 +6268,7 @@ def render_latest_papers_page(
           <label for="source">Filter by source</label>
           <select id="source" name="source">
             <option value="">All sources</option>
-            {render_library_source_options(base_papers, source_filter)}
+            {render_library_source_options(base_records, source_filter)}
           </select>
         </div>
         <div class="field">
@@ -6174,9 +6277,8 @@ def render_latest_papers_page(
             {render_sort_options(sort_by)}
           </select>
         </div>
-        <button type="submit">Apply</button>
       </form>
-      {render_paper_list(papers)}
+      {render_library_item_list(records)}
     </div>
     """
     return page("Team Library", body, active="library")
@@ -6921,10 +7023,58 @@ def render_tag_options(tags: list[dict[str, Any]], selected: str | None) -> str:
     )
 
 
+def library_filter_tags(
+    *,
+    paper_tags: list[dict[str, Any]],
+    news_tags: list[dict[str, Any]],
+    hidden_source_tags: set[str],
+    content_filter: str,
+) -> list[dict[str, Any]]:
+    selected = clean_library_content_filter(content_filter)
+    counts: dict[str, int] = {}
+    if selected in {"all", "papers"}:
+        for record in paper_tags:
+            tag = str(record.get("tag") or "")
+            if tag and source_filter_key(tag) not in hidden_source_tags:
+                counts[tag] = counts.get(tag, 0) + int(record.get("item_count") or 0)
+    if selected in {"all", "news"}:
+        for record in news_tags:
+            tag = str(record.get("tag") or "")
+            if tag:
+                counts[tag] = counts.get(tag, 0) + int(record.get("item_count") or 0)
+    return [
+        {"tag": tag, "item_count": count}
+        for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
 def render_sort_options(selected: str) -> str:
     return "\n".join(
         f'<option value="{html_escape(value)}" {"selected" if value == selected else ""}>{html_escape(label)}</option>'
         for value, label in SORT_OPTIONS
+    )
+
+
+def clean_library_content_filter(value: str | None) -> str:
+    selected = str(value or "all").strip().lower()
+    allowed = {option for option, _label in LIBRARY_CONTENT_FILTER_OPTIONS}
+    return selected if selected in allowed else "all"
+
+
+def list_saved_security_news_for_library(database: TeamResearchDatabase) -> list[dict[str, Any]]:
+    records_by_key: dict[str, dict[str, Any]] = {}
+    for status in ("library", "watch"):
+        for record in database.list_security_news_items(limit=None, review_status=status):
+            key = str(record.get("dedupe_key") or record.get("url") or record.get("title") or "")
+            if key:
+                records_by_key[key] = record
+    return list(records_by_key.values())
+
+
+def render_library_content_options(selected: str) -> str:
+    return "\n".join(
+        f'<option value="{html_escape(value)}" {"selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in LIBRARY_CONTENT_FILTER_OPTIONS
     )
 
 
@@ -7052,11 +7202,65 @@ def filter_library_papers_by_source(papers: list[dict[str, Any]], source: str) -
     return [paper for paper in papers if library_paper_source(paper).get("key") == source]
 
 
-def render_library_source_options(papers: list[dict[str, Any]], selected: str) -> str:
+def build_library_records(
+    papers: list[dict[str, Any]],
+    news: list[dict[str, Any]],
+    *,
+    content_filter: str,
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    selected = clean_library_content_filter(content_filter)
+    records: list[dict[str, Any]] = []
+    if selected in {"all", "papers"}:
+        records.extend({"kind": "paper", "paper": paper} for paper in papers)
+    selected_tag = normalize_tag(tag or "")
+    if selected in {"all", "news"}:
+        records.extend(
+            {"kind": "news", "news": record}
+            for record in news
+            if not selected_tag or selected_tag in [normalize_tag(str(candidate)) for candidate in record.get("tags") or []]
+        )
+    return records
+
+
+def library_news_source(record: dict[str, Any]) -> dict[str, str]:
+    source_ids = [str(value) for value in record.get("source_ids") or [] if str(value).strip()]
+    source_names = [str(value) for value in record.get("source_names") or [] if str(value).strip()]
+    source_types = [str(value) for value in record.get("source_types") or [] if str(value).strip()]
+    source_id = source_ids[0] if source_ids else "news"
+    display_source = source_names[0] if source_names else source_id
+    return {
+        "key": source_filter_key(source_id),
+        "label": source_display_label(display_source),
+        "class_label": source_class_label(source_types[0] if source_types else "security_news"),
+        "source_id": source_filter_key(source_id),
+        "configured_source_id": source_filter_key(source_id),
+    }
+
+
+def library_record_source(record: dict[str, Any]) -> dict[str, str]:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return library_news_source(news)
+    if record.get("kind") == "paper":
+        paper = record.get("paper") if isinstance(record.get("paper"), dict) else {}
+        return library_paper_source(paper)
+    if "latest_item" in record or "dedupe_key" in record:
+        return library_news_source(record)
+    return library_paper_source(record)
+
+
+def filter_library_records_by_source(records: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    if not source:
+        return records
+    return [record for record in records if library_record_source(record).get("key") == source]
+
+
+def render_library_source_options(records: list[dict[str, Any]], selected: str) -> str:
     counts: dict[str, int] = {}
     labels: dict[str, str] = {}
-    for paper in papers:
-        source = library_paper_source(paper)
+    for record in records:
+        source = library_record_source(record)
         key = source["key"]
         counts[key] = counts.get(key, 0) + 1
         labels[key] = source["label"]
@@ -7068,6 +7272,107 @@ def render_library_source_options(papers: list[dict[str, Any]], selected: str) -
             f'<option value="{html_escape(key)}"{selected_attr}>{html_escape(label)}</option>'
         )
     return "\n".join(rows)
+
+
+def sort_library_records(records: list[dict[str, Any]], *, sort_by: str) -> list[dict[str, Any]]:
+    selected = str(sort_by or "latest")
+    if selected == "name":
+        return sorted(records, key=lambda record: library_record_title(record).casefold())
+    if selected == "publish_date":
+        return sorted(
+            records,
+            key=lambda record: (
+                library_record_publish_date(record),
+                library_record_latest_date(record),
+                library_record_title(record).casefold(),
+            ),
+            reverse=True,
+        )
+    if selected == "relevance":
+        return sorted(
+            records,
+            key=lambda record: (
+                library_record_score(record),
+                library_record_latest_date(record),
+                library_record_title(record).casefold(),
+            ),
+            reverse=True,
+        )
+    if selected == "importance":
+        return sorted(
+            records,
+            key=lambda record: (
+                library_record_importance(record),
+                library_record_score(record),
+                library_record_latest_date(record),
+            ),
+            reverse=True,
+        )
+    return sorted(
+        records,
+        key=lambda record: (
+            library_record_latest_date(record),
+            library_record_title(record).casefold(),
+        ),
+        reverse=True,
+    )
+
+
+def library_record_title(record: dict[str, Any]) -> str:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return str(news.get("title") or "")
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    return str(item.get("title") or "")
+
+
+def library_record_latest_date(record: dict[str, Any]) -> str:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return str(news.get("reviewed_at") or news.get("latest_seen_at") or news.get("first_seen_at") or "")
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    library_entry = paper.get("library_entry") if isinstance(paper.get("library_entry"), dict) else {}
+    screening = paper.get("screening") if isinstance(paper.get("screening"), dict) else {}
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    return str(library_entry.get("added_at") or screening.get("screened_at") or item.get("created_at") or "")
+
+
+def library_record_publish_date(record: dict[str, Any]) -> str:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        item = news.get("latest_item") if isinstance(news.get("latest_item"), dict) else {}
+        return str(item.get("published_at") or item.get("updated_at") or news.get("first_seen_at") or "")
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    item = paper.get("item") if isinstance(paper.get("item"), dict) else {}
+    radar_metadata = item.get("radar") if isinstance(item.get("radar"), dict) else {}
+    release_date = paper_release_date(radar_metadata)
+    if release_date:
+        return release_date
+    year = item.get("year")
+    if year is None or str(year).strip() == "":
+        return ""
+    try:
+        return f"{int(year):04d}"
+    except (TypeError, ValueError):
+        return str(year)
+
+
+def library_record_score(record: dict[str, Any]) -> float:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        scoring = news.get("latest_scoring") if isinstance(news.get("latest_scoring"), dict) else {}
+        return float(scoring.get("score") or 0)
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    screening = paper.get("screening") if isinstance(paper.get("screening"), dict) else {}
+    return float(screening.get("score") or 0)
+
+
+def library_record_importance(record: dict[str, Any]) -> int:
+    if record.get("kind") == "news":
+        return int(library_record_score(record))
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    return int(paper.get("importance") or 0)
 
 
 def render_library_source_badges(paper: dict[str, Any]) -> str:
@@ -7085,58 +7390,144 @@ def render_library_source_badges(paper: dict[str, Any]) -> str:
     """
 
 
+def render_library_item_list(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return '<div class="empty">No saved papers or news match this view.</div>'
+    return "\n".join(render_library_record(record) for record in records)
+
+
+def render_library_record(record: dict[str, Any]) -> str:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return render_library_news_card(news)
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    return render_library_paper_card(paper)
+
+
 def render_paper_list(papers: list[dict[str, Any]]) -> str:
-    if not papers:
-        return '<div class="empty">No relevant papers yet. Submit a link or PDF to start the library.</div>'
-    rows = []
-    for paper in papers:
-        item = paper["item"]
-        screening = paper["screening"]
-        tags = library_visible_tags(paper)
-        link = paper.get("link")
-        abstract = item.get("abstract") or ""
-        link_html = render_paper_link(link)
-        removed = (paper.get("library_entry") or {}).get("status") == "removed"
-        tag_html = render_plain_tags(tags) if removed else render_tag_editor({**paper, "tags": tags})
-        relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
-        importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
-        upload_pdf_html = "" if removed else render_pdf_upload_control(paper)
-        row_class = "paper removed" if removed else "paper"
-        paper_actions = (
-            render_removed_controls(paper)
-            if removed
-            else render_active_actions(paper)
-        )
-        rows.append(
-            f"""
-            <article class="{row_class}">
-              <div class="paper-body">
-                <div class="paper-title">{html_escape(item["title"])}</div>
-                <div class="meta">
-                  {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
-                </div>
-                {render_library_source_badges(paper)}
-                {render_paper_ai_status_row(paper)}
-                <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
-                {render_paper_radar_insight(item, paper.get("radar_history"), card=paper.get("card"), screening=screening)}
-                <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
-                {render_paper_comments(paper)}
-              </div>
-              <div class="paper-footer">
-                <div class="paper-controls">
-                  {importance_html}
-                  {relevance_html}
-                  {link_html}
-                  {upload_pdf_html}
-                </div>
-                <div class="paper-actions">
-                  {paper_actions}
-                </div>
-              </div>
-            </article>
-            """
-        )
-    return "\n".join(rows)
+    return render_library_item_list([{"kind": "paper", "paper": paper} for paper in papers])
+
+
+def render_library_paper_card(paper: dict[str, Any]) -> str:
+    item = paper["item"]
+    screening = paper["screening"]
+    tags = library_visible_tags(paper)
+    link = paper.get("link")
+    abstract = item.get("abstract") or ""
+    link_html = render_paper_link(link)
+    removed = (paper.get("library_entry") or {}).get("status") == "removed"
+    tag_html = render_plain_tags(tags) if removed else render_tag_editor({**paper, "tags": tags})
+    relevance_html = relevance_pill(screening.get("label")) if removed else render_relevance_control(paper)
+    importance_html = render_importance_pill(paper) if removed else render_importance_control(paper)
+    upload_pdf_html = "" if removed else render_pdf_upload_control(paper)
+    row_class = "paper removed" if removed else "paper"
+    paper_actions = (
+        render_removed_controls(paper)
+        if removed
+        else render_active_actions(paper)
+    )
+    return f"""
+    <article class="{row_class}">
+      <div class="paper-body">
+        <div class="library-card-head">
+          <div>
+            <div class="paper-title">{html_escape(item["title"])}</div>
+            <div class="meta">
+              {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
+            </div>
+          </div>
+          <span class="library-type-badge paper">Paper</span>
+        </div>
+        {render_library_source_badges(paper)}
+        {render_paper_ai_status_row(paper)}
+        <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
+        {render_paper_radar_insight(item, paper.get("radar_history"), card=paper.get("card"), screening=screening)}
+        <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
+        {render_paper_comments(paper)}
+      </div>
+      <div class="paper-footer">
+        <div class="paper-controls">
+          {importance_html}
+          {relevance_html}
+          {link_html}
+          {upload_pdf_html}
+        </div>
+        <div class="paper-actions">
+          {paper_actions}
+        </div>
+      </div>
+    </article>
+    """
+
+
+def render_library_news_card(record: dict[str, Any]) -> str:
+    item = record.get("latest_item") if isinstance(record.get("latest_item"), dict) else {}
+    scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
+    ai = record.get("ai_enrichment") if isinstance(record.get("ai_enrichment"), dict) else {}
+    summary = normalize_inline_text(item.get("summary") or "")
+    summary_suffix = "..." if len(summary) > 420 else ""
+    summary_html = f'<p class="abstract">{html_escape(summary[:420])}{summary_suffix}</p>' if summary else ""
+    url = str(item.get("url") or record.get("url") or "")
+    link_html = f'<a class="button primary" href="{html_escape(url)}" target="_blank" rel="noopener">Open Link</a>' if url else ""
+    tags = [str(tag) for tag in record.get("tags") or [] if str(tag).strip()]
+    tag_html = render_security_news_tag_editor(record.get("dedupe_key") or "", tags)
+    matched = (
+        scoring.get("matched_news_interests")
+        or scoring.get("matched_news_interest_terms")
+        or scoring.get("matched_terms")
+        or []
+    )
+    matched_tags = "".join(f'<span class="pill">{html_escape(str(term))}</span>' for term in matched[:8])
+    matched_html = (
+        f'<div class="tags"><span class="muted">Matched interests:</span>{matched_tags}</div>'
+        if matched_tags
+        else ""
+    )
+    saved_at = display_radar_datetime(str(record.get("reviewed_at") or record.get("latest_seen_at") or ""))
+    published = display_radar_datetime(str(item.get("published_at") or item.get("updated_at") or ""))
+    meta_parts = [part for part in [f"Saved {saved_at}" if saved_at else "", f"Published {published}" if published else ""] if part]
+    return f"""
+    <article class="paper library-news">
+      <div class="paper-body">
+        <div class="library-card-head">
+          <div>
+            <div class="paper-title">{html_escape(record.get("title") or "Untitled security news")}</div>
+            <div class="meta">{html_escape(' · '.join(meta_parts) or 'Saved news item')}</div>
+          </div>
+          <span class="library-type-badge news">News</span>
+        </div>
+        {render_library_news_source_badges(record)}
+        <div class="paper-ai-row">
+          <span class="pill">{html_escape(member_security_news_label(str(scoring.get("label") or "unknown")))}</span>
+          <span class="pill">Priority {int(scoring.get("score") or 0)}/100</span>
+        </div>
+        {render_security_news_ai(ai)}
+        {summary_html}
+        <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
+        {matched_html}
+      </div>
+      <div class="paper-footer">
+        <div class="paper-controls">
+          {link_html}
+        </div>
+      </div>
+    </article>
+    """
+
+
+def render_library_news_source_badges(record: dict[str, Any]) -> str:
+    source = library_news_source(record)
+    class_html = (
+        f'<span class="pill source-class-label">{html_escape(source["class_label"])}</span>'
+        if source.get("class_label")
+        else ""
+    )
+    return f"""
+    <div class="paper-source-row">
+      <span class="tag source-label">Source: {html_escape(source["label"])}</span>
+      {class_html}
+    </div>
+    """
 
 
 def render_paper_ai_status_row(paper: dict[str, Any]) -> str:
@@ -7502,6 +7893,60 @@ def render_add_tag_form(item_id: str) -> str:
       <button class="tag-action" type="submit" aria-label="Add tag" title="Add tag">+</button>
     </form>
     """
+
+
+def render_security_news_tag_editor(dedupe_key: str, tags: list[str]) -> str:
+    if not dedupe_key:
+        return render_plain_news_tags(tags)
+    tag_controls = "".join(render_security_news_tag_chip_editor(dedupe_key, tag) for tag in tags)
+    return f"""
+    <div class="tag-editor">
+      {tag_controls}
+      {render_add_security_news_tag_form(dedupe_key)}
+    </div>
+    """
+
+
+def render_security_news_tag_chip_editor(dedupe_key: str, tag: str) -> str:
+    escaped_key = html_escape(dedupe_key)
+    escaped_tag = html_escape(tag)
+    input_width = min(max(len(tag) + 1, 6), 18)
+    return f"""
+    <form class="tag-chip-form" method="post" action="/security-news/tag/update">
+      <input type="hidden" name="dedupe_key" value="{escaped_key}">
+      <input type="hidden" name="old_tag" value="{escaped_tag}">
+      <input
+        class="tag-chip-input"
+        name="tag"
+        value="{escaped_tag}"
+        aria-label="Edit news tag {escaped_tag}"
+        style="width: {input_width}ch"
+        onchange="this.form.submit()"
+      >
+      <button class="sr-only" type="submit">Save news tag</button>
+      <button
+        class="tag-action"
+        type="submit"
+        formaction="/security-news/tag/remove"
+        aria-label="Remove news tag {escaped_tag}"
+        title="Remove tag"
+      >&times;</button>
+    </form>
+    """
+
+
+def render_add_security_news_tag_form(dedupe_key: str) -> str:
+    return f"""
+    <form class="tag-add-form" method="post" action="/security-news/tag/add">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <input class="tag-add-input" name="tag" placeholder="+ tag" aria-label="Add news tag">
+      <button class="tag-action" type="submit" aria-label="Add news tag" title="Add tag">+</button>
+    </form>
+    """
+
+
+def render_plain_news_tags(tags: list[str]) -> str:
+    return "".join(f'<a class="tag" href="/library?tag={quote(tag)}&amp;content=news">{html_escape(tag)}</a>' for tag in tags)
 
 
 def render_removed_controls(paper: dict[str, Any]) -> str:
@@ -8099,6 +8544,38 @@ def remove_paper_tag(database: TeamResearchDatabase, fields: dict[str, str]) -> 
     return item_id
 
 
+def add_security_news_tag_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    new_tags = parse_tags(required_field(fields, "tag"))
+    if not new_tags:
+        raise ValueError("Tag cannot be empty.")
+    tags = set(database.get_security_news_item_tags(dedupe_key))
+    tags.update(new_tags)
+    database.set_security_news_item_tags(dedupe_key, sorted(tags))
+    return dedupe_key
+
+
+def update_security_news_tag_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    old_tag = normalize_tag(required_field(fields, "old_tag"))
+    new_tag = normalize_tag(required_field(fields, "tag"))
+    if not old_tag or not new_tag:
+        raise ValueError("Tag cannot be empty.")
+    tags = [new_tag if tag == old_tag else tag for tag in database.get_security_news_item_tags(dedupe_key)]
+    database.set_security_news_item_tags(dedupe_key, tags)
+    return dedupe_key
+
+
+def remove_security_news_tag_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    removed_tag = normalize_tag(required_field(fields, "old_tag"))
+    if not removed_tag:
+        raise ValueError("Tag cannot be empty.")
+    tags = [tag for tag in database.get_security_news_item_tags(dedupe_key) if tag != removed_tag]
+    database.set_security_news_item_tags(dedupe_key, tags)
+    return dedupe_key
+
+
 def add_paper_comment(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     item_id = required_field(fields, "item_id")
     database.add_item_comment(
@@ -8532,9 +9009,19 @@ def review_security_news_item_from_web(database: TeamResearchDatabase, fields: d
     return {
         "dedupe_key": dedupe_key,
         "status": str(record.get("review_status") or status),
-        "review_filter": clean_radar_review_filter(fields.get("review_filter", "") or "unreviewed"),
+        "review_filter": clean_security_news_status_filter(fields.get("review_filter", "") or "unreviewed"),
         "limit": clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
     }
+
+
+def save_security_news_item_to_library_from_web(
+    database: TeamResearchDatabase,
+    fields: dict[str, str],
+) -> dict[str, Any]:
+    fields = {**fields, "status": "library"}
+    if not fields.get("reason"):
+        fields["reason"] = "Saved to the team library from the News stack."
+    return review_security_news_item_from_web(database, fields)
 
 
 def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
@@ -8862,6 +9349,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/library":
                 tag = query.get("tag", [None])[0] or None
                 source = query.get("source", [None])[0] or None
+                content = query.get("content", [None])[0] or None
                 sort_by = query.get("sort", ["latest"])[0] or "latest"
                 show_removed = query.get("removed", [""])[0] == "1"
                 self.respond_html(
@@ -8869,6 +9357,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         self.database,
                         tag=tag,
                         source=source,
+                        content=content,
                         sort_by=sort_by,
                         show_removed=show_removed,
                         notice=notice,
@@ -9122,6 +9611,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         review_filter=result.get("review_filter") or "unreviewed",
                     )
                 )
+            elif parsed.path == "/security-news/save":
+                result = save_security_news_item_to_library_from_web(self.database, fields)
+                self.redirect(
+                    security_news_path(
+                        notice="Saved news to the Library.",
+                        limit=int(result.get("limit") or 20),
+                        review_filter="unreviewed",
+                    )
+                )
             elif parsed.path == "/security-news/config/settings":
                 save_security_news_run_defaults(self.database, fields)
                 self.redirect("/security-news/config?notice=Saved+News+Radar+defaults.")
@@ -9172,6 +9670,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/paper/tag/remove":
                 item_id = remove_paper_tag(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Removed tag from {item_id}.')}")
+            elif parsed.path == "/security-news/tag/add":
+                dedupe_key = add_security_news_tag_from_web(self.database, fields)
+                self.redirect(f"/library?content=news&notice={quote(f'Added news tag for {dedupe_key}.')}")
+            elif parsed.path == "/security-news/tag/update":
+                dedupe_key = update_security_news_tag_from_web(self.database, fields)
+                self.redirect(f"/library?content=news&notice={quote(f'Updated news tag for {dedupe_key}.')}")
+            elif parsed.path == "/security-news/tag/remove":
+                dedupe_key = remove_security_news_tag_from_web(self.database, fields)
+                self.redirect(f"/library?content=news&notice={quote(f'Removed news tag from {dedupe_key}.')}")
             elif parsed.path == "/paper/comment/add":
                 item_id = add_paper_comment(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Added comment to {item_id}.')}")

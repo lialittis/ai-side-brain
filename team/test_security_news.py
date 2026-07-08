@@ -13,7 +13,7 @@ from team.security_news import (
     save_team_security_news_latest_snapshot,
     save_team_security_news_settings,
 )
-from team.research_web import render_security_news_page
+from team.research_web import render_latest_papers_page, render_security_news_page
 
 
 class FakeSecurityNewsClient:
@@ -24,12 +24,28 @@ class FakeSecurityNewsClient:
     def chat_completion(self, **kwargs: object) -> dict[str, object]:
         self.calls.append(kwargs)
         return {
-            "status": "succeeded",
-            "quick_summary": "A critical Linux kernel issue has a patch available.",
-            "why_it_matters": "The team should notice kernel-facing exploitability and patch urgency.",
-            "affected_assets": ["Linux kernel"],
-            "recommended_action": "patch",
-            "confidence": "high",
+            "classification": {"is_security_news": True, "news_type": "vulnerability"},
+            "interest_screening": {
+                "score": 92,
+                "label": "urgent",
+                "matched_interests": ["kernel security", "patch management"],
+                "negative_matches": [],
+                "reasons": ["Kernel exploitation risk and patch urgency match team interests."],
+            },
+            "tags": ["kernel-security", "patch-management", "linux"],
+            "card": {
+                "quick_summary": "A critical Linux kernel issue has a patch available.",
+                "why_it_matters": "The team should notice kernel-facing exploitability and patch urgency.",
+                "affected_assets": ["Linux kernel"],
+                "entities": {
+                    "cves": [],
+                    "vendors": ["Linux"],
+                    "products": ["Linux kernel"],
+                    "threat_actors": [],
+                },
+                "recommended_action": "patch",
+                "confidence": "high",
+            },
         }
 
 
@@ -56,7 +72,7 @@ class TeamSecurityNewsTest(unittest.TestCase):
             self.assertTrue(result["success"])
             self.assertEqual(result["item_count"], 1)
             self.assertEqual(result["source_stats"][0]["status"], "succeeded")
-            self.assertEqual(database.schema_migration_status()["expected_version"], 5)
+            self.assertEqual(database.schema_migration_status()["expected_version"], 6)
 
             items = database.list_security_news_items(limit=10)
             self.assertEqual(len(items), 1)
@@ -66,12 +82,12 @@ class TeamSecurityNewsTest(unittest.TestCase):
 
             reviewed = database.mark_security_news_item_review(
                 items[0]["dedupe_key"],
-                status="watch",
+                status="library",
                 actor="alice",
                 reason="Kernel patches matter to the team.",
                 now=now,
             )
-            self.assertEqual(reviewed["review_status"], "watch")
+            self.assertEqual(reviewed["review_status"], "library")
 
             run_team_security_news_radar(
                 database,
@@ -81,20 +97,52 @@ class TeamSecurityNewsTest(unittest.TestCase):
             )
             updated = database.get_security_news_item(items[0]["dedupe_key"])
             self.assertIsNotNone(updated)
-            self.assertEqual(updated["review_status"], "watch")
+            self.assertEqual(updated["review_status"], "library")
             self.assertEqual(updated["seen_count"], 2)
 
-            payload = build_team_security_news_latest_payload(database, review_status="watch")
-            self.assertEqual(payload["review_counts"]["watch"], 1)
+            payload = build_team_security_news_latest_payload(database, review_status="library")
+            self.assertEqual(payload["review_counts"]["library"], 1)
             self.assertEqual(payload["items"][0]["review_reason"], "Kernel patches matter to the team.")
+            stack_payload = build_team_security_news_latest_payload(database, review_status="unreviewed")
+            self.assertEqual(stack_payload["items"], [])
 
             snapshot = save_team_security_news_latest_snapshot(database, limit=5, now=now)
             self.assertEqual(snapshot["kind"], "team_security_news_latest_snapshot")
 
-            html = render_security_news_page(database, review_status="watch")
+            html = render_security_news_page(database)
             self.assertIn("News", html)
-            self.assertIn("Critical Linux kernel RCE patch released", html)
-            self.assertIn("Save", html)
+            self.assertNotIn("Critical Linux kernel RCE patch released", html)
+            self.assertIn("Unhandled news stays in this stack for 30 days", html)
+
+    def test_team_security_news_stack_expires_unhandled_items_after_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = TeamResearchDatabase(Path(tmp) / "team.sqlite3")
+            source = {
+                "id": "example_security",
+                "name": "Example Security",
+                "url": "https://example.test/feed.xml",
+                "source_type": "daily_news",
+                "lookback_days": 3,
+            }
+            run_team_security_news_radar(
+                database,
+                sources=[source],
+                fetcher=lambda _url: fake_security_news_feed_with_pubdate("Mon, 01 Jun 2026 10:00:00 +0000"),
+                now=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            )
+
+            payload = build_team_security_news_latest_payload(
+                database,
+                review_status="unreviewed",
+                now=datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(payload["items"], [])
+            self.assertEqual(payload["expiration"]["expired_count"], 1)
+            self.assertEqual(payload["review_counts"]["expired"], 1)
+            expired = database.list_security_news_items(limit=10, review_status="expired")
+            self.assertEqual(expired[0]["review_status"], "expired")
+            self.assertIn("Auto-removed", expired[0]["review_reason"])
 
     def test_team_security_news_run_uses_saved_source_settings_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +222,17 @@ class TeamSecurityNewsTest(unittest.TestCase):
             item = database.list_security_news_items(limit=1)[0]
             self.assertEqual(item["ai_enrichment"]["status"], "succeeded")
             self.assertEqual(item["ai_enrichment"]["recommended_action"], "patch")
+            self.assertEqual(item["latest_scoring"]["source"], "ai_hybrid")
+            self.assertEqual(item["tags"], ["kernel-security", "linux", "patch-management"])
+            self.assertEqual(database.get_security_news_item_tags(item["dedupe_key"]), item["tags"])
+            self.assertIn("kernel-security", [record["tag"] for record in database.list_security_news_tag_catalog()])
+            self.assertEqual(item["news_card"]["recommended_action"], "patch")
+
+            database.mark_security_news_item_review(item["dedupe_key"], status="library", actor="alice")
+            html = render_latest_papers_page(database, content="news", tag="kernel-security")
+            self.assertIn("Critical Linux kernel RCE patch released", html)
+            self.assertIn("kernel-security", html)
+            self.assertIn("Matched interests", html)
 
     def test_team_security_news_uses_editable_interest_terms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,6 +266,10 @@ class TeamSecurityNewsTest(unittest.TestCase):
 
 
 def fake_security_news_feed() -> bytes:
+    return fake_security_news_feed_with_pubdate("Wed, 08 Jul 2026 10:00:00 +0000")
+
+
+def fake_security_news_feed_with_pubdate(pubdate: str) -> bytes:
     return b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -215,7 +278,7 @@ def fake_security_news_feed() -> bytes:
       <title>Critical Linux kernel RCE patch released</title>
       <link>https://example.test/linux-kernel-rce?utm_source=newsletter</link>
       <description>Administrators should patch a critical Linux kernel remote code execution vulnerability.</description>
-      <pubDate>Wed, 08 Jul 2026 10:00:00 +0000</pubDate>
+      <pubDate>""" + pubdate.encode("utf-8") + b"""</pubDate>
     </item>
   </channel>
 </rss>

@@ -43,7 +43,8 @@ from team.security_news_interests import DEFAULT_TEAM_SECURITY_NEWS_INTERESTS
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
-SECURITY_NEWS_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
+SECURITY_NEWS_REVIEW_STATUSES = {"unreviewed", "library", "expired", "watch", "dismissed"}
+SECURITY_NEWS_STACK_RETENTION_DAYS = 30
 LITERATURE_RADAR_CURRENT_DATA_TABLES = (
     ("literature_radar_recommendations", "recommendations"),
     ("literature_radar_today_snapshots", "today_snapshots"),
@@ -75,6 +76,11 @@ TEAM_RESEARCH_SCHEMA_MIGRATIONS = [
         "id": "005_security_news_interest_profile",
         "version": 5,
         "description": "Persist editable Team Security News interest keywords.",
+    },
+    {
+        "id": "006_security_news_ai_cards_tags",
+        "version": 6,
+        "description": "Persist Security News AI cards, AI runs, and first-class news tags.",
     },
 ]
 TEAM_RESEARCH_SCHEMA_VERSION = TEAM_RESEARCH_SCHEMA_MIGRATIONS[-1]["version"]
@@ -362,6 +368,44 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS security_news_ai_runs (
+                    id TEXT PRIMARY KEY,
+                    dedupe_key TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    response_json TEXT,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS security_news_cards (
+                    dedupe_key TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS security_news_item_tags (
+                    dedupe_key TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (dedupe_key, tag)
+                );
+
+                CREATE TABLE IF NOT EXISTS security_news_tag_catalog (
+                    tag TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    usage_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
@@ -400,12 +444,21 @@ class TeamResearchDatabase:
                     ON security_news_items(review_status, latest_seen_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_security_news_latest_snapshots_created
                     ON security_news_latest_snapshots(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_security_news_ai_runs_item
+                    ON security_news_ai_runs(dedupe_key, started_at);
+                CREATE INDEX IF NOT EXISTS idx_security_news_ai_runs_status
+                    ON security_news_ai_runs(status, started_at);
+                CREATE INDEX IF NOT EXISTS idx_security_news_item_tags_tag
+                    ON security_news_item_tags(tag, dedupe_key);
+                CREATE INDEX IF NOT EXISTS idx_security_news_tag_catalog_usage
+                    ON security_news_tag_catalog(usage_count DESC, tag);
                 """
             )
             self._record_schema_migrations(connection)
             self._ensure_default_interest_keywords(connection)
             self._ensure_default_security_news_interest_keywords(connection)
             self._sync_tag_catalog_from_item_tags(connection)
+            self._sync_security_news_tag_catalog_from_item_tags(connection)
 
     def schema_migration_status(self) -> dict[str, Any]:
         self.initialize()
@@ -803,6 +856,64 @@ class TeamResearchDatabase:
         normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
         with self.connect() as connection:
             return self._ensure_tag_catalog(connection, normalized_tags, source=source, timestamp=timestamp)
+
+    def set_security_news_item_tags(
+        self,
+        dedupe_key: str,
+        tags: list[str],
+        *,
+        source: str = "manual",
+        now: datetime | None = None,
+    ) -> list[str]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            self._replace_security_news_item_tags(connection, dedupe_key, normalized_tags, source=source, timestamp=timestamp)
+            record = loads(row["record_json"])
+            record["tags"] = self._get_security_news_item_tags(connection, dedupe_key)
+            record["tags_manually_edited"] = source == "manual"
+            record["updated_at"] = timestamp
+            self._update_security_news_item_record(connection, record)
+        return normalized_tags
+
+    def get_security_news_item_tags(self, dedupe_key: str) -> list[str]:
+        self.initialize()
+        with self.connect() as connection:
+            return self._get_security_news_item_tags(connection, dedupe_key)
+
+    def list_security_news_tags(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tag, COUNT(*) AS item_count
+                FROM security_news_item_tags
+                GROUP BY tag
+                ORDER BY item_count DESC, tag ASC
+                """
+            ).fetchall()
+        return [{"tag": row["tag"], "item_count": int(row["item_count"])} for row in rows]
+
+    def list_security_news_tag_catalog(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM security_news_tag_catalog
+                ORDER BY usage_count DESC, tag ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
 
     def add_item_comment(
         self,
@@ -2496,6 +2607,74 @@ class TeamResearchDatabase:
         records = sorted(records, key=security_news_history_sort_key, reverse=True)
         return records if limit is None else records[: max(0, int(limit))]
 
+    def expire_stale_security_news_items(
+        self,
+        *,
+        retention_days: int = SECURITY_NEWS_STACK_RETENTION_DAYS,
+        actor: str = "security-news-expiration",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        cutoff = selected_now - timedelta(days=max(1, int(retention_days or SECURITY_NEWS_STACK_RETENTION_DAYS)))
+        expired: list[dict[str, Any]] = []
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT dedupe_key, record_json
+                FROM security_news_items
+                WHERE review_status = 'unreviewed'
+                """
+            ).fetchall()
+            for row in rows:
+                record = loads(row["record_json"])
+                first_seen = parse_record_datetime(record.get("first_seen_at"))
+                if first_seen is None or first_seen > cutoff:
+                    continue
+                before = dict(record)
+                apply_security_news_review(
+                    record,
+                    status="expired",
+                    actor=actor,
+                    reason=f"Auto-removed from News after {max(1, int(retention_days or SECURITY_NEWS_STACK_RETENTION_DAYS))} days unhandled.",
+                    timestamp=timestamp,
+                )
+                connection.execute(
+                    """
+                    UPDATE security_news_items
+                    SET review_status = ?, reviewed_by = ?, reviewed_at = ?, review_reason = ?, record_json = ?
+                    WHERE dedupe_key = ?
+                    """,
+                    (
+                        "expired",
+                        record.get("reviewed_by"),
+                        record.get("reviewed_at"),
+                        record.get("review_reason") or "",
+                        dumps(record),
+                        record["dedupe_key"],
+                    ),
+                )
+                self._insert_audit_event(
+                    connection,
+                    create_audit_event(
+                        actor=actor,
+                        action="security_news_item_expired",
+                        object_type="security_news_item",
+                        object_id=record["dedupe_key"],
+                        before=before,
+                        after=record,
+                        now=selected_now,
+                    ),
+                )
+                expired.append(record)
+        return {
+            "expired_count": len(expired),
+            "expired_items": expired,
+            "retention_days": max(1, int(retention_days or SECURITY_NEWS_STACK_RETENTION_DAYS)),
+            "cutoff": cutoff.isoformat(),
+        }
+
     def get_security_news_item(self, dedupe_key: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as connection:
@@ -2507,7 +2686,7 @@ class TeamResearchDatabase:
 
     def security_news_item_review_counts(self) -> dict[str, int]:
         self.initialize()
-        counts = {"all": 0, "unreviewed": 0, "watch": 0, "dismissed": 0}
+        counts = {"all": 0, "unreviewed": 0, "library": 0, "expired": 0, "watch": 0, "dismissed": 0}
         with self.connect() as connection:
             rows = connection.execute("SELECT record_json FROM security_news_items").fetchall()
         for row in rows:
@@ -3246,6 +3425,29 @@ class TeamResearchDatabase:
             record["ai_enrichment"] = item["ai_enrichment"]
         elif isinstance(existing.get("ai_enrichment"), dict):
             record["ai_enrichment"] = existing["ai_enrichment"]
+        if isinstance(item.get("ai_run"), dict):
+            self._upsert_security_news_ai_run(connection, item["ai_run"])
+        ai_card = security_news_card_from_item(item)
+        if ai_card:
+            self._upsert_security_news_card(connection, dedupe_key, ai_card, timestamp=timestamp)
+            record["news_card"] = ai_card
+        elif isinstance(existing.get("news_card"), dict):
+            record["news_card"] = existing["news_card"]
+        generated_tags = security_news_generated_tags(item)
+        existing_manual_tags = self._get_security_news_item_tags(connection, dedupe_key, source="manual")
+        if generated_tags and not existing.get("tags_manually_edited") and not existing_manual_tags:
+            self._replace_security_news_item_tags(
+                connection,
+                dedupe_key,
+                generated_tags["tags"],
+                source=generated_tags["source"],
+                timestamp=timestamp,
+            )
+        record["tags"] = self._get_security_news_item_tags(connection, dedupe_key)
+        self._update_security_news_item_record(connection, record)
+        return record
+
+    def _update_security_news_item_record(self, connection: sqlite3.Connection, record: dict[str, Any]) -> None:
         connection.execute(
             """
             INSERT OR REPLACE INTO security_news_items
@@ -3266,6 +3468,57 @@ class TeamResearchDatabase:
                 record.get("review_reason") or "",
                 dumps(record),
             ),
+        )
+
+    def _upsert_security_news_ai_run(self, connection: sqlite3.Connection, run: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_ai_runs
+            (id, dedupe_key, provider, model, prompt_version, status, error,
+             started_at, completed_at, response_json, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run["id"],
+                run["dedupe_key"],
+                run.get("provider") or "openrouter",
+                run.get("model") or "",
+                run.get("prompt_version") or "",
+                run.get("status") or "pending",
+                run.get("error") or "",
+                run.get("started_at") or "",
+                run.get("completed_at"),
+                dumps(run.get("response")) if run.get("response") is not None else None,
+                dumps(run),
+            ),
+        )
+
+    def _upsert_security_news_card(
+        self,
+        connection: sqlite3.Connection,
+        dedupe_key: str,
+        card: dict[str, Any],
+        *,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT record_json FROM security_news_cards WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
+        existing = loads(row["record_json"]) if row else {}
+        record = {
+            **card,
+            "dedupe_key": dedupe_key,
+            "created_at": existing.get("created_at") or timestamp,
+            "updated_at": timestamp,
+        }
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_cards
+            (dedupe_key, created_at, updated_at, record_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (dedupe_key, record["created_at"], record["updated_at"], dumps(record)),
         )
         return record
 
@@ -3658,6 +3911,141 @@ class TeamResearchDatabase:
         for row in rows:
             self._upsert_tag_catalog(connection, row["tag"], source="existing", timestamp=timestamp)
 
+    def _replace_security_news_item_tags(
+        self,
+        connection: sqlite3.Connection,
+        dedupe_key: str,
+        tags: list[str],
+        *,
+        source: str,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        normalized_tags = sorted({tag for tag in (normalize_catalog_tag(tag) for tag in tags) if tag})
+        old_tags = set(self._get_security_news_item_tags(connection, dedupe_key))
+        connection.execute("DELETE FROM security_news_item_tags WHERE dedupe_key = ?", (dedupe_key,))
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO security_news_item_tags
+            (dedupe_key, tag, source, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [(dedupe_key, tag, source, timestamp) for tag in normalized_tags],
+        )
+        records = self._ensure_security_news_tag_catalog(connection, normalized_tags, source=source, timestamp=timestamp)
+        for old_tag in old_tags.difference(normalized_tags):
+            usage_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM security_news_item_tags WHERE tag = ?",
+                (old_tag,),
+            ).fetchone()
+            if usage_row and int(usage_row["count"] or 0) > 0:
+                self._upsert_security_news_tag_catalog(
+                    connection,
+                    old_tag,
+                    source="existing",
+                    timestamp=timestamp,
+                )
+            else:
+                connection.execute("DELETE FROM security_news_tag_catalog WHERE tag = ?", (old_tag,))
+        return records
+
+    def _get_security_news_item_tags(
+        self,
+        connection: sqlite3.Connection,
+        dedupe_key: str,
+        *,
+        source: str | None = None,
+    ) -> list[str]:
+        if source:
+            rows = connection.execute(
+                "SELECT tag FROM security_news_item_tags WHERE dedupe_key = ? AND source = ? ORDER BY tag",
+                (dedupe_key, source),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT tag FROM security_news_item_tags WHERE dedupe_key = ? ORDER BY tag",
+                (dedupe_key,),
+            ).fetchall()
+        return [row["tag"] for row in rows]
+
+    def _ensure_security_news_tag_catalog(
+        self,
+        connection: sqlite3.Connection,
+        tags: list[str],
+        *,
+        source: str,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        records = []
+        for tag in tags:
+            normalized = normalize_catalog_tag(tag)
+            if not normalized:
+                continue
+            records.append(self._upsert_security_news_tag_catalog(connection, normalized, source=source, timestamp=timestamp))
+        return records
+
+    def _upsert_security_news_tag_catalog(
+        self,
+        connection: sqlite3.Connection,
+        tag: str,
+        *,
+        source: str,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        existing_row = connection.execute(
+            "SELECT record_json FROM security_news_tag_catalog WHERE tag = ?",
+            (tag,),
+        ).fetchone()
+        usage_row = connection.execute(
+            "SELECT COUNT(*) AS count FROM security_news_item_tags WHERE tag = ?",
+            (tag,),
+        ).fetchone()
+        usage_count = int(usage_row["count"]) if usage_row else 0
+        existing = loads(existing_row["record_json"]) if existing_row else {}
+        sources = set(existing.get("sources") or [])
+        sources.add(source)
+        record = {
+            "tag": tag,
+            "source": existing.get("source") or source,
+            "sources": sorted(sources),
+            "usage_count": usage_count,
+            "created_at": existing.get("created_at") or timestamp,
+            "updated_at": timestamp,
+        }
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_tag_catalog
+            (tag, source, usage_count, created_at, updated_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["tag"],
+                record["source"],
+                record["usage_count"],
+                record["created_at"],
+                record["updated_at"],
+                dumps(record),
+            ),
+        )
+        return record
+
+    def _sync_security_news_tag_catalog_from_item_tags(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT tag, MIN(source) AS source
+            FROM security_news_item_tags
+            GROUP BY tag
+            ORDER BY tag
+            """
+        ).fetchall()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        for row in rows:
+            self._upsert_security_news_tag_catalog(
+                connection,
+                row["tag"],
+                source=row["source"] or "existing",
+                timestamp=timestamp,
+            )
+
     def _ensure_default_interest_keywords(self, connection: sqlite3.Connection) -> None:
         setting = connection.execute(
             "SELECT value_json FROM team_settings WHERE key = ?",
@@ -3896,6 +4284,61 @@ def apply_security_news_review(
         "reviewed_at": timestamp,
         "reason": reason,
     }
+
+
+def security_news_card_from_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    if isinstance(item.get("news_card"), dict):
+        return item["news_card"]
+    ai = item.get("ai_enrichment") if isinstance(item.get("ai_enrichment"), dict) else {}
+    card = ai.get("card") if isinstance(ai.get("card"), dict) else {}
+    if card:
+        return card
+    if ai.get("status") == "succeeded":
+        return {
+            "quick_summary": ai.get("quick_summary") or "",
+            "why_it_matters": ai.get("why_it_matters") or "",
+            "affected_assets": ai.get("affected_assets") if isinstance(ai.get("affected_assets"), list) else [],
+            "entities": ai.get("entities") if isinstance(ai.get("entities"), dict) else {},
+            "recommended_action": ai.get("recommended_action") or "watch",
+            "confidence": ai.get("confidence") or "medium",
+            "source_trace": {
+                "processor": ai.get("processor") or "",
+                "prompt_version": ai.get("prompt_version") or "",
+            },
+        }
+    return None
+
+
+def security_news_generated_tags(item: dict[str, Any]) -> dict[str, Any] | None:
+    ai = item.get("ai_enrichment") if isinstance(item.get("ai_enrichment"), dict) else {}
+    ai_tags = normalize_catalog_tags(ai.get("tags") if isinstance(ai, dict) else [])
+    if ai_tags:
+        return {"source": "ai", "tags": ai_tags}
+    scoring = item.get("scoring") if isinstance(item.get("scoring"), dict) else {}
+    local_terms = scoring.get("matched_news_interests") or scoring.get("matched_news_interest_terms") or []
+    local_tags = normalize_catalog_tags(local_terms)
+    if local_tags:
+        return {"source": "local", "tags": local_tags[:6]}
+    return None
+
+
+def normalize_catalog_tags(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return sorted({tag for tag in (normalize_catalog_tag(str(candidate)) for candidate in value) if tag})
+
+
+def parse_record_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def security_news_history_sort_key(record: dict[str, Any]) -> tuple[int, str, str]:

@@ -26,12 +26,14 @@ from team.research_web import (
     add_paper_comment,
     add_paper_tag,
     add_team_interest,
+    add_security_news_tag_from_web,
     build_literature_radar_settings_payload,
     build_literature_radar_status_payload,
     build_team_literature_radar_operations_readiness,
     canonical_pdf_url,
     render_interests_page,
     render_latest_papers_page,
+    render_security_news_page,
     render_security_news_config_page,
     render_submit_page,
     render_today_history_page,
@@ -41,6 +43,7 @@ from team.research_web import (
     recover_paper,
     remove_paper,
     remove_paper_tag,
+    remove_security_news_tag_from_web,
     remove_security_news_interest,
     remove_security_news_source,
     remove_team_interest,
@@ -55,6 +58,7 @@ from team.research_web import (
     review_radar_queue_usefulness,
     review_radar_paper,
     run_literature_radar_from_web,
+    save_security_news_item_to_library_from_web,
     save_security_news_run_defaults,
     save_security_news_source,
     save_today_snapshot,
@@ -63,6 +67,7 @@ from team.research_web import (
     submit_research_item,
     team_radar_source_validation_args,
     update_paper_tag,
+    update_security_news_tag_from_web,
     update_paper_importance,
     update_paper_interactions,
     update_paper_relevance,
@@ -76,7 +81,7 @@ from team.research_web import (
     render_radar_paper_history_item,
     render_radar_links,
 )
-from team.security_news import load_team_security_news_settings
+from team.security_news import load_team_security_news_settings, run_team_security_news_radar
 
 
 class TeamResearchWebTest(unittest.TestCase):
@@ -183,7 +188,9 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Papers", today)
         self.assertIn("Papers Worth Reading", today)
         self.assertIn("Team Library", latest)
-        self.assertIn("No relevant papers yet", latest)
+        self.assertIn("No saved papers or news match this view", latest)
+        self.assertIn('<form class="toolbar" method="get" action="/library" data-auto-submit>', latest)
+        self.assertNotIn('<button type="submit">Apply</button>', latest)
         self.assertNotIn("Submit Research", latest)
         self.assertIn("Submit Research", submit)
         self.assertIn("Topics", latest)
@@ -383,6 +390,114 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(removed_id, "example_advisory")
             settings = load_team_security_news_settings(database)
             self.assertNotIn("example_advisory", [source["id"] for source in settings["sources"]])
+
+    def test_security_news_stack_saves_items_into_mixed_library(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.test/paper",
+                    "title": "Verified Library Paper",
+                    "brief": "A saved research paper for the mixed Library view.",
+                    "year": "2026",
+                    "tags": "system-security",
+                },
+                analyze=False,
+            )
+            source = {
+                "id": "example_security",
+                "name": "Example Security",
+                "url": "https://example.test/feed.xml",
+                "source_type": "daily_news",
+                "lookback_days": 7,
+            }
+            run_team_security_news_radar(
+                database,
+                sources=[source],
+                fetcher=lambda _url: b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Security</title>
+    <item>
+      <title>Critical Linux kernel RCE patch released</title>
+      <link>https://example.test/linux-kernel-rce</link>
+      <description>Administrators should patch a critical Linux kernel vulnerability.</description>
+      <pubDate>Wed, 08 Jul 2026 10:00:00 +0000</pubDate>
+    </item>
+    <item>
+      <title>Legacy saved cloud advisory</title>
+      <link>https://example.test/cloud-advisory</link>
+      <description>Cloud incident response teams should review this security advisory.</description>
+      <pubDate>Wed, 08 Jul 2026 09:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>
+""",
+                now=datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc),
+            )
+            records = database.list_security_news_items(limit=10)
+            record = next(record for record in records if record["title"] == "Critical Linux kernel RCE patch released")
+            legacy_record = next(record for record in records if record["title"] == "Legacy saved cloud advisory")
+            database.mark_security_news_item_review(
+                legacy_record["dedupe_key"],
+                status="watch",
+                actor="legacy-ui",
+                reason="Saved before News Library status existed.",
+                now=datetime(2026, 7, 8, 12, 1, tzinfo=timezone.utc),
+            )
+
+            stack_html = render_security_news_page(database)
+            self.assertIn("News Stack", stack_html)
+            self.assertIn("Critical Linux kernel RCE patch released", stack_html)
+            self.assertNotIn("Legacy saved cloud advisory", stack_html)
+            self.assertIn("Save to Library", stack_html)
+            self.assertNotIn("Research Digest", stack_html)
+            self.assertNotIn("Dismiss", stack_html)
+
+            result = save_security_news_item_to_library_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "actor": "alice"},
+            )
+            self.assertEqual(result["status"], "library")
+            database.set_security_news_item_tags(record["dedupe_key"], ["kernel-security"], source="ai")
+
+            updated_stack_html = render_security_news_page(database)
+            self.assertNotIn("Critical Linux kernel RCE patch released", updated_stack_html)
+            mixed_library_html = render_latest_papers_page(database)
+            self.assertIn("Verified Library Paper", mixed_library_html)
+            self.assertIn("Critical Linux kernel RCE patch released", mixed_library_html)
+            self.assertIn("Legacy saved cloud advisory", mixed_library_html)
+            self.assertIn("library-type-badge paper", mixed_library_html)
+            self.assertIn("library-type-badge news", mixed_library_html)
+
+            library_html = render_latest_papers_page(database, content="news")
+            self.assertIn("Critical Linux kernel RCE patch released", library_html)
+            self.assertIn("Legacy saved cloud advisory", library_html)
+            self.assertNotIn("Verified Library Paper", library_html)
+            self.assertIn("library-type-badge news", library_html)
+            self.assertIn("kernel-security", library_html)
+            self.assertIn('action="/security-news/tag/add"', library_html)
+            self.assertIn("Source: Example Security", library_html)
+            self.assertIn("Priority", library_html)
+            self.assertIn('<option value="news" selected>News</option>', library_html)
+            filtered_html = render_latest_papers_page(database, content="news", tag="kernel-security")
+            self.assertIn("Critical Linux kernel RCE patch released", filtered_html)
+            self.assertNotIn("Legacy saved cloud advisory", filtered_html)
+
+            add_security_news_tag_from_web(database, {"dedupe_key": record["dedupe_key"], "tag": "cloud security"})
+            self.assertIn("cloud-security", database.get_security_news_item_tags(record["dedupe_key"]))
+            update_security_news_tag_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "old_tag": "cloud-security", "tag": "cloud-incident"},
+            )
+            self.assertIn("cloud-incident", database.get_security_news_item_tags(record["dedupe_key"]))
+            remove_security_news_tag_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "old_tag": "cloud-incident"},
+            )
+            self.assertNotIn("cloud-incident", database.get_security_news_item_tags(record["dedupe_key"]))
 
     def test_latest_radar_queue_shows_failed_run_health_without_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1112,7 +1227,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("estimate:", html)
             self.assertIn("Guardrail readiness:", html)
             self.assertIn("Schema migrations:", html)
-            self.assertIn("version: 5/5", html)
+            self.assertIn("version: 6/6", html)
             self.assertIn("profile version:", html)
             self.assertIn("Validation commands:", html)
             self.assertIn("radar-validate-sources", html)
@@ -1918,7 +2033,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["script_count"], 7)
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 5)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 6)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")
@@ -2837,11 +2952,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(snapshot["paper_count"], 1)
             self.assertEqual(snapshot["run_id"], run["id"])
             self.assertEqual(database.list_literature_radar_today_snapshots()[0]["snapshot_date"], "2026-07-02")
-            self.assertIn("Latest History", history_html)
+            self.assertIn("Paper Stack History", history_html)
             self.assertIn("Previous Stack Snapshots", history_html)
             self.assertIn("Saved Morning Latest Radar Paper", history_html)
             self.assertIn("Morning snapshot signal.", history_html)
-            self.assertIn("Showing 1 saved Latest snapshot with 1 paper.", history_html)
+            self.assertIn("Showing 1 saved paper-stack snapshot with 1 paper.", history_html)
 
     def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
