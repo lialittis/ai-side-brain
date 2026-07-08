@@ -115,6 +115,12 @@ from team.literature_radar import (
 from team.research_ai import analyze_submitted_item
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
+from team.security_news import (
+    TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
+    TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
+    build_team_security_news_latest_payload,
+    run_team_security_news_radar,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -331,6 +337,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
             f'<a class="nav-item {"active" if latest_active else ""}" href="/">Latest</a>',
             f'<a class="nav-item {"active" if active in {"papers", "library"} else ""}" href="/library">Library</a>',
             f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
+            f'<a class="nav-item {"active" if active == "security_news" else ""}" href="/security-news">Security News</a>',
             f'<a class="nav-item {"active" if active == "today_history" else ""}" href="/latest/history">History</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
@@ -676,6 +683,32 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       align-items: stretch;
       padding: 2px;
     }}
+    .interest-section {{
+      display: grid;
+      gap: 12px;
+      padding: 14px 0;
+      border-top: 1px solid var(--line-soft);
+    }}
+    .interest-section:first-child {{
+      padding-top: 0;
+      border-top: 0;
+    }}
+    .interest-section-head {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }}
+    .interest-section-head h2 {{
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.25;
+    }}
+    .interest-section-head p {{
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }}
     .interest-card {{
       display: grid;
       grid-template-rows: auto auto 58px auto auto;
@@ -688,6 +721,10 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       padding: 12px;
       background: #fff;
       box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }}
+    .interest-card.news {{
+      border-color: #d8e4f0;
+      background: #fcfdff;
     }}
     .interest-card-head {{
       display: grid;
@@ -704,6 +741,11 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       background: #edf8f2;
       font-weight: 800;
       color: var(--accent);
+    }}
+    .interest-card.news .interest-weight {{
+      border-color: #b8d1ea;
+      background: #eef6ff;
+      color: #1f5f99;
     }}
     .interest-range {{
       width: 100%;
@@ -765,8 +807,8 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       grid-template-columns: minmax(180px, 1fr) 120px auto;
       gap: 8px;
       align-items: end;
-      margin-top: 14px;
-      padding-top: 14px;
+      margin-top: 2px;
+      padding-top: 12px;
       border-top: 1px solid var(--line-soft);
     }}
     .radar-grid {{
@@ -1345,6 +1387,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .interest-bars {{ grid-template-columns: 1fr; padding: 0; }}
       .interest-card {{ padding: 10px; }}
       .interest-card-head {{ grid-template-columns: minmax(0, 1fr) 50px; }}
+      .interest-section-head {{ grid-template-columns: 1fr; }}
       .interest-add {{ grid-template-columns: 1fr; }}
       .actions, .radar-queue-actions, .radar-overview-actions, .radar-queue-review-actions {{ justify-content: flex-start; }}
       .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
@@ -1670,6 +1713,249 @@ def render_literature_radar_queue_page(
     </section>
     """
     return page("Radar Queue", body, active="radar_queue")
+
+
+def security_news_path(*, notice: str = "", limit: int = 20, review_filter: str = "unreviewed") -> str:
+    params = {"limit": max(1, int(limit or 20))}
+    selected_review = clean_radar_review_filter(review_filter)
+    if selected_review != "unreviewed":
+        params["review"] = selected_review
+    if notice:
+        params["notice"] = notice
+    return f"/security-news?{urlencode(params)}"
+
+
+def render_security_news_page(
+    database: TeamResearchDatabase,
+    *,
+    limit: int = 20,
+    review_status: str = "unreviewed",
+    notice: str = "",
+) -> str:
+    selected_limit = max(1, int(limit or 20))
+    selected_review = clean_radar_review_filter(review_status)
+    payload = build_team_security_news_latest_payload(
+        database,
+        limit=selected_limit,
+        review_status=selected_review,
+    )
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    body = f"""
+    {render_topline("Security News", "A lightweight stack of unhandled security news, incidents, vulnerabilities, and research-blog posts.", "/", "Latest Papers")}
+    {render_notice(notice)}
+    <section class="panel radar-queue" aria-label="Security News latest stack">
+      <div class="radar-queue-head">
+        <div>
+          <h2>Worth Reading</h2>
+          <div class="muted">{html_escape(security_news_status_line(counts, len(items), latest_run))}</div>
+        </div>
+        <div class="radar-queue-actions">
+          <a class="button" href="/security-news.json?limit={selected_limit}&amp;review={html_escape(selected_review)}">JSON</a>
+          <a class="button" href="/radar/brief?days=7&amp;limit=20">Research Digest</a>
+        </div>
+      </div>
+      {render_security_news_review_count_links(counts, selected_review=selected_review, limit=selected_limit)}
+      {render_security_news_run_form()}
+      {render_security_news_source_health(payload)}
+      {render_security_news_items(items, review_filter=selected_review, limit=selected_limit)}
+    </section>
+    """
+    return page("Security News", body, active="security_news")
+
+
+def security_news_status_line(
+    counts: dict[str, Any],
+    visible_count: int,
+    latest_run: dict[str, Any],
+) -> str:
+    total = int(counts.get("all") or 0)
+    unreviewed = int(counts.get("unreviewed") or 0)
+    saved = int(counts.get("watch") or 0)
+    if not total:
+        return "No security news collected yet."
+    run_text = display_radar_datetime(str(latest_run.get("started_at") or "")) if latest_run else ""
+    suffix = f" Latest run {run_text}." if run_text else ""
+    return f"Showing {visible_count} item(s). {unreviewed} new, {saved} saved, {total} total.{suffix}"
+
+
+def render_security_news_review_count_links(
+    counts: dict[str, Any],
+    *,
+    selected_review: str,
+    limit: int,
+) -> str:
+    labels = [("all", "All"), ("unreviewed", "New"), ("watch", "Saved"), ("dismissed", "Dismissed")]
+    links = []
+    for value, label in labels:
+        count = int(counts.get(value) or 0)
+        class_name = "button primary" if value == selected_review else "button"
+        href = html_escape(security_news_path(limit=limit, review_filter=value))
+        links.append(f'<a class="{class_name}" href="{href}">{html_escape(label)} {count}</a>')
+    return '<div class="radar-brief-link">' + "".join(links) + "</div>"
+
+
+def render_security_news_run_form() -> str:
+    return f"""
+    <details class="operator-details">
+      <summary>Run collection</summary>
+      <form class="radar-brief-form" method="post" action="/security-news/run">
+        <label>
+          <span class="muted">Max/source</span>
+          <input type="number" name="max_entries_per_source" min="1" max="100" value="20">
+        </label>
+        <label class="radar-option-line">
+          <input type="checkbox" name="ai_enrich" value="1">
+          <span>AI enrichment</span>
+        </label>
+        <label>
+          <span class="muted">AI limit</span>
+          <input type="number" name="ai_enrich_limit" min="1" max="50" value="{TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT}">
+        </label>
+        <label>
+          <span class="muted">AI min score</span>
+          <input type="number" name="ai_enrich_min_score" min="0" max="100" value="{TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE}">
+        </label>
+        <button class="button primary" type="submit">Run Security News</button>
+      </form>
+    </details>
+    """
+
+
+def render_security_news_source_health(payload: dict[str, Any]) -> str:
+    stats = payload.get("source_stats") if isinstance(payload.get("source_stats"), list) else []
+    if not stats:
+        return ""
+    chips = []
+    for stat in stats:
+        if not isinstance(stat, dict):
+            continue
+        status = str(stat.get("status") or "unknown")
+        css = "good" if status == "succeeded" else "warn" if status in {"failed", "partial"} else ""
+        title = str(stat.get("error") or "")
+        chips.append(
+            f'<span class="tag {css}" title="{html_escape(title)}">'
+            f'{html_escape(str(stat.get("source_id") or "source"))}: {html_escape(status)} '
+            f'({int(stat.get("collected_count") or 0)})</span>'
+        )
+    return f'<div class="tags radar-source-health"><span class="muted">Sources:</span> {"".join(chips)}</div>'
+
+
+def render_security_news_items(records: list[dict[str, Any]], *, review_filter: str, limit: int) -> str:
+    if not records:
+        return '<div class="empty">No security news items match this view.</div>'
+    return '<div class="radar-queue-preview">' + "\n".join(
+        render_security_news_item(record, review_filter=review_filter, limit=limit)
+        for record in records
+    ) + "</div>"
+
+
+def render_security_news_item(record: dict[str, Any], *, review_filter: str, limit: int) -> str:
+    scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
+    item = record.get("latest_item") if isinstance(record.get("latest_item"), dict) else {}
+    ai = record.get("ai_enrichment") if isinstance(record.get("ai_enrichment"), dict) else {}
+    source_tags = "".join(f'<span class="tag">{html_escape(str(source_id))}</span>' for source_id in record.get("source_ids") or [])
+    matched = scoring.get("matched_terms") if isinstance(scoring.get("matched_terms"), list) else []
+    matched_tags = "".join(f'<span class="tag">{html_escape(str(term))}</span>' for term in matched[:6])
+    ai_html = render_security_news_ai(ai)
+    summary = normalize_inline_text(item.get("summary") or "")
+    summary_html = f'<p class="abstract">{html_escape(summary)}</p>' if summary else ""
+    url = str(item.get("url") or record.get("url") or "")
+    link_html = f'<a class="button" href="{html_escape(url)}" target="_blank" rel="noopener">Open Link</a>' if url else ""
+    return f"""
+    <article class="radar-queue-item">
+      <div class="radar-candidate-head">
+        <div class="radar-candidate-title-block">
+          <div class="radar-queue-title">{html_escape(record.get("title") or "Untitled security news")}</div>
+          <div class="meta">
+            Latest {html_escape(display_radar_datetime(str(record.get("latest_seen_at") or "")) or "unknown")}
+            · seen {int(record.get("seen_count") or 0)} time{'s' if int(record.get("seen_count") or 0) != 1 else ''}
+          </div>
+        </div>
+        <div class="radar-score-badge" aria-label="Security news priority">
+          <span>Priority</span>
+          <strong>{int(scoring.get("score") or 0)}</strong>
+        </div>
+      </div>
+      <div class="radar-candidate-body">
+        <div class="tags">
+          <span class="pill">{html_escape(member_security_news_label(str(scoring.get("label") or "unknown")))}</span>
+          {render_security_news_review_pill(record)}
+          {source_tags}
+          {matched_tags}
+        </div>
+        {ai_html}
+        {summary_html}
+        {render_security_news_review_reason(record)}
+      </div>
+      <div class="radar-links">
+        {link_html}
+        {render_security_news_review_controls(record.get("dedupe_key") or "", review_filter=review_filter, limit=limit)}
+      </div>
+    </article>
+    """
+
+
+def render_security_news_ai(ai: dict[str, Any]) -> str:
+    if not ai:
+        return ""
+    status = str(ai.get("status") or "")
+    if status != "succeeded":
+        error = str(ai.get("error") or "")
+        error_suffix = f" - {html_escape(error)}" if error else ""
+        return (
+            f'<div class="radar-ai-summary"><p><strong>AI:</strong> '
+            f'{html_escape(status or "pending")}{error_suffix}</p></div>'
+        )
+    rows = []
+    if ai.get("quick_summary"):
+        rows.append(f"<p><strong>Quick read:</strong> {html_escape(str(ai.get('quick_summary') or ''))}</p>")
+    if ai.get("why_it_matters"):
+        rows.append(f"<p><strong>Why it matters:</strong> {html_escape(str(ai.get('why_it_matters') or ''))}</p>")
+    action = str(ai.get("recommended_action") or "").strip()
+    if action:
+        rows.append(f'<p><strong>Action:</strong> {html_escape(action)}</p>')
+    return f'<div class="radar-ai-summary">{"".join(rows)}</div>' if rows else ""
+
+
+def render_security_news_review_pill(record: dict[str, Any]) -> str:
+    status = str(record.get("review_status") or "unreviewed")
+    css = "good" if status == "watch" else "warn" if status == "dismissed" else ""
+    label = {"unreviewed": "New", "watch": "Saved", "dismissed": "Dismissed"}.get(status, status)
+    return f'<span class="pill {css}">{html_escape(label)}</span>'
+
+
+def render_security_news_review_reason(record: dict[str, Any]) -> str:
+    reason = str(record.get("review_reason") or "").strip()
+    if not reason:
+        return ""
+    return f'<div class="radar-ai-summary"><p><strong>Review:</strong> {html_escape(reason)}</p></div>'
+
+
+def render_security_news_review_controls(dedupe_key: str, *, review_filter: str, limit: int) -> str:
+    if not dedupe_key:
+        return ""
+    return f"""
+    <form class="radar-review-controls" method="post" action="/security-news/review">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
+      <input type="hidden" name="limit" value="{max(1, int(limit or 20))}">
+      <input type="hidden" name="actor" value="team-member">
+      <button class="mini-button primary" type="submit" name="status" value="watch">Save</button>
+      <button class="mini-button" type="submit" name="status" value="unreviewed">Keep New</button>
+      <button class="mini-button" type="submit" name="status" value="dismissed">Dismiss</button>
+    </form>
+    """
+
+
+def member_security_news_label(label: str) -> str:
+    return {
+        "urgent": "Urgent",
+        "worth_reading": "Worth Reading",
+        "watch": "Watch",
+        "low_priority": "Low Priority",
+    }.get(label, label.replace("_", " ").title())
 
 
 def render_literature_radar_papers_page(
@@ -7061,14 +7347,37 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
 
 def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> str:
     interests = database.list_team_interest_keywords()
+    news_interests = database.list_security_news_interest_keywords()
     body = f"""
-    {render_topline("Topics", "Weighted research interests that shape Radar ranking.", "/", "Latest")}
+    {render_topline("Topics", "Separate interest profiles for paper Radar and security news Radar.", "/", "Latest")}
     {render_notice(notice)}
     <div class="panel">
-      <div class="interest-bars">
-        {"".join(render_interest_card(interest) for interest in interests)}
-      </div>
-      {render_interest_add_form()}
+      <section class="interest-section" aria-labelledby="paper-radar-topics">
+        <div class="interest-section-head">
+          <div>
+            <h2 id="paper-radar-topics">Paper Radar Topics</h2>
+            <p>Research interests used for literature collection, scoring, and relevance explanations.</p>
+          </div>
+          <span class="tag">paper radar</span>
+        </div>
+        <div class="interest-bars">
+          {"".join(render_interest_card(interest) for interest in interests)}
+        </div>
+        {render_interest_add_form()}
+      </section>
+      <section class="interest-section" aria-labelledby="security-news-interests">
+        <div class="interest-section-head">
+          <div>
+            <h2 id="security-news-interests">Security News Interests</h2>
+            <p>Operational news terms used to collect and rank fresh security reports.</p>
+          </div>
+          <span class="tag">news radar</span>
+        </div>
+        <div class="interest-bars">
+          {"".join(render_security_news_interest_card(interest) for interest in news_interests)}
+        </div>
+        {render_security_news_interest_add_form()}
+      </section>
     </div>
     """
     return page("Topics", body, active="interests")
@@ -7166,6 +7475,81 @@ def render_interest_add_form() -> str:
       <input type="hidden" name="positive_keywords" value="">
       <input type="hidden" name="negative_keywords" value="">
       <button class="primary" type="submit">Add Keyword</button>
+    </form>
+    """
+
+
+def render_security_news_interest_card(interest: dict[str, Any]) -> str:
+    weight = int(interest.get("weight") or 0)
+    keyword_text = str(interest.get("keyword") or "")
+    keyword = html_escape(keyword_text)
+    interest_id = html_escape(interest.get("id") or "")
+    positive_value = html_escape("\n".join(str(term) for term in interest.get("positive_keywords") or []))
+    negative_value = html_escape("\n".join(str(term) for term in interest.get("negative_keywords") or []))
+    profile_html = render_security_news_interest_profile(interest)
+    return f"""
+    <form class="interest-card news" method="post" action="/interests/security-news/save">
+      <input type="hidden" name="interest_id" value="{interest_id}">
+      <div class="interest-card-head">
+        <input class="interest-keyword-input" name="keyword" value="{keyword}" aria-label="Security news interest keyword">
+        <output class="interest-weight">{weight}</output>
+      </div>
+      <input
+        class="interest-range"
+        type="range"
+        name="weight"
+        min="0"
+        max="100"
+        value="{weight}"
+        aria-label="Weight for {keyword}"
+        oninput="this.form.querySelector('output').value = this.value"
+        onchange="this.form.submit()"
+      >
+      {profile_html}
+      <div class="interest-term-grid">
+        <label>
+          Match
+          <textarea name="positive_keywords" rows="7" spellcheck="false">{positive_value}</textarea>
+        </label>
+        <label>
+          Dampen
+          <textarea name="negative_keywords" rows="7" spellcheck="false">{negative_value}</textarea>
+        </label>
+      </div>
+      <div class="interest-actions">
+        <button class="mini-button" type="submit">Save</button>
+        <button class="mini-button danger" type="submit" formaction="/interests/security-news/remove">Remove</button>
+      </div>
+    </form>
+    """
+
+
+def render_security_news_interest_profile(interest: dict[str, Any]) -> str:
+    keyword = str(interest.get("keyword") or "")
+    positive = [str(term) for term in interest.get("positive_keywords") or []][:4]
+    negative = [str(term) for term in interest.get("negative_keywords") or []][:2]
+    chips = []
+    for term in positive:
+        chips.append(f'<span class="tag" title="News match for {html_escape(keyword)}">{html_escape(term)}</span>')
+    for term in negative:
+        chips.append(f'<span class="tag warn" title="Dampens {html_escape(keyword)}">{html_escape(term)}</span>')
+    return f'<div class="interest-profile">{"".join(chips)}</div>'
+
+
+def render_security_news_interest_add_form() -> str:
+    return """
+    <form class="interest-add" method="post" action="/interests/security-news/add">
+      <div class="field">
+        <label for="security-news-interest-keyword">News interest</label>
+        <input id="security-news-interest-keyword" name="keyword" required placeholder="incident type or technology">
+      </div>
+      <div class="field">
+        <label for="security-news-interest-weight">Weight</label>
+        <input id="security-news-interest-weight" name="weight" type="number" min="0" max="100" value="70" required>
+      </div>
+      <input type="hidden" name="positive_keywords" value="">
+      <input type="hidden" name="negative_keywords" value="">
+      <button class="primary" type="submit">Add News Interest</button>
     </form>
     """
 
@@ -7386,6 +7770,34 @@ def remove_team_interest(database: TeamResearchDatabase, fields: dict[str, str])
     return interest_id
 
 
+def save_security_news_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    interest_id = required_field(fields, "interest_id")
+    record = database.upsert_security_news_interest_keyword(
+        interest_id=interest_id,
+        keyword=required_field(fields, "keyword"),
+        weight=fields.get("weight", "0"),
+        positive_keywords=parse_interest_terms(fields.get("positive_keywords", "")),
+        negative_keywords=parse_interest_terms(fields.get("negative_keywords", "")),
+    )
+    return record["keyword"]
+
+
+def add_security_news_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    record = database.upsert_security_news_interest_keyword(
+        keyword=required_field(fields, "keyword"),
+        weight=fields.get("weight", "0"),
+        positive_keywords=parse_interest_terms(fields.get("positive_keywords", "")) or None,
+        negative_keywords=parse_interest_terms(fields.get("negative_keywords", "")) or None,
+    )
+    return record["keyword"]
+
+
+def remove_security_news_interest(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    interest_id = required_field(fields, "interest_id")
+    database.remove_security_news_interest_keyword(interest_id)
+    return interest_id
+
+
 def update_paper_relevance(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     item_id = required_field(fields, "item_id")
     database.update_item_relevance(
@@ -7588,6 +8000,46 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         pdf_cache_max_bytes=settings["pdf_cache_max_bytes"],
     )
     return str(result["run_id"])
+
+
+def run_security_news_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    return run_team_security_news_radar(
+        database,
+        max_entries_per_source=clean_positive_int(
+            fields.get("max_entries_per_source", ""),
+            default=20,
+            maximum=100,
+        ),
+        ai_enrich=checkbox_enabled(fields, "ai_enrich"),
+        ai_enrich_limit=clean_positive_int(
+            fields.get("ai_enrich_limit", ""),
+            default=TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
+            maximum=50,
+        ),
+        ai_enrich_min_score=clean_nonnegative_int(
+            fields.get("ai_enrich_min_score", ""),
+            default=TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
+            maximum=100,
+        ),
+    )
+
+
+def review_security_news_item_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    dedupe_key = required_field(fields, "dedupe_key")
+    status = required_field(fields, "status")
+    actor = (fields.get("actor") or "team-member").strip() or "team-member"
+    record = database.mark_security_news_item_review(
+        dedupe_key,
+        status=status,
+        actor=actor,
+        reason=(fields.get("reason") or "").strip(),
+    )
+    return {
+        "dedupe_key": dedupe_key,
+        "status": str(record.get("review_status") or status),
+        "review_filter": clean_radar_review_filter(fields.get("review_filter", "") or "unreviewed"),
+        "limit": clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
+    }
 
 
 def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
@@ -8030,6 +8482,24 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
+            elif parsed.path == "/security-news":
+                self.respond_html(
+                    render_security_news_page(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        review_status=query.get("review", ["unreviewed"])[0],
+                        notice=notice,
+                    )
+                )
+            elif parsed.path == "/security-news.json":
+                self.respond_json(
+                    build_team_security_news_latest_payload(
+                        self.database,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=100),
+                        review_status=query.get("review", ["unreviewed"])[0],
+                        source_id=query.get("source_id", [""])[0] or None,
+                    )
+                )
             elif parsed.path == "/submit":
                 self.respond_html(render_submit_page(self.database, notice=notice))
             elif parsed.path == "/interests":
@@ -8133,6 +8603,24 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/radar/run":
                 run_id = run_literature_radar_from_web(self.database, fields)
                 self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote('Radar run completed.')}")
+            elif parsed.path == "/security-news/run":
+                result = run_security_news_from_web(self.database, fields)
+                self.redirect(
+                    security_news_path(
+                        notice=f"Security News run completed: {result['run_id']}.",
+                        limit=clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
+                        review_filter=fields.get("review_filter") or "unreviewed",
+                    )
+                )
+            elif parsed.path == "/security-news/review":
+                result = review_security_news_item_from_web(self.database, fields)
+                self.redirect(
+                    security_news_path(
+                        notice=f"Marked security news as {result['status']}.",
+                        limit=int(result.get("limit") or 20),
+                        review_filter=result.get("review_filter") or "unreviewed",
+                    )
+                )
             elif parsed.path == "/interests/save":
                 keyword = save_team_interest(self.database, fields)
                 self.redirect(f"/interests?notice={quote(f'Saved {keyword}.')}")
@@ -8142,6 +8630,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/interests/remove":
                 remove_team_interest(self.database, fields)
                 self.redirect(f"/interests?notice={quote('Removed keyword.')}")
+            elif parsed.path == "/interests/security-news/save":
+                keyword = save_security_news_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote(f'Saved news interest {keyword}.')}")
+            elif parsed.path == "/interests/security-news/add":
+                keyword = add_security_news_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote(f'Added news interest {keyword}.')}")
+            elif parsed.path == "/interests/security-news/remove":
+                remove_security_news_interest(self.database, fields)
+                self.redirect(f"/interests?notice={quote('Removed news interest.')}")
             elif parsed.path == "/paper/update":
                 item_id = update_paper_interactions(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Updated {item_id}.')}")

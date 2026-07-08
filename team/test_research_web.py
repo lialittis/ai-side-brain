@@ -21,6 +21,7 @@ from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
     RADAR_WEB_SOURCE_OPTIONS,
+    add_security_news_interest,
     add_paper_comment,
     add_paper_tag,
     add_team_interest,
@@ -37,6 +38,7 @@ from team.research_web import (
     recover_paper,
     remove_paper,
     remove_paper_tag,
+    remove_security_news_interest,
     remove_team_interest,
     radar_brief_path_from_fields,
     radar_queue_path_from_fields,
@@ -50,6 +52,7 @@ from team.research_web import (
     review_radar_paper,
     run_literature_radar_from_web,
     save_today_snapshot,
+    save_security_news_interest,
     save_team_interest,
     submit_research_item,
     team_radar_source_validation_args,
@@ -212,9 +215,14 @@ class TeamResearchWebTest(unittest.TestCase):
             )
             html = render_interests_page(database)
             self.assertIn("Topics", html)
+            self.assertIn("Paper Radar Topics", html)
+            self.assertIn("Security News Interests", html)
             self.assertIn("system security", html)
             self.assertIn("memory safety", html)
             self.assertIn("agentic security", html)
+            self.assertIn("exploits and patches", html)
+            self.assertIn("infrastructure risk", html)
+            self.assertIn("ai security", html)
             self.assertIn("LLM security", html)
             self.assertIn("prompt injection", html)
             self.assertIn("generic AI application", html)
@@ -224,6 +232,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("secure systems", html)
             self.assertIn("pure cryptography", html)
             self.assertIn('action="/interests/add"', html)
+            self.assertIn('action="/interests/security-news/add"', html)
 
             memory = next(interest for interest in interests if interest["keyword"] == "memory safety")
             old_profile_version = database.current_team_interest_profile_version()
@@ -258,6 +267,35 @@ class TeamResearchWebTest(unittest.TestCase):
             updated_keywords = [interest["keyword"] for interest in database.list_team_interest_keywords()]
             self.assertIn("exploit mitigation", updated_keywords)
             self.assertNotIn("memory safety", updated_keywords)
+
+            news_interests = database.list_security_news_interest_keywords()
+            news_profile_version = database.current_security_news_interest_profile_version()
+            exploits = next(interest for interest in news_interests if interest["keyword"] == "exploits and patches")
+            save_security_news_interest(
+                database,
+                {
+                    "interest_id": exploits["id"],
+                    "keyword": "exploits and patches",
+                    "weight": "55",
+                    "positive_keywords": "actively exploited\nemergency mitigation",
+                    "negative_keywords": "monthly roundup",
+                },
+            )
+            added_news = add_security_news_interest(database, {"keyword": "cloud identity abuse", "weight": "72"})
+            self.assertEqual(added_news, "cloud identity abuse")
+            updated_news_html = render_interests_page(database)
+            self.assertIn("emergency mitigation", updated_news_html)
+            self.assertIn("cloud identity abuse", updated_news_html)
+            self.assertNotEqual(
+                news_profile_version["id"],
+                database.current_security_news_interest_profile_version()["id"],
+            )
+            remove_security_news_interest(database, {"interest_id": exploits["id"]})
+            updated_news_keywords = [
+                interest["keyword"] for interest in database.list_security_news_interest_keywords()
+            ]
+            self.assertIn("cloud identity abuse", updated_news_keywords)
+            self.assertNotIn("exploits and patches", updated_news_keywords)
 
     def test_latest_radar_queue_shows_failed_run_health_without_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -987,7 +1025,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("estimate:", html)
             self.assertIn("Guardrail readiness:", html)
             self.assertIn("Schema migrations:", html)
-            self.assertIn("version: 3/3", html)
+            self.assertIn("version: 5/5", html)
             self.assertIn("profile version:", html)
             self.assertIn("Validation commands:", html)
             self.assertIn("radar-validate-sources", html)
@@ -1792,7 +1830,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["script_count"], 7)
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 3)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 5)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")

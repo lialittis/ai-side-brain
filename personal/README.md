@@ -24,6 +24,17 @@ Current responsibilities:
 
 Personal research-resource workflows should use the product-neutral Shared Research Core in `shared/research/`, then require review before writing accepted outputs into private memory.
 
+Personal Security News Radar uses the product-neutral security-news core in
+`shared/security_news/`. It writes private Markdown reports to
+`memory/06_Logs/` and run/item indexes to `indexes/`; it does not mutate
+long-term project/resource notes.
+
+Example direct Python use:
+
+```bash
+python -c "from personal.security_news import run_personal_security_news_radar; print(run_personal_security_news_radar()['report_path'])"
+```
+
 Personal Literature Radar uses the product-neutral discovery core in `shared/literature_radar/`.
 It writes recommendation reports to `memory/06_Logs/` and run history to
 `indexes/literature-radar-runs.json`. It also keeps deduplicated paper history

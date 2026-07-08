@@ -69,6 +69,12 @@ The local MVP runs shared source intake, OpenRouter AI analysis when configured,
 
 Team Literature Radar imports product-neutral radar recommendations from `shared/literature_radar/` into the same Team Research library. See [Literature Radar](docs/LITERATURE_RADAR.md).
 
+Team Security News Radar imports product-neutral security-news items from
+`shared/security_news/` into separate Team news tables. It is a shared
+Side-Brain feature with a Team adapter, not a paper-library feature: news items
+have their own run history, source health, review state, optional AI summary,
+and `/security-news` web page.
+
 The CLI remains the admin/local-control surface. Team members should use the web UI for the simplest daily workflows: scanning the latest relevant papers by tag, submitting a direct PDF link, uploading one PDF, or saving a promising manual link with brief notes.
 
 Useful commands:
@@ -101,6 +107,10 @@ python team/research_cli.py radar-import-queue --limit 20 --min-score 35
 python team/research_cli.py radar-papers
 python team/research_cli.py radar-report
 python team/research_cli.py radar-brief --days 7
+python team/research_cli.py security-news-run --output team/logs/security-news.md
+python team/research_cli.py security-news-run --ai-enrich
+python team/research_cli.py security-news
+python team/research_cli.py security-news-review DEDUPE_KEY --status watch --actor alice
 python team/research_cli.py show ITEM_ID
 python team/research_cli.py accept ITEM_ID --project dynamic-radiative-cooling
 python team/research_cli.py library dynamic-radiative-cooling
@@ -111,6 +121,9 @@ Web UI surfaces:
 
 - Latest Relevant Papers page with tag filtering, sort controls, paper/PDF links, editable tags, relevance, importance, per-paper comments, and a Radar Queue with priority candidates plus stored why/context/matched-interest signal lines when scheduled discovery has papers awaiting review;
 - Literature Radar page with ad hoc `Run Radar`, stored run history, a first-class Brief nav entry for daily/weekly review, deduplicated paper history, watch/dismiss review feedback, new/seen-before labels, ranked recommendations, optional summaries, relevance reasons, source/OA link context, one-click import into Latest Relevant Papers, and queue-level import for visible high-score candidates;
+- Security News page with unhandled vulnerability/news items, priority labels,
+  optional AI quick summaries, source health, ad hoc collection, and
+  Save/Keep New/Dismiss review actions;
 - Radar run cards, Markdown reports, weekly briefs, paper history, and the Latest Papers Radar Queue all share labelled `Signal`, `Why`, `Context`, and `Matched` lines so team members see the same explanation wherever they review a recommendation;
 - radar-imported library papers keep their radar provenance, summary, relevance reason, context link, matched interests, and PDF-access decision, so the main Latest Relevant Papers list shows why the paper was worth importing and whether a legal PDF is available;
 - Team Interests page with weighted keyword sliders for initial relevance scoring;

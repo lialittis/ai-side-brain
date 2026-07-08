@@ -22,6 +22,7 @@ from shared.literature_radar import (
     radar_source_provenance_summary,
 )
 from shared.research.core import iso_timestamp, stable_id
+from shared.security_news import build_security_news_ai_context
 from team.research_adapter import (
     TeamResearchRunResult,
     create_audit_event,
@@ -36,11 +37,13 @@ from team.research_interests import (
     screening_is_manual_override,
     unique_normalized_terms,
 )
+from team.security_news_interests import DEFAULT_TEAM_SECURITY_NEWS_INTERESTS
 
 
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
+SECURITY_NEWS_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
 LITERATURE_RADAR_CURRENT_DATA_TABLES = (
     ("literature_radar_recommendations", "recommendations"),
     ("literature_radar_today_snapshots", "today_snapshots"),
@@ -62,6 +65,16 @@ TEAM_RESEARCH_SCHEMA_MIGRATIONS = [
         "id": "003_literature_radar_today_snapshots",
         "version": 3,
         "description": "Persist member-facing Today selections for historical review.",
+    },
+    {
+        "id": "004_security_news_radar",
+        "version": 4,
+        "description": "Persist Team Security News Radar runs, item history, and review state.",
+    },
+    {
+        "id": "005_security_news_interest_profile",
+        "version": 5,
+        "description": "Persist editable Team Security News interest keywords.",
     },
 ]
 TEAM_RESEARCH_SCHEMA_VERSION = TEAM_RESEARCH_SCHEMA_MIGRATIONS[-1]["version"]
@@ -229,6 +242,15 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS security_news_interest_keywords (
+                    id TEXT PRIMARY KEY,
+                    keyword TEXT NOT NULL UNIQUE,
+                    weight INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS team_interest_profile_versions (
                     id TEXT PRIMARY KEY,
                     profile_type TEXT NOT NULL,
@@ -305,6 +327,41 @@ class TeamResearchDatabase:
                     record_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS security_news_runs (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    sources_json TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    collected_count INTEGER NOT NULL,
+                    item_count INTEGER NOT NULL,
+                    report_markdown TEXT NOT NULL,
+                    error TEXT,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS security_news_items (
+                    dedupe_key TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    latest_seen_at TEXT NOT NULL,
+                    source_ids_json TEXT NOT NULL,
+                    review_status TEXT NOT NULL,
+                    reviewed_by TEXT,
+                    reviewed_at TEXT,
+                    review_reason TEXT,
+                    record_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS security_news_latest_snapshots (
+                    snapshot_date TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    run_id TEXT,
+                    item_count INTEGER NOT NULL,
+                    record_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_team_records_status
                     ON team_research_records(review_status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_library_project
@@ -319,6 +376,8 @@ class TeamResearchDatabase:
                     ON paper_comments(item_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_team_interest_keywords_weight
                     ON team_interest_keywords(weight DESC, keyword);
+                CREATE INDEX IF NOT EXISTS idx_security_news_interest_keywords_weight
+                    ON security_news_interest_keywords(weight DESC, keyword);
                 CREATE INDEX IF NOT EXISTS idx_team_interest_profile_versions_created
                     ON team_interest_profile_versions(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_item
@@ -333,10 +392,19 @@ class TeamResearchDatabase:
                     ON literature_radar_recommendations(run_id, rank);
                 CREATE INDEX IF NOT EXISTS idx_literature_radar_today_snapshots_created
                     ON literature_radar_today_snapshots(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_security_news_runs_started
+                    ON security_news_runs(started_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_security_news_items_latest
+                    ON security_news_items(latest_seen_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_security_news_items_review
+                    ON security_news_items(review_status, latest_seen_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_security_news_latest_snapshots_created
+                    ON security_news_latest_snapshots(created_at DESC);
                 """
             )
             self._record_schema_migrations(connection)
             self._ensure_default_interest_keywords(connection)
+            self._ensure_default_security_news_interest_keywords(connection)
             self._sync_tag_catalog_from_item_tags(connection)
 
     def schema_migration_status(self) -> dict[str, Any]:
@@ -982,6 +1050,76 @@ class TeamResearchDatabase:
         with self.connect() as connection:
             connection.execute("DELETE FROM team_interest_keywords WHERE id = ?", (interest_id,))
             self._current_team_interest_profile_version(connection, timestamp=timestamp)
+
+    def list_security_news_interest_keywords(self) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM security_news_interest_keywords
+                ORDER BY weight DESC, keyword ASC
+                """
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def current_security_news_interest_profile_version(self, *, now: datetime | None = None) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            record = self._current_security_news_interest_profile_version(connection, timestamp=timestamp)
+        return record
+
+    def upsert_security_news_interest_keyword(
+        self,
+        *,
+        keyword: str,
+        weight: int,
+        interest_id: str | None = None,
+        positive_keywords: list[Any] | None = None,
+        negative_keywords: list[Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        cleaned_keyword = normalize_interest_keyword(keyword)
+        if not cleaned_keyword:
+            raise ValueError("Security news interest keyword cannot be empty.")
+        selected_weight = clean_interest_weight(weight)
+        record = {
+            "id": interest_id or stable_id("security-news-interest", {"keyword": cleaned_keyword}),
+            "keyword": cleaned_keyword,
+            "weight": selected_weight,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+        if positive_keywords is not None:
+            record["positive_keywords"] = unique_normalized_terms(positive_keywords)
+        if negative_keywords is not None:
+            record["negative_keywords"] = unique_normalized_terms(negative_keywords)
+        with self.connect() as connection:
+            if interest_id:
+                row = connection.execute(
+                    "SELECT record_json FROM security_news_interest_keywords WHERE id = ?",
+                    (interest_id,),
+                ).fetchone()
+                if row:
+                    existing = loads(row["record_json"])
+                    record["created_at"] = existing.get("created_at") or timestamp
+                    if positive_keywords is None and "positive_keywords" in existing:
+                        record["positive_keywords"] = existing.get("positive_keywords") or []
+                    if negative_keywords is None and "negative_keywords" in existing:
+                        record["negative_keywords"] = existing.get("negative_keywords") or []
+            self._upsert_security_news_interest_keyword(connection, record)
+            self._current_security_news_interest_profile_version(connection, timestamp=timestamp)
+        return record
+
+    def remove_security_news_interest_keyword(self, interest_id: str) -> None:
+        self.initialize()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        with self.connect() as connection:
+            connection.execute("DELETE FROM security_news_interest_keywords WHERE id = ?", (interest_id,))
+            self._current_security_news_interest_profile_version(connection, timestamp=timestamp)
 
     def get_team_setting(self, key: str, default: Any = None) -> Any:
         self.initialize()
@@ -2174,6 +2312,327 @@ class TeamResearchDatabase:
             )
         return paper_record
 
+    def create_security_news_run(
+        self,
+        *,
+        sources: list[dict[str, Any] | str],
+        collection_config: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        selected_sources = [security_news_source_record(source) for source in sources]
+        run = {
+            "id": stable_security_news_run_id(selected_sources, timestamp),
+            "kind": "team_security_news_run",
+            "status": "running",
+            "sources": selected_sources,
+            "started_at": timestamp,
+            "completed_at": None,
+            "collected_count": 0,
+            "item_count": 0,
+            "report": "",
+            "error": "",
+            "source_stats": [],
+        }
+        if collection_config:
+            run["collection_config"] = collection_config
+        with self.connect() as connection:
+            self._upsert_security_news_run(connection, run)
+        return run
+
+    def complete_security_news_run(
+        self,
+        run_id: str,
+        *,
+        collection: dict[str, Any],
+        report: str = "",
+        status: str = "",
+        error: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        items = collection.get("items") if isinstance(collection.get("items"), list) else []
+        source_stats = collection.get("source_stats") if isinstance(collection.get("source_stats"), list) else []
+        selected_status = status or security_news_run_status(collection)
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news run: {run_id}")
+            run = loads(row["record_json"])
+            for item in items:
+                self._upsert_security_news_item(connection, item, timestamp=timestamp)
+            run.update(
+                {
+                    "status": selected_status,
+                    "completed_at": None if selected_status in {"pending", "running"} else timestamp,
+                    "collected_count": int(collection.get("collected_count") or len(items)),
+                    "item_count": len(items),
+                    "report": report,
+                    "error": error,
+                    "source_stats": source_stats,
+                    "collection_summary": {
+                        "kind": collection.get("kind") or "shared_security_news_collection",
+                        "collected_at": collection.get("collected_at") or timestamp,
+                        "source_count": int(collection.get("source_count") or 0),
+                        "collected_count": int(collection.get("collected_count") or len(items)),
+                        "deduped_count": int(collection.get("deduped_count") or len(items)),
+                    },
+                }
+            )
+            self._upsert_security_news_run(connection, run)
+        return run
+
+    def fail_security_news_run(
+        self,
+        run_id: str,
+        error: str,
+        *,
+        collection: dict[str, Any] | None = None,
+        report: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news run: {run_id}")
+            run = loads(row["record_json"])
+            source_stats = []
+            if isinstance(collection, dict) and isinstance(collection.get("source_stats"), list):
+                source_stats = collection["source_stats"]
+            run.update(
+                {
+                    "status": "failed",
+                    "completed_at": timestamp,
+                    "error": str(error),
+                    "report": report,
+                    "source_stats": source_stats,
+                }
+            )
+            self._upsert_security_news_run(connection, run)
+        return run
+
+    def list_security_news_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM security_news_runs
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit or 20)),),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
+    def get_security_news_run(self, run_id: str | None = None) -> dict[str, Any] | None:
+        self.initialize()
+        if run_id:
+            query = "SELECT record_json FROM security_news_runs WHERE id = ?"
+            params: tuple[Any, ...] = (run_id,)
+        else:
+            query = """
+                SELECT record_json
+                FROM security_news_runs
+                ORDER BY started_at DESC
+                LIMIT 1
+            """
+            params = ()
+        with self.connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def list_security_news_items(
+        self,
+        *,
+        limit: int | None = 50,
+        review_status: str | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM security_news_items
+                ORDER BY latest_seen_at DESC, first_seen_at DESC, title ASC
+                """
+            ).fetchall()
+        records = [loads(row["record_json"]) for row in rows]
+        selected_status = str(review_status or "").strip()
+        if selected_status and selected_status != "all":
+            selected_status = normalize_security_news_review_status(selected_status)
+            records = [
+                record
+                for record in records
+                if security_news_review_record(record)["status"] == selected_status
+            ]
+        selected_source = str(source_id or "").strip()
+        if selected_source:
+            records = [
+                record
+                for record in records
+                if selected_source in [str(source) for source in record.get("source_ids") or []]
+            ]
+        records = sorted(records, key=security_news_history_sort_key, reverse=True)
+        return records if limit is None else records[: max(0, int(limit))]
+
+    def get_security_news_item(self, dedupe_key: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
+    def security_news_item_review_counts(self) -> dict[str, int]:
+        self.initialize()
+        counts = {"all": 0, "unreviewed": 0, "watch": 0, "dismissed": 0}
+        with self.connect() as connection:
+            rows = connection.execute("SELECT record_json FROM security_news_items").fetchall()
+        for row in rows:
+            record = loads(row["record_json"])
+            status = security_news_review_record(record)["status"]
+            counts["all"] += 1
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    def mark_security_news_item_review(
+        self,
+        dedupe_key: str,
+        *,
+        status: str,
+        actor: str = "team-member",
+        reason: str = "",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_status = normalize_security_news_review_status(status)
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            before = dict(record)
+            apply_security_news_review(
+                record,
+                status=selected_status,
+                actor=actor,
+                reason=reason,
+                timestamp=timestamp,
+            )
+            connection.execute(
+                """
+                UPDATE security_news_items
+                SET review_status = ?, reviewed_by = ?, reviewed_at = ?, review_reason = ?, record_json = ?
+                WHERE dedupe_key = ?
+                """,
+                (
+                    selected_status,
+                    record.get("reviewed_by"),
+                    record.get("reviewed_at"),
+                    record.get("review_reason") or "",
+                    dumps(record),
+                    dedupe_key,
+                ),
+            )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_item_reviewed",
+                    object_type="security_news_item",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return record
+
+    def save_security_news_latest_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        actor: str = "security-news-cycle",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        timestamp = iso_timestamp(now or datetime.now(timezone.utc))
+        snapshot_date = str(snapshot.get("snapshot_date") or timestamp[:10])
+        items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+        record = {
+            **snapshot,
+            "id": snapshot.get("id") or stable_id("security-news-latest-snapshot", snapshot_date),
+            "snapshot_date": snapshot_date,
+            "created_at": snapshot.get("created_at") or timestamp,
+            "run_id": snapshot.get("run_id") or "",
+            "item_count": len(items),
+        }
+        with self.connect() as connection:
+            before_row = connection.execute(
+                "SELECT record_json FROM security_news_latest_snapshots WHERE snapshot_date = ?",
+                (snapshot_date,),
+            ).fetchone()
+            before = loads(before_row["record_json"]) if before_row else None
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO security_news_latest_snapshots
+                (snapshot_date, created_at, run_id, item_count, record_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    record["snapshot_date"],
+                    record["created_at"],
+                    record.get("run_id") or "",
+                    int(record.get("item_count") or 0),
+                    dumps(record),
+                ),
+            )
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_latest_snapshot_saved",
+                    object_type="security_news_latest_snapshot",
+                    object_id=snapshot_date,
+                    before=before,
+                    after=record,
+                    now=now,
+                ),
+            )
+        return record
+
+    def list_security_news_latest_snapshots(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_json
+                FROM security_news_latest_snapshots
+                ORDER BY snapshot_date DESC, created_at DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit or 30)),),
+            ).fetchall()
+        return [loads(row["record_json"]) for row in rows]
+
     def list_audit_events(
         self,
         *,
@@ -2707,6 +3166,100 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _upsert_security_news_run(self, connection: sqlite3.Connection, run: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_runs
+            (id, status, sources_json, started_at, completed_at,
+             collected_count, item_count, report_markdown, error, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run["id"],
+                run["status"],
+                dumps(run.get("sources") or []),
+                run["started_at"],
+                run.get("completed_at"),
+                int(run.get("collected_count") or 0),
+                int(run.get("item_count") or 0),
+                run.get("report") or "",
+                run.get("error") or "",
+                dumps(run),
+            ),
+        )
+
+    def _upsert_security_news_item(
+        self,
+        connection: sqlite3.Connection,
+        item: dict[str, Any],
+        *,
+        timestamp: str,
+        count_seen: bool = True,
+    ) -> dict[str, Any]:
+        dedupe_key = str(item.get("dedupe_key") or "").strip()
+        if not dedupe_key:
+            raise ValueError("Security news item is missing a dedupe_key.")
+        existing_row = connection.execute(
+            "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
+        existing = loads(existing_row["record_json"]) if existing_row else {}
+        source_ids = sorted(set(existing.get("source_ids") or []) | set(security_news_item_source_ids(item)))
+        scoring = item.get("scoring") if isinstance(item.get("scoring"), dict) else {}
+        record = {
+            "dedupe_key": dedupe_key,
+            "title": item.get("title") or existing.get("title") or dedupe_key,
+            "url": item.get("url") or existing.get("url") or "",
+            "first_seen_at": existing.get("first_seen_at") or timestamp,
+            "latest_seen_at": timestamp,
+            "seen_count": int(existing.get("seen_count") or 0) + (1 if count_seen else 0),
+            "source_ids": source_ids,
+            "source_names": sorted(
+                set(existing.get("source_names") or [])
+                | {str(item.get("source_name") or "").strip()}
+                - {""}
+            ),
+            "source_types": sorted(
+                set(existing.get("source_types") or [])
+                | {str(item.get("source_type") or "").strip()}
+                - {""}
+            ),
+            "review_status": existing.get("review_status") or "unreviewed",
+            "item": item,
+            "latest_item": item,
+            "latest_scoring": scoring,
+            "ai_context": build_security_news_ai_context(item),
+        }
+        for key in ("reviewed_by", "reviewed_at", "review_reason", "review"):
+            if existing.get(key):
+                record[key] = existing[key]
+        if isinstance(item.get("ai_enrichment"), dict):
+            record["ai_enrichment"] = item["ai_enrichment"]
+        elif isinstance(existing.get("ai_enrichment"), dict):
+            record["ai_enrichment"] = existing["ai_enrichment"]
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_items
+            (dedupe_key, title, url, first_seen_at, latest_seen_at, source_ids_json,
+             review_status, reviewed_by, reviewed_at, review_reason, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["dedupe_key"],
+                record["title"],
+                record["url"],
+                record["first_seen_at"],
+                record["latest_seen_at"],
+                dumps(record["source_ids"]),
+                record["review_status"],
+                record.get("reviewed_by"),
+                record.get("reviewed_at"),
+                record.get("review_reason") or "",
+                dumps(record),
+            ),
+        )
+        return record
+
     def _upsert_literature_radar_paper(
         self,
         connection: sqlite3.Connection,
@@ -2863,6 +3416,23 @@ class TeamResearchDatabase:
             ),
         )
 
+    def _upsert_security_news_interest_keyword(self, connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO security_news_interest_keywords
+            (id, keyword, weight, created_at, updated_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["keyword"],
+                clean_interest_weight(record.get("weight")),
+                record["created_at"],
+                record["updated_at"],
+                dumps(record),
+            ),
+        )
+
     def _record_schema_migrations(self, connection: sqlite3.Connection) -> None:
         timestamp = iso_timestamp(datetime.now(timezone.utc))
         for migration in TEAM_RESEARCH_SCHEMA_MIGRATIONS:
@@ -2923,6 +3493,61 @@ class TeamResearchDatabase:
         record = {
             "id": stable_id("team-interest-profile-version", {"profile_hash": profile_hash}),
             "profile_type": "team_interests",
+            "profile_hash": profile_hash,
+            "interest_count": len(interests),
+            "interests": interests,
+            "created_at": timestamp,
+        }
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO team_interest_profile_versions
+            (id, profile_type, profile_hash, interest_count, interests_json, created_at, record_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["profile_type"],
+                record["profile_hash"],
+                record["interest_count"],
+                dumps(record["interests"]),
+                record["created_at"],
+                dumps(record),
+            ),
+        )
+        row = connection.execute(
+            "SELECT record_json FROM team_interest_profile_versions WHERE id = ?",
+            (record["id"],),
+        ).fetchone()
+        return loads(row["record_json"]) if row else record
+
+    def _current_security_news_interest_profile_version(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        rows = connection.execute(
+            """
+            SELECT record_json
+            FROM security_news_interest_keywords
+            ORDER BY weight DESC, keyword ASC
+            """
+        ).fetchall()
+        interests = [
+            {
+                "keyword": normalize_interest_keyword(str(record.get("keyword") or "")),
+                "weight": clean_interest_weight(record.get("weight")),
+                "positive_keywords": unique_normalized_terms(record.get("positive_keywords") or []),
+                "negative_keywords": unique_normalized_terms(record.get("negative_keywords") or []),
+            }
+            for record in (loads(row["record_json"]) for row in rows)
+            if normalize_interest_keyword(str(record.get("keyword") or ""))
+            and clean_interest_weight(record.get("weight")) > 0
+        ]
+        profile_hash = stable_id("security-news-interest-profile-hash", {"interests": interests})
+        record = {
+            "id": stable_id("security-news-interest-profile-version", {"profile_hash": profile_hash}),
+            "profile_type": "security_news_interests",
             "profile_hash": profile_hash,
             "interest_count": len(interests),
             "interests": interests,
@@ -3053,6 +3678,37 @@ class TeamResearchDatabase:
         )
         self._current_team_interest_profile_version(connection, timestamp=timestamp)
 
+    def _ensure_default_security_news_interest_keywords(self, connection: sqlite3.Connection) -> None:
+        setting = connection.execute(
+            "SELECT value_json FROM team_settings WHERE key = ?",
+            ("security_news_interest_keywords_seeded",),
+        ).fetchone()
+        if setting:
+            return
+        row = connection.execute("SELECT COUNT(*) AS count FROM security_news_interest_keywords").fetchone()
+        timestamp = iso_timestamp(datetime.now(timezone.utc))
+        if not row or not row["count"]:
+            for interest in DEFAULT_TEAM_SECURITY_NEWS_INTERESTS:
+                keyword = normalize_interest_keyword(str(interest["keyword"]))
+                record = {
+                    "id": stable_id("security-news-interest", {"keyword": keyword}),
+                    "keyword": keyword,
+                    "weight": clean_interest_weight(interest["weight"]),
+                    "positive_keywords": unique_normalized_terms(interest.get("positive_keywords") or []),
+                    "negative_keywords": unique_normalized_terms(interest.get("negative_keywords") or []),
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
+                }
+                self._upsert_security_news_interest_keyword(connection, record)
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO team_settings (key, value_json, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            ("security_news_interest_keywords_seeded", dumps({"seeded": True}), timestamp),
+        )
+        self._current_security_news_interest_profile_version(connection, timestamp=timestamp)
+
     def _update_library_entries_for_analysis(
         self,
         connection: sqlite3.Connection,
@@ -3132,6 +3788,111 @@ def stable_literature_radar_run_id(sources: list[str], query_terms: list[str], t
             "query_terms": query_terms,
             "started_at": timestamp,
         },
+    )
+
+
+def stable_security_news_run_id(sources: list[dict[str, Any]], timestamp: str) -> str:
+    return stable_id(
+        "securitynewsrun",
+        {
+            "sources": [source.get("id") or source for source in sources],
+            "started_at": timestamp,
+        },
+    )
+
+
+def security_news_source_record(source: dict[str, Any] | str) -> dict[str, Any]:
+    if isinstance(source, dict):
+        source_id = str(source.get("id") or source.get("name") or source.get("url") or "source").strip()
+        return {
+            "id": source_id,
+            "name": str(source.get("name") or source_id).strip(),
+            "url": str(source.get("url") or "").strip(),
+            "source_type": str(source.get("source_type") or "rss").strip() or "rss",
+            "enabled": bool(source.get("enabled", True)),
+        }
+    source_id = str(source or "").strip()
+    return {
+        "id": source_id,
+        "name": source_id,
+        "url": "",
+        "source_type": "rss",
+        "enabled": True,
+    }
+
+
+def security_news_run_status(collection: dict[str, Any]) -> str:
+    stats = collection.get("source_stats") if isinstance(collection.get("source_stats"), list) else []
+    active = [stat for stat in stats if isinstance(stat, dict) and stat.get("status") != "skipped"]
+    if active and all(stat.get("status") == "failed" for stat in active):
+        return "failed"
+    if any(isinstance(stat, dict) and stat.get("status") == "failed" for stat in active):
+        return "partial"
+    return "succeeded"
+
+
+def security_news_item_source_ids(item: dict[str, Any]) -> list[str]:
+    source_ids = set()
+    if item.get("source_id"):
+        source_ids.add(str(item["source_id"]))
+    for source_id in item.get("source_ids") or []:
+        if source_id:
+            source_ids.add(str(source_id))
+    return sorted(source_ids)
+
+
+def normalize_security_news_review_status(status: str) -> str:
+    selected = str(status or "").strip().lower()
+    if selected not in SECURITY_NEWS_REVIEW_STATUSES:
+        raise ValueError(f"Unsupported security news review status: {status}")
+    return selected
+
+
+def security_news_review_record(record: dict[str, Any]) -> dict[str, Any]:
+    nested = record.get("review") if isinstance(record.get("review"), dict) else {}
+    status = nested.get("status") or record.get("review_status") or "unreviewed"
+    try:
+        selected_status = normalize_security_news_review_status(str(status))
+    except ValueError:
+        selected_status = "unreviewed"
+    return {
+        "status": selected_status,
+        "reviewed_by": nested.get("reviewed_by") or record.get("reviewed_by") or "",
+        "reviewed_at": nested.get("reviewed_at") or record.get("reviewed_at") or "",
+        "reason": nested.get("reason") or record.get("review_reason") or "",
+    }
+
+
+def apply_security_news_review(
+    record: dict[str, Any],
+    *,
+    status: str,
+    actor: str,
+    reason: str,
+    timestamp: str,
+) -> None:
+    selected_status = normalize_security_news_review_status(status)
+    record["review_status"] = selected_status
+    record["reviewed_by"] = actor
+    record["reviewed_at"] = timestamp
+    record["review_reason"] = reason
+    record["review"] = {
+        "status": selected_status,
+        "reviewed_by": actor,
+        "reviewed_at": timestamp,
+        "reason": reason,
+    }
+
+
+def security_news_history_sort_key(record: dict[str, Any]) -> tuple[int, str, str]:
+    scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
+    if not scoring:
+        item = record.get("latest_item") if isinstance(record.get("latest_item"), dict) else {}
+        scoring = item.get("scoring") if isinstance(item.get("scoring"), dict) else {}
+    return (
+        int(scoring.get("score") or 0),
+        str(record.get("latest_seen_at") or record.get("first_seen_at") or ""),
+        str(record.get("title") or "").lower(),
     )
 
 

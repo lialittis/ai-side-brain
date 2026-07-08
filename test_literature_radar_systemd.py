@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 SYSTEMD_USER_DIR = ROOT / "infra" / "systemd" / "user"
 INSTALL_SCRIPT = ROOT / "infra" / "systemd" / "install_user_timers.sh"
+RESTORE_SCRIPT = ROOT / "infra" / "systemd" / "restore_user_timers.sh"
 
 
 class LiteratureRadarSystemdTest(unittest.TestCase):
@@ -23,7 +24,7 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
 
         self.assertIn("Environment=RADAR_USE_SAVED_DEFAULTS=1", service)
         self.assertIn("ExecStart=%h/workspace/ai-side-brain/team/scripts/run_literature_radar_cycle.sh", service)
-        self.assertIn("OnCalendar=*-*-* 07:30:00", timer)
+        self.assertIn("OnCalendar=*-*-* 06:00:00", timer)
         self.assertIn("Persistent=true", timer)
         self.assertIn("Unit=ai-side-brain-team-literature-radar-cycle.service", timer)
 
@@ -154,6 +155,38 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("Installing profile: personal-cycle", result.stdout)
         self.assertIn("ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
         self.assertNotIn("enable --now ai-side-brain-personal-literature-radar.timer", result.stdout)
+
+    def test_restore_helper_defaults_to_recommended_profile(self) -> None:
+        self.assertTrue(RESTORE_SCRIPT.stat().st_mode & 0o111)
+
+        result = subprocess.run(
+            [str(RESTORE_SCRIPT), "--dry-run"],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertIn("Restoring AI Side-Brain user timers with profile: recommended", result.stdout)
+        self.assertIn("Installing profile: recommended", result.stdout)
+        self.assertIn("ai-side-brain-team-literature-radar-cycle.timer", result.stdout)
+        self.assertIn("ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
+        self.assertIn("Linger unchanged.", result.stdout)
+        self.assertIn("systemctl --user list-timers ai-side-brain-\\*", result.stdout)
+
+    def test_restore_helper_can_preview_linger_setup(self) -> None:
+        result = subprocess.run(
+            [str(RESTORE_SCRIPT), "--dry-run", "--team-cycle", "--with-linger", "--no-list"],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertIn("Restoring AI Side-Brain user timers with profile: team-cycle", result.stdout)
+        self.assertIn("Installing profile: team-cycle", result.stdout)
+        self.assertIn("loginctl enable-linger", result.stdout)
+        self.assertNotIn("systemctl --user list-timers", result.stdout)
 
 
 if __name__ == "__main__":

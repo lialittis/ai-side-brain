@@ -64,6 +64,26 @@ Install the recommended daily Team and Personal timers for the current user:
 infra/systemd/install_user_timers.sh --recommended
 ```
 
+After reboot, user-manager reset, or a checkout path change, restore the safe
+recommended timer set in one command:
+
+```bash
+infra/systemd/restore_user_timers.sh
+```
+
+Preview the same recovery without changing systemd state:
+
+```bash
+infra/systemd/restore_user_timers.sh --dry-run
+```
+
+If timers must run before the user logs in after a reboot, enable user lingering
+while restoring:
+
+```bash
+infra/systemd/restore_user_timers.sh --with-linger
+```
+
 Manual equivalent:
 
 ```bash

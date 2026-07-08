@@ -204,14 +204,16 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 ).fetchone()
 
         self.assertEqual(status["status"], "current")
-        self.assertEqual(status["current_version"], 3)
-        self.assertEqual(status["expected_version"], 3)
-        self.assertEqual(status["applied_count"], 3)
+        self.assertEqual(status["current_version"], 5)
+        self.assertEqual(status["expected_version"], 5)
+        self.assertEqual(status["applied_count"], 5)
         self.assertEqual(status["pending_count"], 0)
         self.assertEqual(status["applied_migrations"][0]["id"], "001_initial_team_research_schema")
         self.assertEqual(status["applied_migrations"][1]["id"], "002_team_interest_profile_versions")
         self.assertEqual(status["applied_migrations"][2]["id"], "003_literature_radar_today_snapshots")
-        self.assertEqual(row["count"], 3)
+        self.assertEqual(status["applied_migrations"][3]["id"], "004_security_news_radar")
+        self.assertEqual(status["applied_migrations"][4]["id"], "005_security_news_interest_profile")
+        self.assertEqual(row["count"], 5)
         self.assertEqual(profile_version["id"], stable_profile_version["id"])
         self.assertNotEqual(profile_version["id"], updated_profile_version["id"])
         self.assertGreaterEqual(profile_row["count"], 2)
@@ -1269,18 +1271,19 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             )
             paper["tags"] = ["memory-safety"]
             imported = import_radar_recommendation(database, recommend_papers([paper])[0])
+            event_now = datetime.now(timezone.utc)
             database.update_item_relevance(
                 imported["item_id"],
                 label="possibly_relevant",
                 score=61,
                 actor="alice",
-                now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
+                now=event_now,
             )
             database.update_library_importance(
                 imported["item_id"],
                 importance=4,
                 actor="alice",
-                now=datetime(2026, 7, 1, 10, 2, tzinfo=timezone.utc),
+                now=event_now,
             )
 
             activity_stdout = io.StringIO()
@@ -4195,7 +4198,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["operations_readiness"]["non_executable_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 3)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 5)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")

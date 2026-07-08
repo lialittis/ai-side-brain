@@ -93,6 +93,12 @@ from team.literature_radar import (
 from team.research_ai import TeamResearchAnalyzer
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
+from team.security_news import (
+    TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
+    TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
+    build_team_security_news_latest_payload,
+    run_team_security_news_radar,
+)
 from team.research_web import (
     build_literature_radar_settings_payload,
     build_literature_radar_status_payload,
@@ -628,6 +634,39 @@ def build_parser() -> argparse.ArgumentParser:
     radar_brief.add_argument("--queue-recent-days", type=int, default=0, help="filter the embedded queue preview to papers released or first seen in the last N days")
     radar_brief.add_argument("--output", type=Path, help="write Markdown brief")
     radar_brief.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    news_run = subparsers.add_parser("security-news-run", help="collect and rank Security News Radar items")
+    add_db_args(news_run)
+    news_run.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        help="feed source as URL or id|name|url; repeatable. Defaults to built-in feeds.",
+    )
+    news_run.add_argument("--max-entries-per-source", type=int, default=20)
+    news_run.add_argument("--ai-enrich", action="store_true", help="AI-enrich high-priority news items")
+    news_run.add_argument("--ai-enrich-limit", type=int, default=TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT)
+    news_run.add_argument("--ai-enrich-min-score", type=int, default=TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)
+    news_run.add_argument("--output", type=Path, help="write Markdown Security News Radar report")
+    news_run.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    news_items = subparsers.add_parser("security-news", help="list Security News Radar items")
+    add_db_args(news_items)
+    news_items.add_argument("--limit", type=int, default=20)
+    news_items.add_argument("--review", choices=["all", "unreviewed", "watch", "dismissed"], default="unreviewed")
+    news_items.add_argument("--source-id", default="", help="filter by stored source id")
+    news_items.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    news_review = subparsers.add_parser(
+        "security-news-review",
+        help="mark one Security News Radar item as watch, dismissed, or unreviewed",
+    )
+    add_db_args(news_review)
+    news_review.add_argument("dedupe_key")
+    news_review.add_argument("--status", choices=["watch", "dismissed", "unreviewed"], required=True)
+    news_review.add_argument("--actor", default="team-member")
+    news_review.add_argument("--reason", default="")
+    news_review.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     return parser
 
@@ -1541,6 +1580,93 @@ def print_radar_review(record: dict[str, Any]) -> None:
     print(f"{record.get('dedupe_key')} | review={status} | reviewed_by={actor}{suffix} | {record.get('title')}")
 
 
+def security_news_sources_from_cli(args: argparse.Namespace) -> list[dict[str, Any]] | None:
+    specs = [str(value).strip() for value in getattr(args, "source", []) or [] if str(value).strip()]
+    if not specs:
+        return None
+    sources = []
+    for spec in specs:
+        parts = [part.strip() for part in spec.split("|")]
+        if len(parts) >= 3:
+            source_id, name, url = parts[0], parts[1], parts[2]
+        else:
+            url = spec
+            source_id = re.sub(r"[^a-z0-9]+", "_", url.lower()).strip("_")[:48] or "security_news_source"
+            name = source_id.replace("_", " ").title()
+        sources.append(
+            {
+                "id": source_id,
+                "name": name,
+                "url": url,
+                "source_type": "rss",
+                "lookback_days": 7,
+            }
+        )
+    return sources
+
+
+def print_security_news_run(result: dict[str, Any]) -> None:
+    print("Team Security News Radar")
+    print(f"Run: {result['run_id']}")
+    print(f"Collected: {result.get('collected_count', 0)}")
+    print(f"Items: {result.get('item_count', 0)}")
+    if result.get("source_stats"):
+        stats = [
+            f"{stat.get('source_id')}:{stat.get('status')}:{int(stat.get('collected_count') or 0)}"
+            for stat in result.get("source_stats") or []
+        ]
+        print(f"Source stats: {', '.join(stats)}")
+    if result.get("report_path"):
+        print(f"Report: {result['report_path']}")
+    for item in result.get("items", [])[:8]:
+        scoring = item.get("scoring") if isinstance(item.get("scoring"), dict) else {}
+        print(
+            f"- {scoring.get('label') or 'unknown'} {int(scoring.get('score') or 0)}/100 | "
+            f"{item.get('source_id') or 'source'} | {item.get('title')}"
+        )
+
+
+def print_security_news_items(payload: dict[str, Any]) -> None:
+    counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
+    print(
+        "Review queues: "
+        + ", ".join(
+            f"{status}={int(counts.get(status) or 0)}"
+            for status in ("all", "unreviewed", "watch", "dismissed")
+        )
+    )
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    if not items:
+        print("No Security News Radar items.")
+        return
+    for record in items:
+        scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
+        ai = record.get("ai_enrichment") if isinstance(record.get("ai_enrichment"), dict) else {}
+        ai_suffix = f" | ai={ai.get('status')}" if ai else ""
+        print(
+            f"{record.get('dedupe_key')} | review={record.get('review_status') or 'unreviewed'} | "
+            f"latest={record.get('latest_seen_at')} | sources={','.join(record.get('source_ids') or [])} | "
+            f"{scoring.get('label') or 'unknown'} {int(scoring.get('score') or 0)}/100{ai_suffix} | "
+            f"{record.get('title')}"
+        )
+        if record.get("review_reason"):
+            print(f"  Review reason: {record['review_reason']}")
+        item = record.get("latest_item") if isinstance(record.get("latest_item"), dict) else {}
+        if item.get("url"):
+            print(f"  URL: {item['url']}")
+        if ai.get("quick_summary"):
+            print(f"  AI summary: {ai['quick_summary']}")
+
+
+def print_security_news_review(record: dict[str, Any]) -> None:
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    status = review.get("status") or record.get("review_status") or "unreviewed"
+    actor = review.get("reviewed_by") or record.get("reviewed_by") or "team-member"
+    reason = review.get("reason") or record.get("review_reason") or ""
+    suffix = f" | reason={reason}" if reason else ""
+    print(f"{record.get('dedupe_key')} | review={status} | reviewed_by={actor}{suffix} | {record.get('title')}")
+
+
 def print_radar_activity(result: dict[str, Any]) -> None:
     print("Team Literature Radar Activity")
     print(f"Window: last {int(result.get('days') or 0)} day(s)")
@@ -2365,6 +2491,66 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print(result["brief"], end="")
+        return 0
+
+    if args.command == "security-news-run":
+        result = run_team_security_news_radar(
+            database,
+            sources=security_news_sources_from_cli(args),
+            max_entries_per_source=args.max_entries_per_source,
+            ai_enrich=args.ai_enrich,
+            ai_enrich_limit=args.ai_enrich_limit,
+            ai_enrich_min_score=args.ai_enrich_min_score,
+        )
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(result["report"], encoding="utf-8")
+            result["report_path"] = str(args.output)
+        if args.json:
+            print_json(result)
+        else:
+            print_security_news_run(result)
+        return 0
+
+    if args.command == "security-news":
+        payload = build_team_security_news_latest_payload(
+            database,
+            limit=args.limit,
+            review_status=args.review,
+            source_id=args.source_id or None,
+        )
+        if args.json:
+            print_json(payload)
+        else:
+            print_security_news_items(payload)
+        return 0
+
+    if args.command == "security-news-review":
+        try:
+            record = database.mark_security_news_item_review(
+                args.dedupe_key,
+                status=args.status,
+                actor=args.actor,
+                reason=args.reason,
+            )
+        except KeyError as error:
+            message = str(error).strip("'")
+            payload = {
+                "success": False,
+                "kind": "team_security_news_review",
+                "reason": "item_not_found",
+                "dedupe_key": args.dedupe_key,
+                "error": message,
+            }
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"Security news review failed: {message}", file=sys.stderr)
+            return 1
+        if args.json:
+            print_json(record)
+        else:
+            print_security_news_review(record)
         return 0
 
     parser.error(f"unsupported command: {args.command}")
