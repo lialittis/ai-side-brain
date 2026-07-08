@@ -117,10 +117,15 @@ from team.research_ai import analyze_queued_item, analyze_submitted_item, queue_
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
 from team.security_news import (
+    TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE,
     TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
     TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
     build_team_security_news_latest_payload,
+    load_team_security_news_settings,
+    normalize_team_security_news_sources,
     run_team_security_news_radar,
+    save_team_security_news_settings,
+    team_security_news_default_settings,
 )
 
 
@@ -335,11 +340,9 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     latest_active = active in {"latest", "today", "radar_queue"}
     nav = "\n".join(
         [
-            f'<a class="nav-item {"active" if latest_active else ""}" href="/">Latest</a>',
+            f'<a class="nav-item {"active" if latest_active else ""}" href="/">Papers</a>',
+            f'<a class="nav-item {"active" if active == "security_news" else ""}" href="/security-news">News</a>',
             f'<a class="nav-item {"active" if active in {"papers", "library"} else ""}" href="/library">Library</a>',
-            f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
-            f'<a class="nav-item {"active" if active == "security_news" else ""}" href="/security-news">Security News</a>',
-            f'<a class="nav-item {"active" if active == "today_history" else ""}" href="/latest/history">History</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
         ]
@@ -1087,6 +1090,51 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       border-radius: 8px;
       background: #fbfcfe;
     }}
+    .news-config-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 0.36fr);
+      gap: 14px;
+      align-items: start;
+    }}
+    .news-source-list {{
+      display: grid;
+      gap: 10px;
+    }}
+    .news-source-card {{
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }}
+    .news-source-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .news-source-head h3 {{
+      margin: 0;
+      font-size: 15px;
+    }}
+    .news-source-fields {{
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.5fr);
+      gap: 10px;
+    }}
+    .news-source-meta {{
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) minmax(110px, 0.6fr) minmax(130px, 0.8fr);
+      gap: 10px;
+    }}
+    .news-config-actions {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
     .today-hero {{
       display: grid;
       gap: 12px;
@@ -1417,7 +1465,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       .interest-section-head {{ grid-template-columns: 1fr; }}
       .interest-add {{ grid-template-columns: 1fr; }}
       .actions, .radar-queue-actions, .radar-overview-actions, .radar-queue-review-actions {{ justify-content: flex-start; }}
-      .form-grid, .submit-options {{ grid-template-columns: 1fr; }}
+      .form-grid, .submit-options, .news-config-grid, .news-source-fields, .news-source-meta {{ grid-template-columns: 1fr; }}
       .dropzone {{ min-height: 136px; }}
       .radar-score-badge {{ width: fit-content; text-align: left; }}
     }}
@@ -1646,7 +1694,7 @@ def render_literature_radar_brief_page(
         configured_primary_source_coverage=team_saved_primary_source_coverage(database),
     )
     body = f"""
-    {render_topline("Research Digest", "A short roll-up of new papers and Radar signals.", "/", "Latest")}
+    {render_topline("Research Digest", "A short roll-up of new papers and Radar signals.", "/", "Papers")}
     <section class="panel">
       {render_notice(notice)}
       {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit, queue_recent_days=selected_queue_recent_days)}
@@ -1769,27 +1817,29 @@ def render_security_news_page(
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    settings = load_team_security_news_settings(database)
     body = f"""
-    {render_topline("Security News", "A lightweight stack of unhandled security news, incidents, vulnerabilities, and research-blog posts.", "/", "Latest Papers")}
+    {render_topline("News", "A lightweight stack of unhandled security news, incidents, vulnerabilities, and research-blog posts.", "/", "Papers")}
     {render_notice(notice)}
-    <section class="panel radar-queue" aria-label="Security News latest stack">
+    <section class="panel radar-queue" aria-label="News latest stack">
       <div class="radar-queue-head">
         <div>
           <h2>Worth Reading</h2>
           <div class="muted">{html_escape(security_news_status_line(counts, len(items), latest_run))}</div>
         </div>
         <div class="radar-queue-actions">
+          <a class="button primary" href="/security-news/config">Configure</a>
           <a class="button" href="/security-news.json?limit={selected_limit}&amp;review={html_escape(selected_review)}">JSON</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Research Digest</a>
         </div>
       </div>
       {render_security_news_review_count_links(counts, selected_review=selected_review, limit=selected_limit)}
-      {render_security_news_run_form()}
+      {render_security_news_run_form(settings)}
       {render_security_news_source_health(payload)}
       {render_security_news_items(items, review_filter=selected_review, limit=selected_limit)}
     </section>
     """
-    return page("Security News", body, active="security_news")
+    return page("News", body, active="security_news")
 
 
 def security_news_status_line(
@@ -1801,7 +1851,7 @@ def security_news_status_line(
     unreviewed = int(counts.get("unreviewed") or 0)
     saved = int(counts.get("watch") or 0)
     if not total:
-        return "No security news collected yet."
+        return "No news collected yet."
     run_text = display_radar_datetime(str(latest_run.get("started_at") or "")) if latest_run else ""
     suffix = f" Latest run {run_text}." if run_text else ""
     return f"Showing {visible_count} item(s). {unreviewed} new, {saved} saved, {total} total.{suffix}"
@@ -1823,30 +1873,266 @@ def render_security_news_review_count_links(
     return '<div class="radar-brief-link">' + "".join(links) + "</div>"
 
 
-def render_security_news_run_form() -> str:
+def render_security_news_run_form(settings: dict[str, Any] | None = None) -> str:
+    selected_settings = settings or team_security_news_default_settings()
+    max_entries = max(
+        1,
+        int(selected_settings.get("max_entries_per_source") or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE),
+    )
+    ai_enrich = bool(selected_settings.get("ai_enrich"))
+    ai_limit = max(1, int(selected_settings.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT))
+    ai_min_score = max(0, min(100, int(selected_settings.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)))
     return f"""
     <details class="operator-details">
       <summary>Run collection</summary>
       <form class="radar-brief-form" method="post" action="/security-news/run">
         <label>
           <span class="muted">Max/source</span>
-          <input type="number" name="max_entries_per_source" min="1" max="100" value="20">
+          <input type="number" name="max_entries_per_source" min="1" max="100" value="{max_entries}">
         </label>
+        <input type="hidden" name="ai_enrich_present" value="1">
         <label class="radar-option-line">
-          <input type="checkbox" name="ai_enrich" value="1">
+          <input type="checkbox" name="ai_enrich" value="1" {"checked" if ai_enrich else ""}>
           <span>AI enrichment</span>
         </label>
         <label>
           <span class="muted">AI limit</span>
-          <input type="number" name="ai_enrich_limit" min="1" max="50" value="{TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT}">
+          <input type="number" name="ai_enrich_limit" min="1" max="50" value="{ai_limit}">
         </label>
         <label>
           <span class="muted">AI min score</span>
-          <input type="number" name="ai_enrich_min_score" min="0" max="100" value="{TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE}">
+          <input type="number" name="ai_enrich_min_score" min="0" max="100" value="{ai_min_score}">
         </label>
-        <button class="button primary" type="submit">Run Security News</button>
+        <button class="button primary" type="submit">Run News</button>
       </form>
     </details>
+    """
+
+
+def render_security_news_config_page(database: TeamResearchDatabase, notice: str = "") -> str:
+    settings = load_team_security_news_settings(database)
+    sources = settings.get("sources") if isinstance(settings.get("sources"), list) else []
+    latest_run = database.get_security_news_run()
+    enabled_count = sum(1 for source in sources if source.get("enabled", True))
+    latest_status = str((latest_run or {}).get("status") or "none")
+    body = f"""
+    {render_topline("News Radar Config", "Source links, run defaults, and AI enrichment controls for News Radar.", "/security-news", "News")}
+    {render_notice(notice)}
+    <div class="news-config-grid">
+      <section class="panel">
+        <div class="today-head">
+          <div>
+            <h2>Sources</h2>
+            <div class="muted">{enabled_count} enabled of {len(sources)} configured RSS/Atom source{'' if len(sources) == 1 else 's'}.</div>
+          </div>
+          <div class="news-config-actions">
+            <a class="button" href="/security-news">Open News</a>
+            <a class="button" href="/security-news.json?limit=20&amp;review=unreviewed">JSON</a>
+          </div>
+        </div>
+        {render_security_news_source_cards(sources)}
+        {render_security_news_add_source_form()}
+      </section>
+      <aside class="panel">
+        <h2>Run Defaults</h2>
+        <div class="tags">
+          <span class="tag">latest run: {html_escape(latest_status)}</span>
+          <span class="tag">max/source: {int(settings.get("max_entries_per_source") or 0)}</span>
+          <span class="tag">AI: {'on' if settings.get("ai_enrich") else 'off'}</span>
+        </div>
+        {render_security_news_defaults_form(settings)}
+        {render_security_news_config_actions(settings)}
+      </aside>
+    </div>
+    """
+    return page("News Radar Config", body, active="security_news")
+
+
+def render_security_news_source_cards(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return '<div class="empty">No news sources configured.</div>'
+    cards = "".join(render_security_news_source_card(source) for source in sources)
+    return f'<div class="news-source-list">{cards}</div>'
+
+
+def render_security_news_source_card(source: dict[str, Any]) -> str:
+    source_id = html_escape(source.get("id") or "")
+    name = html_escape(source.get("name") or source.get("id") or "")
+    url = html_escape(source.get("url") or "")
+    description = html_escape(source.get("description") or "")
+    lookback_days = max(1, int(source.get("lookback_days") or 3))
+    source_type = str(source.get("source_type") or "rss")
+    run_day = str(source.get("run_day") or "daily")
+    enabled = bool(source.get("enabled", True))
+    return f"""
+    <form class="news-source-card" method="post" action="/security-news/config/source/save">
+      <input type="hidden" name="source_id" value="{source_id}">
+      <div class="news-source-head">
+        <h3>{name}</h3>
+        <label class="radar-option-line">
+          <input type="checkbox" name="enabled" value="1" {"checked" if enabled else ""}>
+          <span>Enabled</span>
+        </label>
+      </div>
+      <div class="news-source-fields">
+        <label>
+          Name
+          <input name="name" value="{name}" required>
+        </label>
+        <label>
+          Feed URL
+          <input name="url" type="url" value="{url}" required>
+        </label>
+      </div>
+      <div class="news-source-meta">
+        <label>
+          Type
+          <select name="source_type">{render_security_news_source_type_options(source_type)}</select>
+        </label>
+        <label>
+          Lookback days
+          <input name="lookback_days" type="number" min="1" max="90" value="{lookback_days}">
+        </label>
+        <label>
+          Run day
+          <select name="run_day">{render_security_news_run_day_options(run_day)}</select>
+        </label>
+      </div>
+      <label>
+        Description
+        <textarea name="description" rows="3">{description}</textarea>
+      </label>
+      <div class="news-config-actions">
+        <button class="mini-button primary" type="submit">Save Source</button>
+        <button class="mini-button danger" type="submit" formaction="/security-news/config/source/remove" formnovalidate>Remove</button>
+      </div>
+    </form>
+    """
+
+
+def render_security_news_add_source_form() -> str:
+    return f"""
+    <form class="news-source-card" method="post" action="/security-news/config/source/add">
+      <div class="news-source-head">
+        <h3>Add Source</h3>
+        <span class="tag">RSS/Atom</span>
+      </div>
+      <div class="news-source-fields">
+        <label>
+          Name
+          <input name="name" required placeholder="Project Zero Blog">
+        </label>
+        <label>
+          Feed URL
+          <input name="url" type="url" required placeholder="https://example.org/feed.xml">
+        </label>
+      </div>
+      <div class="news-source-meta">
+        <label>
+          Type
+          <select name="source_type">{render_security_news_source_type_options("research_blog")}</select>
+        </label>
+        <label>
+          Lookback days
+          <input name="lookback_days" type="number" min="1" max="90" value="7">
+        </label>
+        <label>
+          Run day
+          <select name="run_day">{render_security_news_run_day_options(default_security_news_new_source_run_day())}</select>
+        </label>
+      </div>
+      <label>
+        Description
+        <textarea name="description" rows="3" placeholder="What makes this source useful for the team?"></textarea>
+      </label>
+      <input type="hidden" name="enabled" value="1">
+      <button class="primary" type="submit">Add Source</button>
+    </form>
+    """
+
+
+def render_security_news_source_type_options(selected: str) -> str:
+    options = [
+        ("daily_news", "Daily news"),
+        ("research_blog", "Research blog"),
+        ("analysis_blog", "Analysis blog"),
+        ("advisory", "Advisory"),
+        ("rss", "RSS/Atom"),
+    ]
+    return "\n".join(
+        f'<option value="{html_escape(value)}" {"selected" if value == selected else ""}>{html_escape(label)}</option>'
+        for value, label in options
+    )
+
+
+def render_security_news_run_day_options(selected: str) -> str:
+    selected_value = selected or "daily"
+    options = [
+        ("daily", "Every day"),
+        ("monday", "Monday"),
+        ("tuesday", "Tuesday"),
+        ("wednesday", "Wednesday"),
+        ("thursday", "Thursday"),
+        ("friday", "Friday"),
+        ("saturday", "Saturday"),
+        ("sunday", "Sunday"),
+    ]
+    return "\n".join(
+        f'<option value="{html_escape(value)}" {"selected" if value == selected_value else ""}>{html_escape(label)}</option>'
+        for value, label in options
+    )
+
+
+def default_security_news_new_source_run_day(now: datetime | None = None) -> str:
+    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    selected_now = now or datetime.now().astimezone()
+    return weekdays[selected_now.weekday()]
+
+
+def render_security_news_defaults_form(settings: dict[str, Any]) -> str:
+    max_entries = max(1, int(settings.get("max_entries_per_source") or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE))
+    ai_limit = max(1, int(settings.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT))
+    ai_min_score = max(0, min(100, int(settings.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)))
+    return f"""
+    <form class="radar-brief-form" method="post" action="/security-news/config/settings">
+      <label>
+        Max/source
+        <input name="max_entries_per_source" type="number" min="1" max="100" value="{max_entries}">
+      </label>
+      <input type="hidden" name="ai_enrich_present" value="1">
+      <label class="radar-option-line">
+        <input type="checkbox" name="ai_enrich" value="1" {"checked" if settings.get("ai_enrich") else ""}>
+        <span>AI enrichment</span>
+      </label>
+      <label>
+        AI limit
+        <input name="ai_enrich_limit" type="number" min="1" max="50" value="{ai_limit}">
+      </label>
+      <label>
+        AI min score
+        <input name="ai_enrich_min_score" type="number" min="0" max="100" value="{ai_min_score}">
+      </label>
+      <button class="primary" type="submit">Save Defaults</button>
+    </form>
+    """
+
+
+def render_security_news_config_actions(settings: dict[str, Any]) -> str:
+    ai_hidden = '<input type="hidden" name="ai_enrich" value="1">' if settings.get("ai_enrich") else ""
+    return f"""
+    <div class="radar-control-strip">
+      <form class="news-config-actions" method="post" action="/security-news/run">
+        <input type="hidden" name="max_entries_per_source" value="{max(1, int(settings.get("max_entries_per_source") or 20))}">
+        <input type="hidden" name="ai_enrich_present" value="1">
+        {ai_hidden}
+        <input type="hidden" name="ai_enrich_limit" value="{max(1, int(settings.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT))}">
+        <input type="hidden" name="ai_enrich_min_score" value="{max(0, min(100, int(settings.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)))}">
+        <button class="button primary" type="submit">Run News Now</button>
+      </form>
+      <form method="post" action="/security-news/config/reset">
+        <button class="button danger" type="submit">Reset Defaults</button>
+      </form>
+    </div>
     """
 
 
@@ -1999,7 +2285,7 @@ def render_literature_radar_papers_page(
         review_status=None if selected_review == "all" else selected_review,
     )
     body = f"""
-    {render_topline("Radar Papers", "Deduplicated paper history from stored Literature Radar runs.", "/radar", "Radar")}
+    {render_topline("Paper History", "Deduplicated paper history from stored Literature Radar runs.", "/radar", "Radar")}
     {render_notice(notice)}
     <section class="panel">
       {render_radar_review_count_links(review_counts, selected_review=selected_review, limit=limit)}
@@ -2007,7 +2293,7 @@ def render_literature_radar_papers_page(
       {render_radar_paper_history(papers, review_filter=selected_review)}
     </section>
     """
-    return page("Radar Papers", body, active="radar")
+    return page("Paper History", body, active="radar")
 
 
 def render_radar_daily_overview(database: TeamResearchDatabase, runs: list[dict[str, Any]]) -> str:
@@ -5183,12 +5469,12 @@ def render_today_page(
     selected_review = str(payload.get("review") or "all")
     queue_window = {"limit": selected_limit, "triage_action": "", "recent_days": 0}
     body = f"""
-    {render_topline("Latest", "Unhandled research papers worth reading, kept as a review stack until the team acts on them.", "/submit", "Submit")}
+    {render_topline("Papers", "Unhandled research papers worth reading, kept as a review stack until the team acts on them.", "/submit", "Submit")}
     {render_notice(notice)}
-    <section class="panel today-hero" aria-label="Latest research stack">
+    <section class="panel today-hero" aria-label="Papers research stack">
       <div class="today-head">
         <div>
-          <h2 class="today-title">Latest Worth Reading</h2>
+          <h2 class="today-title">Papers Worth Reading</h2>
           <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records), today_selection))}</div>
         </div>
         <div class="radar-overview-actions">
@@ -5202,7 +5488,7 @@ def render_today_page(
     {render_today_feed(records, review_filter=selected_review, queue_window=queue_window)}
     {render_empty_today(records, counts)}
     """
-    return page("Latest", body, active="latest")
+    return page("Papers", body, active="latest")
 
 
 def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit: int) -> dict[str, Any]:
@@ -5383,7 +5669,7 @@ def radar_today_status_line(
             f"No unhandled papers meet the worth-reading threshold. {active_count} active Radar candidate"
             f"{'' if active_count == 1 else 's'} remain in the full Radar feed."
         )
-    return "No unhandled Radar papers are waiting in the latest stack."
+    return "No unhandled Radar papers are waiting."
 
 
 def build_today_snapshot_payload(
@@ -5444,31 +5730,31 @@ def render_today_history_page(
 ) -> str:
     snapshots = database.list_literature_radar_today_snapshots(limit=limit)
     body = f"""
-    {render_topline("Latest History", "Previous morning Latest stack snapshots saved from the automatic Radar cycle.", "/", "Latest")}
+    {render_topline("Paper Stack History", "Previous morning paper-stack snapshots saved from the automatic Radar cycle.", "/", "Papers")}
     {render_notice(notice)}
-    <section class="panel today-hero" aria-label="Latest history">
+    <section class="panel today-hero" aria-label="Paper stack history">
       <div class="today-head">
         <div>
           <h2 class="today-title">Previous Stack Snapshots</h2>
           <div class="today-summary">{html_escape(today_history_status_line(snapshots))}</div>
         </div>
         <div class="radar-overview-actions">
-          <a class="button primary" href="/">Latest</a>
+          <a class="button primary" href="/">Papers</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
         </div>
       </div>
     </section>
     {render_today_history_snapshots(snapshots)}
     """
-    return page("Latest History", body, active="today_history")
+    return page("Paper Stack History", body, active="latest")
 
 
 def today_history_status_line(snapshots: list[dict[str, Any]]) -> str:
     if not snapshots:
-        return "No saved Latest snapshots yet. The 6:00 cycle will create the first snapshot after it runs."
+        return "No saved paper-stack snapshots yet. The 6:00 cycle will create the first snapshot after it runs."
     total_papers = sum(int(snapshot.get("paper_count") or 0) for snapshot in snapshots)
     return (
-        f"Showing {len(snapshots)} saved Latest snapshot"
+        f"Showing {len(snapshots)} saved paper-stack snapshot"
         f"{'' if len(snapshots) == 1 else 's'} with {total_papers} paper"
         f"{'' if total_papers == 1 else 's'}."
     )
@@ -5476,7 +5762,7 @@ def today_history_status_line(snapshots: list[dict[str, Any]]) -> str:
 
 def render_today_history_snapshots(snapshots: list[dict[str, Any]]) -> str:
     if not snapshots:
-        return '<section class="panel"><div class="empty">No previous Latest snapshots have been saved yet.</div></section>'
+        return '<section class="panel"><div class="empty">No previous paper-stack snapshots have been saved yet.</div></section>'
     return "".join(render_today_history_snapshot(snapshot) for snapshot in snapshots)
 
 
@@ -5496,7 +5782,7 @@ def render_today_history_snapshot(snapshot: dict[str, Any]) -> str:
         </div>
         {f'<a class="button" href="/radar?run={quote(run_id, safe="")}">Open run</a>' if run_id else ''}
       </div>
-      {f'<div class="today-paper-list">{cards}</div>' if records else '<div class="empty">No papers met the Latest threshold for this snapshot.</div>'}
+      {f'<div class="today-paper-list">{cards}</div>' if records else '<div class="empty">No papers met the paper-stack threshold for this snapshot.</div>'}
     </section>
     """
 
@@ -5547,7 +5833,7 @@ def render_empty_today(records: list[dict[str, Any]], counts: dict[str, Any]) ->
         return ""
     total = int(counts.get("all") or 0)
     if total:
-        return '<section class="panel"><div class="empty">No unhandled papers match the Latest priority filters. Try the full Radar feed or the digest.</div></section>'
+        return '<section class="panel"><div class="empty">No unhandled papers match the Papers priority filters. Try the full Radar feed or the digest.</div></section>'
     return '<section class="panel"><div class="empty">No Radar items yet. Submit a paper or wait for the next collector run.</div></section>'
 
 
@@ -7404,7 +7690,7 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
     interests = database.list_team_interest_keywords()
     news_interests = database.list_security_news_interest_keywords()
     body = f"""
-    {render_topline("Topics", "Separate interest profiles for paper Radar and security news Radar.", "/", "Latest")}
+    {render_topline("Topics", "Separate interest profiles for paper Radar and news Radar.", "/", "Papers")}
     {render_notice(notice)}
     <div class="panel">
       <section class="interest-section paper" aria-labelledby="paper-radar-topics">
@@ -7423,7 +7709,7 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
       <section class="interest-section news" aria-labelledby="security-news-interests">
         <div class="interest-section-head">
           <div>
-            <h2 id="security-news-interests">Security News Interests</h2>
+            <h2 id="security-news-interests">News Interests</h2>
             <p>Operational news terms used to collect and rank fresh security reports.</p>
           </div>
           <span class="tag">news radar</span>
@@ -7879,6 +8165,127 @@ def remove_security_news_interest(database: TeamResearchDatabase, fields: dict[s
     return interest_id
 
 
+def save_security_news_run_defaults(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    current = load_team_security_news_settings(database)
+    return save_team_security_news_settings(
+        database,
+        {
+            **current,
+            "max_entries_per_source": clean_positive_int(
+                fields.get("max_entries_per_source", ""),
+                default=int(current.get("max_entries_per_source") or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE),
+                maximum=100,
+            ),
+            "ai_enrich": checkbox_enabled(fields, "ai_enrich"),
+            "ai_enrich_limit": clean_positive_int(
+                fields.get("ai_enrich_limit", ""),
+                default=int(current.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT),
+                maximum=50,
+            ),
+            "ai_enrich_min_score": clean_nonnegative_int(
+                fields.get("ai_enrich_min_score", ""),
+                default=int(current.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE),
+                maximum=100,
+            ),
+        },
+    )
+
+
+def add_security_news_source(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    settings = load_team_security_news_settings(database)
+    source = security_news_source_from_fields(
+        fields,
+        fallback_run_day=default_security_news_new_source_run_day(),
+        default_lookback_days=7,
+    )
+    sources = list(settings.get("sources") or [])
+    if any(str(existing.get("id") or "") == source["id"] for existing in sources):
+        raise ValueError(f"News source already exists: {source['id']}")
+    settings["sources"] = [*sources, source]
+    save_team_security_news_settings(database, settings)
+    return source
+
+
+def save_security_news_source(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    source_id = required_field(fields, "source_id")
+    settings = load_team_security_news_settings(database)
+    sources = list(settings.get("sources") or [])
+    existing_source = next(
+        (source for source in sources if str(source.get("id") or "") == source_id),
+        {},
+    )
+    source = security_news_source_from_fields(
+        fields,
+        source_id=source_id,
+        fallback_run_day=str(existing_source.get("run_day") or "daily"),
+        default_lookback_days=int(existing_source.get("lookback_days") or 7),
+    )
+    updated = []
+    matched = False
+    for existing in sources:
+        if str(existing.get("id") or "") == source_id:
+            updated.append(source)
+            matched = True
+        else:
+            updated.append(existing)
+    if not matched:
+        updated.append(source)
+    settings["sources"] = updated
+    save_team_security_news_settings(database, settings)
+    return source
+
+
+def remove_security_news_source(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    source_id = required_field(fields, "source_id")
+    settings = load_team_security_news_settings(database)
+    settings["sources"] = [
+        source
+        for source in settings.get("sources") or []
+        if str(source.get("id") or "") != source_id
+    ]
+    save_team_security_news_settings(database, settings)
+    return source_id
+
+
+def reset_security_news_sources(database: TeamResearchDatabase) -> dict[str, Any]:
+    return save_team_security_news_settings(database, team_security_news_default_settings())
+
+
+def security_news_source_from_fields(
+    fields: dict[str, str],
+    *,
+    source_id: str = "",
+    fallback_run_day: str = "daily",
+    default_lookback_days: int = 7,
+) -> dict[str, Any]:
+    name = required_field(fields, "name")
+    url = required_field(fields, "url")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("News source URL must be an absolute HTTP(S) feed URL.")
+    normalized = normalize_team_security_news_sources(
+        [
+            {
+                "id": source_id or name,
+                "name": name,
+                "url": url,
+                "description": fields.get("description") or "",
+                "source_type": (fields.get("source_type") or "rss").strip() or "rss",
+                "lookback_days": clean_positive_int(
+                    fields.get("lookback_days", ""),
+                    default=max(1, int(default_lookback_days or 7)),
+                    maximum=90,
+                ),
+                "run_day": fields.get("run_day") or fallback_run_day,
+                "enabled": checkbox_enabled(fields, "enabled"),
+            }
+        ]
+    )
+    if not normalized:
+        raise ValueError("News source is missing a valid feed URL.")
+    return normalized[0]
+
+
 def update_paper_relevance(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
     item_id = required_field(fields, "item_id")
     database.update_item_relevance(
@@ -8084,22 +8491,29 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
 
 
 def run_security_news_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
+    settings = load_team_security_news_settings(database)
+    ai_enrich = (
+        checkbox_enabled(fields, "ai_enrich")
+        if fields.get("ai_enrich_present")
+        else bool(settings.get("ai_enrich"))
+    )
     return run_team_security_news_radar(
         database,
+        sources=list(settings.get("sources") or []),
         max_entries_per_source=clean_positive_int(
             fields.get("max_entries_per_source", ""),
-            default=20,
+            default=int(settings.get("max_entries_per_source") or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE),
             maximum=100,
         ),
-        ai_enrich=checkbox_enabled(fields, "ai_enrich"),
+        ai_enrich=ai_enrich,
         ai_enrich_limit=clean_positive_int(
             fields.get("ai_enrich_limit", ""),
-            default=TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
+            default=int(settings.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT),
             maximum=50,
         ),
         ai_enrich_min_score=clean_nonnegative_int(
             fields.get("ai_enrich_min_score", ""),
-            default=TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
+            default=int(settings.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE),
             maximum=100,
         ),
     )
@@ -8572,6 +8986,10 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
+            elif parsed.path == "/security-news/config":
+                self.respond_html(render_security_news_config_page(self.database, notice=notice))
+            elif parsed.path == "/security-news/settings.json":
+                self.respond_json(load_team_security_news_settings(self.database))
             elif parsed.path == "/security-news.json":
                 self.respond_json(
                     build_team_security_news_latest_payload(
@@ -8690,7 +9108,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 result = run_security_news_from_web(self.database, fields)
                 self.redirect(
                     security_news_path(
-                        notice=f"Security News run completed: {result['run_id']}.",
+                        notice=f"News run completed: {result['run_id']}.",
                         limit=clean_positive_int(fields.get("limit", ""), default=20, maximum=100),
                         review_filter=fields.get("review_filter") or "unreviewed",
                     )
@@ -8699,11 +9117,28 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 result = review_security_news_item_from_web(self.database, fields)
                 self.redirect(
                     security_news_path(
-                        notice=f"Marked security news as {result['status']}.",
+                        notice=f"Marked news as {result['status']}.",
                         limit=int(result.get("limit") or 20),
                         review_filter=result.get("review_filter") or "unreviewed",
                     )
                 )
+            elif parsed.path == "/security-news/config/settings":
+                save_security_news_run_defaults(self.database, fields)
+                self.redirect("/security-news/config?notice=Saved+News+Radar+defaults.")
+            elif parsed.path == "/security-news/config/source/add":
+                source = add_security_news_source(self.database, fields)
+                notice = f"Added source {source['name']}."
+                self.redirect(f"/security-news/config?notice={quote(notice)}")
+            elif parsed.path == "/security-news/config/source/save":
+                source = save_security_news_source(self.database, fields)
+                notice = f"Saved source {source['name']}."
+                self.redirect(f"/security-news/config?notice={quote(notice)}")
+            elif parsed.path == "/security-news/config/source/remove":
+                remove_security_news_source(self.database, fields)
+                self.redirect("/security-news/config?notice=Removed+news+source.")
+            elif parsed.path == "/security-news/config/reset":
+                reset_security_news_sources(self.database)
+                self.redirect("/security-news/config?notice=Reset+News+Radar+defaults.")
             elif parsed.path == "/interests/save":
                 keyword = save_team_interest(self.database, fields)
                 self.redirect(f"/interests?notice={quote(f'Saved {keyword}.')}")

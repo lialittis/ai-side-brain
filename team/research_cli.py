@@ -643,10 +643,37 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="feed source as URL or id|name|url; repeatable. Defaults to built-in feeds.",
     )
-    news_run.add_argument("--max-entries-per-source", type=int, default=20)
-    news_run.add_argument("--ai-enrich", action="store_true", help="AI-enrich high-priority news items")
-    news_run.add_argument("--ai-enrich-limit", type=int, default=TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT)
-    news_run.add_argument("--ai-enrich-min-score", type=int, default=TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)
+    news_run.add_argument(
+        "--max-entries-per-source",
+        type=int,
+        default=None,
+        help="override the saved News Radar max entries per source",
+    )
+    news_ai_group = news_run.add_mutually_exclusive_group()
+    news_ai_group.add_argument(
+        "--ai-enrich",
+        action="store_true",
+        default=None,
+        help="AI-enrich high-priority news items; defaults to the saved News Radar setting",
+    )
+    news_ai_group.add_argument(
+        "--no-ai-enrich",
+        action="store_false",
+        dest="ai_enrich",
+        help="disable News Radar AI enrichment for this run",
+    )
+    news_run.add_argument(
+        "--ai-enrich-limit",
+        type=int,
+        default=None,
+        help=f"override the saved News Radar AI enrichment limit (default setting: {TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT})",
+    )
+    news_run.add_argument(
+        "--ai-enrich-min-score",
+        type=int,
+        default=None,
+        help=f"override the saved News Radar AI enrichment minimum score (default setting: {TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE})",
+    )
     news_run.add_argument("--output", type=Path, help="write Markdown Security News Radar report")
     news_run.add_argument("--json", action="store_true", help="print machine-readable JSON")
 

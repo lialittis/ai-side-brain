@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Side-Brain Team Security News Radar daily
+
+[Timer]
+OnCalendar=*-*-* 06:20:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=ai-side-brain-team-security-news-radar.service
+
+[Install]
+WantedBy=timers.target

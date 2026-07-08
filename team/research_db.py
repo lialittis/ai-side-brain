@@ -3817,7 +3817,10 @@ def security_news_source_record(source: dict[str, Any] | str) -> dict[str, Any]:
             "id": source_id,
             "name": str(source.get("name") or source_id).strip(),
             "url": str(source.get("url") or "").strip(),
+            "description": str(source.get("description") or "").strip(),
             "source_type": str(source.get("source_type") or "rss").strip() or "rss",
+            "lookback_days": max(1, int(source.get("lookback_days") or 3)),
+            "run_day": str(source.get("run_day") or "daily").strip() or "daily",
             "enabled": bool(source.get("enabled", True)),
         }
     source_id = str(source or "").strip()
@@ -3826,6 +3829,8 @@ def security_news_source_record(source: dict[str, Any] | str) -> dict[str, Any]:
         "name": source_id,
         "url": "",
         "source_type": "rss",
+        "lookback_days": 3,
+        "run_day": "daily",
         "enabled": True,
     }
 

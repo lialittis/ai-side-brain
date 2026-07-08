@@ -56,6 +56,17 @@ DEFAULT_SECURITY_NEWS_EXCLUDE_KEYWORDS = [
     "webinar",
 ]
 
+SECURITY_NEWS_RUN_DAYS = [
+    "daily",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
+
 DEFAULT_SECURITY_NEWS_SOURCES = [
     {
         "id": "securityweek",
@@ -150,6 +161,9 @@ RESEARCH_VALUE_TERMS = {
 def normalize_security_news_source(source: dict[str, Any]) -> dict[str, Any]:
     source_id = normalize_token(source.get("id") or source.get("name") or source.get("url") or "source")
     lookback_days = safe_int(source.get("lookback_days"), default=3)
+    run_day = normalize_security_news_run_day(
+        source.get("run_day") or source.get("collection_day") or source.get("weekday") or ""
+    )
     return {
         "id": source_id,
         "name": str(source.get("name") or source_id).strip(),
@@ -157,8 +171,18 @@ def normalize_security_news_source(source: dict[str, Any]) -> dict[str, Any]:
         "description": str(source.get("description") or "").strip(),
         "source_type": str(source.get("source_type") or "rss").strip() or "rss",
         "lookback_days": max(1, lookback_days),
+        "run_day": run_day,
         "enabled": bool(source.get("enabled", True)),
     }
+
+
+def normalize_security_news_run_day(value: Any) -> str:
+    text = normalize_token(value)
+    if text in {"", "all", "always", "every_day", "everyday"}:
+        return "daily"
+    if text in SECURITY_NEWS_RUN_DAYS:
+        return text
+    return "daily"
 
 
 def create_security_news_item(

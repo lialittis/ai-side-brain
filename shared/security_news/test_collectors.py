@@ -92,6 +92,40 @@ class SharedSecurityNewsCollectorsTest(unittest.TestCase):
         self.assertEqual(result["deduped_count"], 1)
         self.assertEqual(len(result["source_stats"]), 2)
 
+    def test_empty_source_list_collects_no_sources(self) -> None:
+        result = collect_security_news_sources([], fetcher=lambda _url: RSS_FEED)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["source_count"], 0)
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["source_stats"], [])
+
+    def test_weekly_source_only_runs_on_configured_day(self) -> None:
+        source = {
+            "id": "weekly",
+            "name": "Weekly",
+            "url": "https://example.org/weekly",
+            "run_day": "friday",
+            "lookback_days": 7,
+        }
+
+        skipped = collect_security_news_sources(
+            [source],
+            fetcher=lambda _url: RSS_FEED,
+            now=datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc),
+        )
+        collected = collect_security_news_sources(
+            [source],
+            fetcher=lambda _url: RSS_FEED,
+            now=datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(skipped["source_stats"][0]["status"], "skipped")
+        self.assertEqual(skipped["source_stats"][0]["run_day"], "friday")
+        self.assertEqual(skipped["items"], [])
+        self.assertEqual(collected["source_stats"][0]["status"], "succeeded")
+        self.assertEqual(len(collected["items"]), 1)
+
     def test_failed_source_returns_status_instead_of_raising(self) -> None:
         source = {"id": "bad", "name": "Bad", "url": "https://example.org/bad"}
 

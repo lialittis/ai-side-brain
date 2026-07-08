@@ -1,8 +1,9 @@
 # Systemd User Timers
 
-These units run Literature Radar periodically without a third-party scheduler.
-They are user-level timers, not system services. Daily collection timers call
-the source collectors; weekly brief timers only read stored run history.
+These units run Literature Radar and Security News Radar periodically without a
+third-party scheduler. They are user-level timers, not system services. Daily
+collection timers call the source collectors; weekly brief timers only read
+stored run history.
 
 The installer renders units for the current checkout path. The raw templates
 under `infra/systemd/user/` assume the repository lives at:
@@ -58,7 +59,18 @@ Do not enable both
 `ai-side-brain-team-literature-radar-cycle.timer` and
 `ai-side-brain-team-literature-radar.timer`, because both run Team collection.
 
-Install the recommended daily Team and Personal timers for the current user:
+The Team Security News Radar timer runs
+`team/scripts/run_security_news_radar.sh` at 06:20 local time. It uses the
+sources and AI defaults saved from `/security-news/config`; per-source weekdays
+decide which feeds run on each day, and new custom sources default to a 7-day
+lookback. Install only this timer with:
+
+```bash
+infra/systemd/install_user_timers.sh --team-news
+```
+
+Install the recommended daily Team, News, and Personal timers for the current
+user:
 
 ```bash
 infra/systemd/install_user_timers.sh --recommended
@@ -105,6 +117,7 @@ cp infra/systemd/user/ai-side-brain-*.service ~/.config/systemd/user/
 cp infra/systemd/user/ai-side-brain-*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ai-side-brain-team-literature-radar-cycle.timer
+systemctl --user enable --now ai-side-brain-team-security-news-radar.timer
 systemctl --user enable --now ai-side-brain-personal-literature-radar-cycle.timer
 systemctl --user enable --now ai-side-brain-team-research-web.service
 ```
@@ -119,8 +132,9 @@ cycle timers.
 Inspect or run manually:
 
 ```bash
-systemctl --user list-timers 'ai-side-brain-*literature-radar*.timer'
+systemctl --user list-timers 'ai-side-brain-*.timer'
 systemctl --user start ai-side-brain-team-literature-radar-cycle.service
+systemctl --user start ai-side-brain-team-security-news-radar.service
 systemctl --user start ai-side-brain-personal-literature-radar-cycle.service
 systemctl --user start ai-side-brain-team-literature-radar.service
 systemctl --user start ai-side-brain-personal-literature-radar.service
@@ -128,6 +142,7 @@ systemctl --user start ai-side-brain-team-literature-radar-brief.service
 systemctl --user start ai-side-brain-personal-literature-radar-brief.service
 systemctl --user start ai-side-brain-team-research-web.service
 journalctl --user -u ai-side-brain-team-literature-radar-cycle.service -n 80
+journalctl --user -u ai-side-brain-team-security-news-radar.service -n 80
 journalctl --user -u ai-side-brain-personal-literature-radar-cycle.service -n 80
 journalctl --user -u ai-side-brain-team-literature-radar.service -n 80
 journalctl --user -u ai-side-brain-personal-literature-radar.service -n 80

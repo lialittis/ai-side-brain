@@ -15,12 +15,14 @@ from .core import (
     DEFAULT_SECURITY_NEWS_SOURCES,
     create_security_news_item,
     filter_security_news_items,
+    normalize_security_news_run_day,
     normalize_security_news_source,
     parse_datetime_text,
     security_news_item_sort_key,
 )
 
 Fetcher = Callable[[str], bytes | str]
+SECURITY_NEWS_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 
 def collect_security_news_sources(
@@ -33,12 +35,18 @@ def collect_security_news_sources(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     selected_now = now or datetime.now(timezone.utc)
-    selected_sources = [normalize_security_news_source(source) for source in (sources or DEFAULT_SECURITY_NEWS_SOURCES)]
+    selected_sources = [
+        normalize_security_news_source(source)
+        for source in (DEFAULT_SECURITY_NEWS_SOURCES if sources is None else sources)
+    ]
     items: list[dict[str, Any]] = []
     source_stats = []
     for source in selected_sources:
         if not source.get("enabled", True):
             source_stats.append(source_status(source, "skipped", 0, "disabled"))
+            continue
+        if not security_news_source_runs_today(source, selected_now):
+            source_stats.append(source_status(source, "skipped", 0, f"scheduled for {source.get('run_day') or 'daily'}"))
             continue
         result = collect_security_news_source(
             source,
@@ -203,6 +211,13 @@ def dedupe_security_news_items(items: list[dict[str, Any]]) -> list[dict[str, An
     return list(selected.values())
 
 
+def security_news_source_runs_today(source: dict[str, Any], now: datetime) -> bool:
+    run_day = normalize_security_news_run_day(source.get("run_day"))
+    if run_day == "daily":
+        return True
+    return run_day == SECURITY_NEWS_WEEKDAYS[now.weekday()]
+
+
 def source_status(
     source: dict[str, Any],
     status: str,
@@ -215,6 +230,7 @@ def source_status(
         "source_id": source.get("id") or "",
         "source_name": source.get("name") or "",
         "source_type": source.get("source_type") or "",
+        "run_day": source.get("run_day") or "daily",
         "status": status,
         "collected_count": int(count),
         "error": error,

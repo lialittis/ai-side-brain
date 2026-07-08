@@ -1,0 +1,8 @@
+[Unit]
+Description=AI Side-Brain Team Security News Radar
+Documentation=file:%h/workspace/ai-side-brain/team/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/ai-side-brain
+ExecStart=%h/workspace/ai-side-brain/team/scripts/run_security_news_radar.sh

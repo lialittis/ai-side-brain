@@ -129,6 +129,13 @@ Web UI surfaces:
 - Team Interests page with weighted keyword sliders for initial relevance scoring;
 - Submit page with three choices: direct PDF link, PDF upload, or manual promising link with brief info.
 
+For scheduled Security News Radar usage, configure source links, lookback days,
+per-source weekdays, and AI defaults at `/security-news/config`, then enable the
+user-level systemd timer with
+`infra/systemd/install_user_timers.sh --team-news`. The timer runs
+`team/scripts/run_security_news_radar.sh` daily at 06:20 local time and lets the
+saved source schedule decide which feeds are active that day.
+
 For daily radar usage, run `team/scripts/run_literature_radar_cycle.sh` from
 cron, enable the user-level systemd
 `ai-side-brain-team-literature-radar-cycle.timer`, or open `/radar` and use

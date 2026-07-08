@@ -14,13 +14,14 @@ usage() {
   cat <<'EOF'
 Usage: infra/systemd/install_user_timers.sh [options]
 
-Install AI Side-Brain Literature Radar user-level systemd timers.
+Install AI Side-Brain user-level systemd timers.
 
 Options:
   --team-cycle          Install the recommended Team daily cycle timer. Default.
+  --team-news           Install the Team Security News Radar timer.
   --personal           Install the recommended Personal daily cycle timer.
   --personal-cycle     Install the recommended Personal daily cycle timer.
-  --recommended        Install recommended Team and Personal cycle timers.
+  --recommended        Install recommended Team, News, and Personal cycle timers.
   --split-team         Install separate Team collection and brief timers.
   --split-personal     Install separate Personal collection and brief timers.
   --dry-run            Print actions without copying units or calling systemctl.
@@ -37,6 +38,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --team-cycle)
       PROFILE="team-cycle"
+      ;;
+    --team-news)
+      PROFILE="team-news"
       ;;
     --personal|--personal-cycle)
       PROFILE="personal-cycle"
@@ -84,6 +88,11 @@ units_for_profile() {
         ai-side-brain-team-literature-radar-cycle.service \
         ai-side-brain-team-literature-radar-cycle.timer
       ;;
+    team-news)
+      printf '%s\n' \
+        ai-side-brain-team-security-news-radar.service \
+        ai-side-brain-team-security-news-radar.timer
+      ;;
     personal-cycle)
       printf '%s\n' \
         ai-side-brain-personal-literature-radar-cycle.service \
@@ -93,6 +102,8 @@ units_for_profile() {
       printf '%s\n' \
         ai-side-brain-team-literature-radar-cycle.service \
         ai-side-brain-team-literature-radar-cycle.timer \
+        ai-side-brain-team-security-news-radar.service \
+        ai-side-brain-team-security-news-radar.timer \
         ai-side-brain-personal-literature-radar-cycle.service \
         ai-side-brain-personal-literature-radar-cycle.timer
       ;;
@@ -154,6 +165,9 @@ if [[ "$PROFILE" == "team-cycle" || "$PROFILE" == "recommended" ]]; then
   echo "Team cycle rotates source families by weekday, saves Today history, and runs brief generation."
   echo "Do not also enable ai-side-brain-team-literature-radar.timer."
 fi
+if [[ "$PROFILE" == "team-news" || "$PROFILE" == "recommended" ]]; then
+  echo "Team Security News Radar runs saved /security-news/config sources and honors per-source weekdays."
+fi
 if [[ "$PROFILE" == "personal-cycle" || "$PROFILE" == "recommended" ]]; then
   echo "Personal cycle runs collection plus brief generation."
   echo "Do not also enable ai-side-brain-personal-literature-radar.timer."
@@ -185,4 +199,4 @@ else
   echo "Skipped enabling timers because --no-enable was set."
 fi
 
-echo "Installed Literature Radar user timer profile: $PROFILE"
+echo "Installed AI Side-Brain user timer profile: $PROFILE"

@@ -28,6 +28,16 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("Persistent=true", timer)
         self.assertIn("Unit=ai-side-brain-team-literature-radar-cycle.service", timer)
 
+    def test_team_security_news_timer_runs_saved_config_daily(self) -> None:
+        service = self.read_unit("ai-side-brain-team-security-news-radar.service")
+        timer = self.read_unit("ai-side-brain-team-security-news-radar.timer")
+
+        self.assertIn("ExecStart=%h/workspace/ai-side-brain/team/scripts/run_security_news_radar.sh", service)
+        self.assertIn("OnCalendar=*-*-* 06:20:00", timer)
+        self.assertIn("RandomizedDelaySec=10m", timer)
+        self.assertIn("Persistent=true", timer)
+        self.assertIn("Unit=ai-side-brain-team-security-news-radar.service", timer)
+
     def test_personal_cycle_timer_runs_daily_cycle(self) -> None:
         service = self.read_unit("ai-side-brain-personal-literature-radar-cycle.service")
         timer = self.read_unit("ai-side-brain-personal-literature-radar-cycle.timer")
@@ -147,9 +157,26 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
 
         self.assertIn("Installing profile: recommended", result.stdout)
         self.assertIn("ai-side-brain-team-literature-radar-cycle.timer", result.stdout)
+        self.assertIn("ai-side-brain-team-security-news-radar.timer", result.stdout)
         self.assertIn("ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
         self.assertNotIn("enable --now ai-side-brain-team-literature-radar.timer", result.stdout)
         self.assertNotIn("enable --now ai-side-brain-personal-literature-radar.timer", result.stdout)
+
+    def test_install_helper_team_news_profile_uses_security_news_timer_only(self) -> None:
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), "--dry-run", "--team-news"],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        self.assertIn("Installing profile: team-news", result.stdout)
+        self.assertIn("ai-side-brain-team-security-news-radar.service", result.stdout)
+        self.assertIn("ai-side-brain-team-security-news-radar.timer", result.stdout)
+        self.assertIn("systemctl --user enable --now ai-side-brain-team-security-news-radar.timer", result.stdout)
+        self.assertNotIn("enable --now ai-side-brain-team-literature-radar-cycle.timer", result.stdout)
+        self.assertNotIn("enable --now ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
 
     def test_install_helper_personal_cycle_profile_uses_cycle_timer_only(self) -> None:
         result = subprocess.run(
@@ -178,6 +205,7 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("Restoring AI Side-Brain user timers with profile: recommended", result.stdout)
         self.assertIn("Installing profile: recommended", result.stdout)
         self.assertIn("ai-side-brain-team-literature-radar-cycle.timer", result.stdout)
+        self.assertIn("ai-side-brain-team-security-news-radar.timer", result.stdout)
         self.assertIn("ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
         self.assertIn("Linger unchanged.", result.stdout)
         self.assertIn("ai-side-brain-team-research-web.service", result.stdout)

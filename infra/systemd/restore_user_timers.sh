@@ -18,12 +18,13 @@ Usage: infra/systemd/restore_user_timers.sh [options]
 
 Re-render, reload, and enable the safe AI Side-Brain user timers and Team web
 service after a reboot or user-manager reset. By default this restores the
-recommended Team and Personal cycle timers without enabling duplicate split
+recommended Team, News, and Personal timers without enabling duplicate split
 collection timers, and also enables the Team web UI service.
 
 Options:
-  --recommended        Restore recommended Team and Personal cycle timers. Default.
+  --recommended        Restore recommended Team, News, and Personal timers. Default.
   --team-cycle         Restore only the Team daily cycle timer.
+  --team-news          Restore only the Team Security News Radar timer.
   --personal-cycle     Restore only the Personal daily cycle timer.
   --split-team         Restore separate Team collection and brief timers.
   --split-personal     Restore separate Personal collection and brief timers.
@@ -45,6 +46,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --team-cycle)
       PROFILE_FLAG="--team-cycle"
+      ;;
+    --team-news)
+      PROFILE_FLAG="--team-news"
       ;;
     --personal|--personal-cycle)
       PROFILE_FLAG="--personal-cycle"

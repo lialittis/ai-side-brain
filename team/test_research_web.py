@@ -21,6 +21,7 @@ from team.research_db import TeamResearchDatabase
 from team.research_web import (
     RADAR_SETTINGS_KEY,
     RADAR_WEB_SOURCE_OPTIONS,
+    add_security_news_source,
     add_security_news_interest,
     add_paper_comment,
     add_paper_tag,
@@ -31,6 +32,7 @@ from team.research_web import (
     canonical_pdf_url,
     render_interests_page,
     render_latest_papers_page,
+    render_security_news_config_page,
     render_submit_page,
     render_today_history_page,
     render_today_page,
@@ -40,6 +42,7 @@ from team.research_web import (
     remove_paper,
     remove_paper_tag,
     remove_security_news_interest,
+    remove_security_news_source,
     remove_team_interest,
     radar_brief_path_from_fields,
     radar_queue_path_from_fields,
@@ -52,6 +55,8 @@ from team.research_web import (
     review_radar_queue_usefulness,
     review_radar_paper,
     run_literature_radar_from_web,
+    save_security_news_run_defaults,
+    save_security_news_source,
     save_today_snapshot,
     save_security_news_interest,
     save_team_interest,
@@ -71,6 +76,7 @@ from team.research_web import (
     render_radar_paper_history_item,
     render_radar_links,
 )
+from team.security_news import load_team_security_news_settings
 
 
 class TeamResearchWebTest(unittest.TestCase):
@@ -174,8 +180,8 @@ class TeamResearchWebTest(unittest.TestCase):
             latest = render_latest_papers_page(database)
             submit = render_submit_page(database)
 
-        self.assertIn("Latest", today)
-        self.assertIn("Latest Worth Reading", today)
+        self.assertIn("Papers", today)
+        self.assertIn("Papers Worth Reading", today)
         self.assertIn("Team Library", latest)
         self.assertIn("No relevant papers yet", latest)
         self.assertNotIn("Submit Research", latest)
@@ -183,10 +189,21 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Topics", latest)
         self.assertIn("Filter by source", latest)
         self.assertNotIn("Radar Ops", latest)
-        self.assertIn('href="/">Latest</a>', latest)
+        self.assertIn('href="/">Papers</a>', latest)
+        self.assertIn('href="/security-news">News</a>', latest)
         self.assertIn('href="/library">Library</a>', latest)
-        self.assertIn('href="/radar/brief?days=7&amp;limit=20">Digest</a>', latest)
         self.assertIn('href="/submit">Submit</a>', latest)
+        self.assertIn('href="/interests">Topics</a>', latest)
+        nav_positions = [
+            latest.index('href="/">Papers</a>'),
+            latest.index('href="/security-news">News</a>'),
+            latest.index('href="/library">Library</a>'),
+            latest.index('href="/submit">Submit</a>'),
+            latest.index('href="/interests">Topics</a>'),
+        ]
+        self.assertEqual(nav_positions, sorted(nav_positions))
+        self.assertNotIn('class="nav-item" href="/radar/brief?days=7&amp;limit=20">Digest</a>', latest)
+        self.assertNotIn('href="/latest/history">History</a>', latest)
         self.assertNotIn("Radar Today", latest)
         self.assertNotIn("All topics", latest)
         self.assertNotIn('name="topic"', latest)
@@ -217,7 +234,7 @@ class TeamResearchWebTest(unittest.TestCase):
             html = render_interests_page(database)
             self.assertIn("Topics", html)
             self.assertIn("Paper Radar Topics", html)
-            self.assertIn("Security News Interests", html)
+            self.assertIn("News Interests", html)
             self.assertIn("system security", html)
             self.assertIn("memory safety", html)
             self.assertIn("agentic security", html)
@@ -298,6 +315,75 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("cloud identity abuse", updated_news_keywords)
             self.assertNotIn("exploits and patches", updated_news_keywords)
 
+    def test_security_news_config_page_edits_sources_and_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+
+            html = render_security_news_config_page(database)
+            self.assertIn("News Radar Config", html)
+            self.assertIn("SecurityWeek", html)
+            self.assertIn('action="/security-news/config/source/add"', html)
+            self.assertIn('action="/security-news/config/settings"', html)
+            self.assertIn("Run day", html)
+            self.assertIn("Run News Now", html)
+
+            added = add_security_news_source(
+                database,
+                {
+                    "name": "Example Advisory",
+                    "url": "https://example.org/advisory.xml",
+                    "source_type": "advisory",
+                    "description": "High-signal advisories.",
+                    "enabled": "1",
+                },
+            )
+            self.assertEqual(added["id"], "example_advisory")
+            self.assertEqual(added["lookback_days"], 7)
+            self.assertIn(
+                added["run_day"],
+                {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"},
+            )
+            settings = load_team_security_news_settings(database)
+            self.assertIn("example_advisory", [source["id"] for source in settings["sources"]])
+
+            updated = save_security_news_source(
+                database,
+                {
+                    "source_id": "example_advisory",
+                    "name": "Example Advisory Feed",
+                    "url": "https://example.org/advisory.atom",
+                    "source_type": "advisory",
+                    "lookback_days": "21",
+                    "run_day": "friday",
+                    "description": "Updated feed.",
+                },
+            )
+            self.assertFalse(updated["enabled"])
+            self.assertEqual(updated["url"], "https://example.org/advisory.atom")
+            self.assertEqual(updated["lookback_days"], 21)
+            self.assertEqual(updated["run_day"], "friday")
+
+            save_security_news_run_defaults(
+                database,
+                {
+                    "max_entries_per_source": "11",
+                    "ai_enrich_present": "1",
+                    "ai_enrich": "1",
+                    "ai_enrich_limit": "3",
+                    "ai_enrich_min_score": "70",
+                },
+            )
+            settings = load_team_security_news_settings(database)
+            self.assertEqual(settings["max_entries_per_source"], 11)
+            self.assertTrue(settings["ai_enrich"])
+            self.assertEqual(settings["ai_enrich_limit"], 3)
+            self.assertEqual(settings["ai_enrich_min_score"], 70)
+
+            removed_id = remove_security_news_source(database, {"source_id": "example_advisory"})
+            self.assertEqual(removed_id, "example_advisory")
+            settings = load_team_security_news_settings(database)
+            self.assertNotIn("example_advisory", [source["id"] for source in settings["sources"]])
+
     def test_latest_radar_queue_shows_failed_run_health_without_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -338,7 +424,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 now=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
             )
 
-            self.assertIn("Latest Worth Reading", html)
+            self.assertIn("Papers Worth Reading", html)
             self.assertIn("No unhandled Radar papers are waiting", html)
             self.assertIn("Updated 2026-07-01 07:31", html)
             self.assertNotIn("some sources may be incomplete", html)
@@ -577,7 +663,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("https://arxiv.org/abs/2601.00051", queue_html)
             self.assertIn("legally downloadable PDF", queue_html)
             self.assertIn('href="/radar/queue.json?limit=1">Queue JSON</a>', queue_html)
-            self.assertIn('class="nav-item active" href="/">Latest</a>', queue_html)
+            self.assertIn('class="nav-item active" href="/">Papers</a>', queue_html)
             self.assertIn('name="reason" placeholder="Why save this?"', queue_html)
             self.assertIn('name="reason" placeholder="Why is this not relevant?"', queue_html)
             self.assertIn('name="return_to" value="queue"', queue_html)
@@ -665,7 +751,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Submit Research", submit_page_html)
             self.assertIn("Drop PDF or browse", submit_page_html)
             self.assertEqual(today_page_status, 200)
-            self.assertIn("Latest Worth Reading", today_page_html)
+            self.assertIn("Papers Worth Reading", today_page_html)
             self.assertIn("--openreview-venue-profile iclr", setup_env_text)
             self.assertIn("--usenix-cycle 1", setup_env_text)
             self.assertIn("--live --validation-max-results 1 --json", setup_env_text)
@@ -1127,7 +1213,8 @@ class TeamResearchWebTest(unittest.TestCase):
             )
 
             self.assertIn("Research Digest", brief_html)
-            self.assertIn('class="nav-item active" href="/radar/brief?days=7&amp;limit=20">Digest</a>', brief_html)
+            self.assertIn('href="/">Papers</a>', brief_html)
+            self.assertNotIn('class="nav-item active" href="/radar/brief?days=7&amp;limit=20">Digest</a>', brief_html)
             self.assertIn("Marked radar paper as watch.", brief_html)
             self.assertIn('name="run_limit" min="1" max="500" value="12"', brief_html)
             self.assertIn('name="queue_recent_days" min="0" max="365" value="7"', brief_html)
@@ -1220,7 +1307,7 @@ class TeamResearchWebTest(unittest.TestCase):
 
             papers_html = render_literature_radar_papers_page(database, limit=50)
 
-            self.assertIn("Radar Papers", papers_html)
+            self.assertIn("Paper History", papers_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", papers_html)
             self.assertIn("Latest signal:", papers_html)
             self.assertIn("A local summary for radar review.", papers_html)
@@ -2570,7 +2657,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("<strong>Why:</strong>", unreviewed_history_html)
             self.assertIn("<strong>Matched:</strong>", unreviewed_history_html)
             latest_html = render_today_page(database)
-            self.assertIn("Latest Worth Reading", latest_html)
+            self.assertIn("Papers Worth Reading", latest_html)
             self.assertIn(
                 "Showing 2 unhandled worth-reading papers from 1 new high-signal paper and 1 saved follow-up.",
                 latest_html,
@@ -2788,8 +2875,8 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_today_page(database)
             dismissed_history_html = render_literature_radar_papers_page(database, review_status="dismissed")
 
-            self.assertIn("Latest Worth Reading", latest_html)
-            self.assertIn("No unhandled papers match the Latest priority filters.", latest_html)
+            self.assertIn("Papers Worth Reading", latest_html)
+            self.assertIn("No unhandled papers match the Papers priority filters.", latest_html)
             self.assertNotIn("Dismissed Radar History Paper", latest_html)
             self.assertIn("<strong>Review note:</strong> Out of current system security scope.", dismissed_history_html)
 

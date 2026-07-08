@@ -8,8 +8,10 @@ import unittest
 from team.research_db import TeamResearchDatabase
 from team.security_news import (
     build_team_security_news_latest_payload,
+    load_team_security_news_settings,
     run_team_security_news_radar,
     save_team_security_news_latest_snapshot,
+    save_team_security_news_settings,
 )
 from team.research_web import render_security_news_page
 
@@ -90,9 +92,60 @@ class TeamSecurityNewsTest(unittest.TestCase):
             self.assertEqual(snapshot["kind"], "team_security_news_latest_snapshot")
 
             html = render_security_news_page(database, review_status="watch")
-            self.assertIn("Security News", html)
+            self.assertIn("News", html)
             self.assertIn("Critical Linux kernel RCE patch released", html)
             self.assertIn("Save", html)
+
+    def test_team_security_news_run_uses_saved_source_settings_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = TeamResearchDatabase(Path(tmp) / "team.sqlite3")
+            source = {
+                "id": "saved_security",
+                "name": "Saved Security",
+                "url": "https://saved.example/feed.xml",
+                "source_type": "research_blog",
+                "lookback_days": 5,
+            }
+            save_team_security_news_settings(
+                database,
+                {
+                    "sources": [source],
+                    "max_entries_per_source": 7,
+                    "ai_enrich": True,
+                    "ai_enrich_limit": 1,
+                    "ai_enrich_min_score": 1,
+                },
+            )
+
+            seen_urls: list[str] = []
+            client = FakeSecurityNewsClient()
+            result = run_team_security_news_radar(
+                database,
+                ai_client=client,
+                fetcher=lambda url: seen_urls.append(url) or fake_security_news_feed(),
+                now=datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc),
+            )
+
+            settings = load_team_security_news_settings(database)
+            self.assertEqual(settings["sources"][0]["id"], "saved_security")
+            self.assertEqual(seen_urls, ["https://saved.example/feed.xml"])
+            self.assertEqual(result["sources"][0]["source_type"], "research_blog")
+            self.assertEqual(result["run"]["collection_config"]["max_entries_per_source"], 7)
+            self.assertTrue(result["run"]["collection_config"]["ai_enrich"])
+            self.assertEqual(result["run"]["collection_config"]["ai_enrich_limit"], 1)
+            self.assertEqual(len(client.calls), 1)
+
+    def test_security_news_cli_preserves_saved_defaults_when_flags_are_omitted(self) -> None:
+        from team.research_cli import build_parser
+
+        args = build_parser().parse_args(["security-news-run"])
+
+        self.assertIsNone(args.max_entries_per_source)
+        self.assertIsNone(args.ai_enrich)
+        self.assertIsNone(args.ai_enrich_limit)
+        self.assertIsNone(args.ai_enrich_min_score)
+        self.assertTrue(build_parser().parse_args(["security-news-run", "--ai-enrich"]).ai_enrich)
+        self.assertFalse(build_parser().parse_args(["security-news-run", "--no-ai-enrich"]).ai_enrich)
 
     def test_team_security_news_run_can_store_ai_enrichment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

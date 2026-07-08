@@ -25,6 +25,8 @@ from team.security_news_interests import (
 
 TEAM_SECURITY_NEWS_PROMPT_VERSION = "team-openrouter-security-news-v0.1"
 TEAM_SECURITY_NEWS_PROCESSOR = "openrouter-team-security-news-v0.1"
+TEAM_SECURITY_NEWS_SETTINGS_KEY = "security_news_defaults"
+TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE = 20
 TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT = 5
 TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE = 60
 
@@ -54,8 +56,8 @@ def run_team_security_news_radar(
     database: TeamResearchDatabase,
     *,
     sources: list[dict[str, Any]] | None = None,
-    max_entries_per_source: int = 20,
-    ai_enrich: bool = False,
+    max_entries_per_source: int | None = None,
+    ai_enrich: bool | None = None,
     ai_enrich_limit: int | None = None,
     ai_enrich_min_score: int | None = None,
     ai_client: Any | None = None,
@@ -65,28 +67,39 @@ def run_team_security_news_radar(
     selected_now = now or datetime.now(timezone.utc)
     if selected_now.tzinfo is None:
         selected_now = selected_now.replace(tzinfo=timezone.utc)
-    selected_sources = [
-        normalize_security_news_source(source)
-        for source in (sources or DEFAULT_SECURITY_NEWS_SOURCES)
-    ]
+    settings = load_team_security_news_settings(database)
+    source_input = sources if sources is not None else settings.get("sources", DEFAULT_SECURITY_NEWS_SOURCES)
+    selected_sources = [normalize_security_news_source(source) for source in source_input]
+    selected_max_entries = (
+        max_entries_per_source
+        if max_entries_per_source is not None
+        else int(settings.get("max_entries_per_source") or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE)
+    )
+    selected_ai_enrich = bool(settings.get("ai_enrich")) if ai_enrich is None else bool(ai_enrich)
+    selected_ai_limit = (
+        ai_enrich_limit
+        if ai_enrich_limit is not None
+        else int(settings.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT)
+    )
+    selected_ai_min_score = (
+        ai_enrich_min_score
+        if ai_enrich_min_score is not None
+        else int(settings.get("ai_enrich_min_score") or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE)
+    )
     news_interests = database.list_security_news_interest_keywords()
     interest_profile_version = database.current_security_news_interest_profile_version(now=selected_now)
     interest_filter_terms = build_security_news_interest_filter_terms(news_interests)
     collection_config = {
         "kind": "team_security_news_collection_config",
-        "max_entries_per_source": max(1, int(max_entries_per_source or 20)),
+        "max_entries_per_source": max(1, int(selected_max_entries or TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE)),
         "interest_profile_version_id": interest_profile_version.get("id"),
         "interest_profile_hash": interest_profile_version.get("profile_hash"),
         "interest_count": int(interest_profile_version.get("interest_count") or 0),
         "include_keyword_count": len(interest_filter_terms["include_keywords"]),
         "exclude_keyword_count": len(interest_filter_terms["exclude_keywords"]),
-        "ai_enrich": bool(ai_enrich),
-        "ai_enrich_limit": TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT
-        if ai_enrich_limit is None
-        else max(0, int(ai_enrich_limit)),
-        "ai_enrich_min_score": TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE
-        if ai_enrich_min_score is None
-        else max(0, min(100, int(ai_enrich_min_score))),
+        "ai_enrich": selected_ai_enrich,
+        "ai_enrich_limit": max(0, int(selected_ai_limit)),
+        "ai_enrich_min_score": max(0, min(100, int(selected_ai_min_score))),
     }
     run = database.create_security_news_run(
         sources=selected_sources,
@@ -98,7 +111,7 @@ def run_team_security_news_radar(
     try:
         collection = collect_security_news_sources(
             selected_sources,
-            max_entries_per_source=max_entries_per_source,
+            max_entries_per_source=selected_max_entries,
             include_keywords=interest_filter_terms["include_keywords"],
             exclude_keywords=interest_filter_terms["exclude_keywords"] or list(DEFAULT_SECURITY_NEWS_EXCLUDE_KEYWORDS),
             fetcher=fetcher,
@@ -113,14 +126,14 @@ def run_team_security_news_radar(
             ),
             "interest_profile_version": interest_profile_version,
         }
-        if ai_enrich:
+        if selected_ai_enrich:
             collection = {
                 **collection,
                 "items": enrich_security_news_items_with_ai(
                     collection.get("items") if isinstance(collection.get("items"), list) else [],
                     client=ai_client,
-                    limit=ai_enrich_limit,
-                    min_score=ai_enrich_min_score,
+                    limit=selected_ai_limit,
+                    min_score=selected_ai_min_score,
                     now=selected_now,
                 ),
             }
@@ -152,6 +165,101 @@ def run_team_security_news_radar(
         "items": collection.get("items") or [],
         "report": report,
     }
+
+
+def team_security_news_default_settings() -> dict[str, Any]:
+    return {
+        "kind": "team_security_news_settings",
+        "sources": normalize_team_security_news_sources(DEFAULT_SECURITY_NEWS_SOURCES),
+        "max_entries_per_source": TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE,
+        "ai_enrich": False,
+        "ai_enrich_limit": TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
+        "ai_enrich_min_score": TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE,
+    }
+
+
+def load_team_security_news_settings(database: TeamResearchDatabase) -> dict[str, Any]:
+    defaults = team_security_news_default_settings()
+    saved = database.get_team_setting(TEAM_SECURITY_NEWS_SETTINGS_KEY, {}) or {}
+    if not isinstance(saved, dict):
+        saved = {}
+    sources = saved.get("sources") if isinstance(saved.get("sources"), list) else defaults["sources"]
+    settings = {
+        **defaults,
+        **saved,
+        "sources": normalize_team_security_news_sources(sources),
+        "max_entries_per_source": max(
+            1,
+            int(saved.get("max_entries_per_source") or defaults["max_entries_per_source"]),
+        ),
+        "ai_enrich": bool(saved.get("ai_enrich", defaults["ai_enrich"])),
+        "ai_enrich_limit": max(0, int(saved.get("ai_enrich_limit") or defaults["ai_enrich_limit"])),
+        "ai_enrich_min_score": max(
+            0,
+            min(100, int(saved.get("ai_enrich_min_score") or defaults["ai_enrich_min_score"])),
+        ),
+    }
+    return settings
+
+
+def save_team_security_news_settings(
+    database: TeamResearchDatabase,
+    settings: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    selected_now = now or datetime.now(timezone.utc)
+    current = load_team_security_news_settings(database)
+    saved = {
+        **current,
+        **settings,
+        "kind": "team_security_news_settings",
+        "sources": normalize_team_security_news_sources(settings.get("sources", current.get("sources") or [])),
+        "max_entries_per_source": max(
+            1,
+            int(settings.get("max_entries_per_source") or current.get("max_entries_per_source") or 20),
+        ),
+        "ai_enrich": bool(settings.get("ai_enrich", current.get("ai_enrich", False))),
+        "ai_enrich_limit": max(
+            0,
+            int(settings.get("ai_enrich_limit") or current.get("ai_enrich_limit") or TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT),
+        ),
+        "ai_enrich_min_score": max(
+            0,
+            min(
+                100,
+                int(
+                    settings.get("ai_enrich_min_score")
+                    or current.get("ai_enrich_min_score")
+                    or TEAM_SECURITY_NEWS_DEFAULT_AI_MIN_SCORE
+                ),
+            ),
+        ),
+        "updated_at": iso_timestamp(selected_now),
+    }
+    database.set_team_setting(TEAM_SECURITY_NEWS_SETTINGS_KEY, saved, now=selected_now)
+    return saved
+
+
+def team_security_news_sources_for_run(database: TeamResearchDatabase) -> list[dict[str, Any]]:
+    return list(load_team_security_news_settings(database).get("sources") or [])
+
+
+def normalize_team_security_news_sources(sources: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        record = normalize_security_news_source(source)
+        if not record.get("url"):
+            continue
+        source_id = str(record.get("id") or "").strip()
+        if not source_id or source_id in seen:
+            continue
+        seen.add(source_id)
+        normalized.append(record)
+    return normalized
 
 
 def build_team_security_news_latest_payload(
