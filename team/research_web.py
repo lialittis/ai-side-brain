@@ -115,7 +115,12 @@ from team.literature_radar import (
 )
 from team.research_ai import analyze_queued_item, analyze_submitted_item, queue_submitted_item_analysis
 from team.research_adapter import build_team_research_run
-from team.research_db import SECURITY_NEWS_STACK_RETENTION_DAYS, TeamResearchDatabase, default_db_path
+from team.research_db import (
+    SECURITY_NEWS_STACK_RETENTION_DAYS,
+    TeamResearchDatabase,
+    default_db_path,
+    restore_deadline_is_open,
+)
 from team.security_news import (
     TEAM_SECURITY_NEWS_DEFAULT_MAX_ENTRIES_PER_SOURCE,
     TEAM_SECURITY_NEWS_DEFAULT_AI_LIMIT,
@@ -1894,6 +1899,16 @@ def security_news_path(*, notice: str = "", limit: int = 20, review_filter: str 
     if notice:
         params["notice"] = notice
     return f"/security-news?{urlencode(params)}"
+
+
+def library_redirect_path(referer: str | None, *, notice: str, fallback: str = "/library?content=news") -> str:
+    parsed = urlparse(str(referer or ""))
+    if parsed.path == "/library":
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params["notice"] = [notice]
+        return f"/library?{urlencode(params, doseq=True)}"
+    separator = "&" if "?" in fallback else "?"
+    return f"{fallback}{separator}{urlencode({'notice': notice})}"
 
 
 def render_security_news_page(
@@ -6318,7 +6333,7 @@ def render_latest_papers_page(
         show_removed=show_removed,
         limit=500,
     )
-    saved_news = list_saved_security_news_for_library(database)
+    saved_news = list_saved_security_news_for_library(database, show_removed=show_removed)
     content_filter = clean_library_content_filter(content)
     base_records = build_library_records(base_papers, saved_news, content_filter=content_filter, tag=tag)
     source_filter = clean_library_source_filter(source)
@@ -7150,10 +7165,20 @@ def clean_library_content_filter(value: str | None) -> str:
     return selected if selected in allowed else "all"
 
 
-def list_saved_security_news_for_library(database: TeamResearchDatabase) -> list[dict[str, Any]]:
+def list_saved_security_news_for_library(
+    database: TeamResearchDatabase,
+    *,
+    show_removed: bool = False,
+) -> list[dict[str, Any]]:
     records_by_key: dict[str, dict[str, Any]] = {}
-    for status in ("library", "watch"):
+    statuses = ["library", "watch", "removed"]
+    for status in statuses:
         for record in database.list_security_news_items(limit=None, review_status=status):
+            if status == "removed":
+                recoverable = restore_deadline_is_open(record.get("restore_until"))
+                if not recoverable and not show_removed:
+                    continue
+                record = {**record, "recoverable": recoverable}
             key = str(record.get("dedupe_key") or record.get("url") or record.get("title") or "")
             if key:
                 records_by_key[key] = record
@@ -7366,45 +7391,68 @@ def render_library_source_options(records: list[dict[str, Any]], selected: str) 
 def sort_library_records(records: list[dict[str, Any]], *, sort_by: str) -> list[dict[str, Any]]:
     selected = str(sort_by or "latest")
     if selected == "name":
-        return sorted(records, key=lambda record: library_record_title(record).casefold())
+        return library_records_with_removed_last(sorted(records, key=lambda record: library_record_title(record).casefold()))
     if selected == "publish_date":
-        return sorted(
-            records,
-            key=lambda record: (
-                library_record_publish_date(record),
-                library_record_latest_date(record),
-                library_record_title(record).casefold(),
-            ),
-            reverse=True,
+        return library_records_with_removed_last(
+            sorted(
+                records,
+                key=lambda record: (
+                    library_record_publish_date(record),
+                    library_record_latest_date(record),
+                    library_record_title(record).casefold(),
+                ),
+                reverse=True,
+            )
         )
     if selected == "relevance":
-        return sorted(
+        return library_records_with_removed_last(
+            sorted(
+                records,
+                key=lambda record: (
+                    library_record_score(record),
+                    library_record_latest_date(record),
+                    library_record_title(record).casefold(),
+                ),
+                reverse=True,
+            )
+        )
+    if selected == "importance":
+        return library_records_with_removed_last(
+            sorted(
+                records,
+                key=lambda record: (
+                    library_record_importance(record),
+                    library_record_score(record),
+                    library_record_latest_date(record),
+                ),
+                reverse=True,
+            )
+        )
+    return library_records_with_removed_last(
+        sorted(
             records,
             key=lambda record: (
-                library_record_score(record),
                 library_record_latest_date(record),
                 library_record_title(record).casefold(),
             ),
             reverse=True,
         )
-    if selected == "importance":
-        return sorted(
-            records,
-            key=lambda record: (
-                library_record_importance(record),
-                library_record_score(record),
-                library_record_latest_date(record),
-            ),
-            reverse=True,
-        )
-    return sorted(
-        records,
-        key=lambda record: (
-            library_record_latest_date(record),
-            library_record_title(record).casefold(),
-        ),
-        reverse=True,
     )
+
+
+def library_records_with_removed_last(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    active = [record for record in records if not library_record_removed(record)]
+    removed = [record for record in records if library_record_removed(record)]
+    return [*active, *removed]
+
+
+def library_record_removed(record: dict[str, Any]) -> bool:
+    if record.get("kind") == "news":
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return str(news.get("review_status") or "") == "removed"
+    paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
+    library_entry = paper.get("library_entry") if isinstance(paper.get("library_entry"), dict) else {}
+    return str(library_entry.get("status") or "") == "removed"
 
 
 def library_record_title(record: dict[str, Any]) -> str:
@@ -7459,7 +7507,8 @@ def library_record_score(record: dict[str, Any]) -> float:
 
 def library_record_importance(record: dict[str, Any]) -> int:
     if record.get("kind") == "news":
-        return int(library_record_score(record))
+        news = record.get("news") if isinstance(record.get("news"), dict) else {}
+        return int(news.get("importance") or 0)
     paper = record.get("paper") if isinstance(record.get("paper"), dict) else record
     return int(paper.get("importance") or 0)
 
@@ -7553,13 +7602,18 @@ def render_library_news_card(record: dict[str, Any]) -> str:
     item = record.get("latest_item") if isinstance(record.get("latest_item"), dict) else {}
     scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
     ai = record.get("ai_enrichment") if isinstance(record.get("ai_enrichment"), dict) else {}
+    dedupe_key = record.get("dedupe_key") or ""
+    removed = str(record.get("review_status") or "") == "removed"
     summary = normalize_inline_text(item.get("summary") or "")
     summary_suffix = "..." if len(summary) > 420 else ""
     summary_html = f'<p class="abstract">{html_escape(summary[:420])}{summary_suffix}</p>' if summary else ""
     url = str(item.get("url") or record.get("url") or "")
     link_html = f'<a class="button primary" href="{html_escape(url)}" target="_blank" rel="noopener">Open Link</a>' if url else ""
     tags = [str(tag) for tag in record.get("tags") or [] if str(tag).strip()]
-    tag_html = render_security_news_tag_editor(record.get("dedupe_key") or "", tags)
+    tag_html = render_plain_news_tags(tags) if removed else render_security_news_tag_editor(dedupe_key, tags)
+    importance_html = render_security_news_importance_pill(record) if removed else render_security_news_importance_control(record)
+    relevance_html = relevance_pill(security_news_member_relevance_label(record)) if removed else render_security_news_relevance_control(record)
+    news_actions = render_security_news_removed_controls(record) if removed else render_security_news_active_actions(record)
     matched = (
         scoring.get("matched_news_interests")
         or scoring.get("matched_news_interest_terms")
@@ -7576,7 +7630,7 @@ def render_library_news_card(record: dict[str, Any]) -> str:
     published = display_radar_datetime(str(item.get("published_at") or item.get("updated_at") or ""))
     meta_parts = [part for part in [f"Saved {saved_at}" if saved_at else "", f"Published {published}" if published else ""] if part]
     return f"""
-    <article class="paper library-news">
+    <article class="paper library-news{' removed' if removed else ''}">
       <div class="paper-body">
         <div class="library-card-head">
           <div>
@@ -7594,10 +7648,16 @@ def render_library_news_card(record: dict[str, Any]) -> str:
         {summary_html}
         <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
         {matched_html}
+        {render_security_news_comments(record)}
       </div>
       <div class="paper-footer">
         <div class="paper-controls">
+          {importance_html}
+          {relevance_html}
           {link_html}
+        </div>
+        <div class="paper-actions">
+          {news_actions}
         </div>
       </div>
     </article>
@@ -7616,6 +7676,38 @@ def render_library_news_source_badges(record: dict[str, Any]) -> str:
       <span class="tag source-label">Source: {html_escape(source["label"])}</span>
       {class_html}
     </div>
+    """
+
+
+def render_security_news_importance_pill(record: dict[str, Any]) -> str:
+    return f'<span class="pill">Importance: {int(record.get("importance") or 0)}</span>'
+
+
+def render_security_news_active_actions(record: dict[str, Any]) -> str:
+    dedupe_key = str(record.get("dedupe_key") or "")
+    if not dedupe_key:
+        return ""
+    return f"""
+    <form class="inline-form" method="post" action="/security-news/remove">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <input type="hidden" name="actor" value="team-member">
+      <button class="mini-button danger" type="submit">Remove</button>
+    </form>
+    """
+
+
+def render_security_news_removed_controls(record: dict[str, Any]) -> str:
+    dedupe_key = str(record.get("dedupe_key") or "")
+    restore_until = str(record.get("restore_until") or "")
+    if not record.get("recoverable"):
+        return f'<div class="muted">Recovery expired: {html_escape(restore_until)}</div>'
+    return f"""
+    <form class="inline-form" method="post" action="/security-news/recover">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <input type="hidden" name="actor" value="team-member">
+      <span class="muted">Recover before {html_escape(restore_until)}</span>
+      <button class="mini-button" type="submit">Recover</button>
+    </form>
     """
 
 
@@ -7901,6 +7993,18 @@ def render_paper_comments(paper: dict[str, Any]) -> str:
     """
 
 
+def render_security_news_comments(record: dict[str, Any]) -> str:
+    dedupe_key = str(record.get("dedupe_key") or "")
+    comments = record.get("comments") if isinstance(record.get("comments"), list) else []
+    comment_lines = "".join(render_comment_line(comment) for comment in comments)
+    return f"""
+    <div class="comments">
+      {comment_lines}
+      {render_add_security_news_comment_form(dedupe_key)}
+    </div>
+    """
+
+
 def render_comment_line(comment: dict[str, Any]) -> str:
     created_at_raw = str(comment.get("created_at") or "")
     created_at = html_escape(created_at_raw)
@@ -7927,6 +8031,19 @@ def render_add_comment_form(item_id: str) -> str:
     return f"""
     <form class="comment-form" method="post" action="/paper/comment/add">
       <input type="hidden" name="item_id" value="{html_escape(item_id)}">
+      <input class="comment-name-input" name="name" placeholder="Name" aria-label="Comment name" required>
+      <input class="comment-content-input" name="content" placeholder="Add comment" aria-label="Comment content" required>
+      <button class="mini-button" type="submit">Add</button>
+    </form>
+    """
+
+
+def render_add_security_news_comment_form(dedupe_key: str) -> str:
+    if not dedupe_key:
+        return ""
+    return f"""
+    <form class="comment-form" method="post" action="/security-news/comment/add">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
       <input class="comment-name-input" name="name" placeholder="Name" aria-label="Comment name" required>
       <input class="comment-content-input" name="content" placeholder="Add comment" aria-label="Comment content" required>
       <button class="mini-button" type="submit">Add</button>
@@ -8123,6 +8240,50 @@ def render_importance_control(paper: dict[str, Any]) -> str:
       <button class="sr-only" type="submit">Save importance</button>
     </form>
     """
+
+
+def render_security_news_relevance_control(record: dict[str, Any]) -> str:
+    dedupe_key = str(record.get("dedupe_key") or "")
+    if not dedupe_key:
+        return ""
+    return f"""
+    <form class="inline-form" method="post" action="/security-news/relevance">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <select class="pill-select" name="relevance_label" aria-label="Relevance" onchange="this.form.submit()">
+        {render_relevance_options(security_news_member_relevance_label(record))}
+      </select>
+      <button class="sr-only" type="submit">Save relevance</button>
+    </form>
+    """
+
+
+def render_security_news_importance_control(record: dict[str, Any]) -> str:
+    dedupe_key = str(record.get("dedupe_key") or "")
+    if not dedupe_key:
+        return ""
+    return f"""
+    <form class="inline-form" method="post" action="/security-news/importance">
+      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
+      <select class="pill-select" name="importance" aria-label="Importance" onchange="this.form.submit()">
+        {render_importance_options(int(record.get("importance") or 0))}
+      </select>
+      <button class="sr-only" type="submit">Save importance</button>
+    </form>
+    """
+
+
+def security_news_member_relevance_label(record: dict[str, Any]) -> str:
+    label = str(record.get("member_relevance_label") or "").strip()
+    if label in RELEVANCE_LABELS:
+        return label
+    scoring = record.get("latest_scoring") if isinstance(record.get("latest_scoring"), dict) else {}
+    return {
+        "urgent": "highly_relevant",
+        "worth_reading": "highly_relevant",
+        "watch": "possibly_relevant",
+        "low_priority": "low_relevance",
+        "ignore": "low_relevance",
+    }.get(str(scoring.get("label") or ""), "needs_review")
 
 
 def render_relevance_options(selected: str | None) -> str:
@@ -8662,6 +8823,54 @@ def remove_security_news_tag_from_web(database: TeamResearchDatabase, fields: di
         raise ValueError("Tag cannot be empty.")
     tags = [tag for tag in database.get_security_news_item_tags(dedupe_key) if tag != removed_tag]
     database.set_security_news_item_tags(dedupe_key, tags)
+    return dedupe_key
+
+
+def update_security_news_relevance_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    database.update_security_news_relevance(
+        dedupe_key,
+        label=clean_relevance_label(fields.get("relevance_label", "")),
+        actor=fields.get("actor") or "team-member",
+    )
+    return dedupe_key
+
+
+def update_security_news_importance_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    database.update_security_news_importance(
+        dedupe_key,
+        importance=clean_importance(fields.get("importance", "0")),
+        actor=fields.get("actor") or "team-member",
+    )
+    return dedupe_key
+
+
+def add_security_news_comment_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    database.add_security_news_comment(
+        dedupe_key,
+        author=required_field(fields, "name"),
+        content=required_field(fields, "content"),
+    )
+    return dedupe_key
+
+
+def remove_security_news_from_library_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    database.remove_security_news_from_library(
+        dedupe_key,
+        actor=fields.get("actor") or "team-member",
+    )
+    return dedupe_key
+
+
+def recover_security_news_to_library_from_web(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    dedupe_key = required_field(fields, "dedupe_key")
+    database.restore_security_news_to_library(
+        dedupe_key,
+        actor=fields.get("actor") or "team-member",
+    )
     return dedupe_key
 
 
@@ -9761,13 +9970,68 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 self.redirect(f"/library?notice={quote(f'Removed tag from {item_id}.')}")
             elif parsed.path == "/security-news/tag/add":
                 dedupe_key = add_security_news_tag_from_web(self.database, fields)
-                self.redirect(f"/library?content=news&notice={quote(f'Added news tag for {dedupe_key}.')}")
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Added news tag for {dedupe_key}.",
+                    )
+                )
             elif parsed.path == "/security-news/tag/update":
                 dedupe_key = update_security_news_tag_from_web(self.database, fields)
-                self.redirect(f"/library?content=news&notice={quote(f'Updated news tag for {dedupe_key}.')}")
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Updated news tag for {dedupe_key}.",
+                    )
+                )
             elif parsed.path == "/security-news/tag/remove":
                 dedupe_key = remove_security_news_tag_from_web(self.database, fields)
-                self.redirect(f"/library?content=news&notice={quote(f'Removed news tag from {dedupe_key}.')}")
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Removed news tag from {dedupe_key}.",
+                    )
+                )
+            elif parsed.path == "/security-news/relevance":
+                dedupe_key = update_security_news_relevance_from_web(self.database, fields)
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Updated news relevance for {dedupe_key}.",
+                    )
+                )
+            elif parsed.path == "/security-news/importance":
+                dedupe_key = update_security_news_importance_from_web(self.database, fields)
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Updated news importance for {dedupe_key}.",
+                    )
+                )
+            elif parsed.path == "/security-news/comment/add":
+                dedupe_key = add_security_news_comment_from_web(self.database, fields)
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Added news comment to {dedupe_key}.",
+                    )
+                )
+            elif parsed.path == "/security-news/remove":
+                dedupe_key = remove_security_news_from_library_from_web(self.database, fields)
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Removed news {dedupe_key}. You can recover it for 24 hours.",
+                    )
+                )
+            elif parsed.path == "/security-news/recover":
+                dedupe_key = recover_security_news_to_library_from_web(self.database, fields)
+                self.redirect(
+                    library_redirect_path(
+                        self.headers.get("Referer"),
+                        notice=f"Recovered news {dedupe_key}.",
+                    )
+                )
             elif parsed.path == "/paper/comment/add":
                 item_id = add_paper_comment(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Added comment to {item_id}.')}")

@@ -43,7 +43,7 @@ from team.security_news_interests import DEFAULT_TEAM_SECURITY_NEWS_INTERESTS
 REMOVAL_RECOVERY_HOURS = 24
 DEFAULT_LIBRARY_PROJECT_ID = "team-library"
 RADAR_REVIEW_STATUSES = {"unreviewed", "watch", "dismissed"}
-SECURITY_NEWS_REVIEW_STATUSES = {"unreviewed", "library", "expired", "watch", "dismissed"}
+SECURITY_NEWS_REVIEW_STATUSES = {"unreviewed", "library", "expired", "watch", "dismissed", "removed"}
 SECURITY_NEWS_STACK_RETENTION_DAYS = 30
 LITERATURE_RADAR_CURRENT_DATA_TABLES = (
     ("literature_radar_recommendations", "recommendations"),
@@ -2686,7 +2686,7 @@ class TeamResearchDatabase:
 
     def security_news_item_review_counts(self) -> dict[str, int]:
         self.initialize()
-        counts = {"all": 0, "unreviewed": 0, "library": 0, "expired": 0, "watch": 0, "dismissed": 0}
+        counts = {"all": 0, "unreviewed": 0, "library": 0, "expired": 0, "watch": 0, "dismissed": 0, "removed": 0}
         with self.connect() as connection:
             rows = connection.execute("SELECT record_json FROM security_news_items").fetchall()
         for row in rows:
@@ -2753,6 +2753,259 @@ class TeamResearchDatabase:
                 ),
             )
         return record
+
+    def update_security_news_importance(
+        self,
+        dedupe_key: str,
+        *,
+        importance: int,
+        actor: str = "team-member",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        selected_importance = min(5, max(0, int(importance)))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            before = dict(record)
+            record["importance"] = selected_importance
+            record["importance_updated_at"] = timestamp
+            record["importance_updated_by"] = actor
+            self._update_security_news_item_record(connection, record)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_item_importance_updated",
+                    object_type="security_news_item_importance",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return record
+
+    def update_security_news_relevance(
+        self,
+        dedupe_key: str,
+        *,
+        label: str,
+        actor: str = "team-member",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        selected_label = reflow_comment_text(label)
+        if not selected_label:
+            raise ValueError("Security news relevance label cannot be empty.")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            before = dict(record)
+            record["member_relevance_label"] = selected_label
+            record["member_relevance_updated_at"] = timestamp
+            record["member_relevance_updated_by"] = actor
+            self._update_security_news_item_record(connection, record)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_item_relevance_updated",
+                    object_type="security_news_item_relevance",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return record
+
+    def add_security_news_comment(
+        self,
+        dedupe_key: str,
+        *,
+        author: str,
+        content: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        cleaned_author = reflow_comment_text(author)
+        cleaned_content = reflow_comment_text(content)
+        if not cleaned_author:
+            raise ValueError("Comment name cannot be empty.")
+        if not cleaned_content:
+            raise ValueError("Comment content cannot be empty.")
+        comment = {
+            "id": stable_id(
+                "security-news-comment",
+                {
+                    "dedupe_key": dedupe_key,
+                    "author": cleaned_author,
+                    "content": cleaned_content,
+                    "created_at": timestamp,
+                },
+            ),
+            "dedupe_key": dedupe_key,
+            "author": cleaned_author,
+            "content": cleaned_content,
+            "created_at": timestamp,
+        }
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            before = dict(record)
+            comments = record.get("comments") if isinstance(record.get("comments"), list) else []
+            record["comments"] = [*comments, comment]
+            self._update_security_news_item_record(connection, record)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=cleaned_author,
+                    action="security_news_item_commented",
+                    object_type="security_news_item_comment",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return comment
+
+    def remove_security_news_from_library(
+        self,
+        dedupe_key: str,
+        *,
+        actor: str = "team-member",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        restore_until = iso_timestamp(selected_now + timedelta(hours=REMOVAL_RECOVERY_HOURS))
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            before = dict(record)
+            previous_status = str(record.get("review_status") or "library")
+            if previous_status == "removed":
+                previous_status = str(record.get("previous_review_status") or "library")
+            if previous_status not in {"library", "watch"}:
+                previous_status = "library"
+            record.update(
+                {
+                    "review_status": "removed",
+                    "previous_review_status": previous_status,
+                    "reviewed_by": actor,
+                    "reviewed_at": timestamp,
+                    "review_reason": "Removed from the team library.",
+                    "removed_by": actor,
+                    "removed_at": timestamp,
+                    "restore_until": restore_until,
+                    "review": {
+                        "status": "removed",
+                        "reviewed_by": actor,
+                        "reviewed_at": timestamp,
+                        "reason": "Removed from the team library.",
+                    },
+                }
+            )
+            self._update_security_news_item_record(connection, record)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_item_removed",
+                    object_type="security_news_item",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return {"dedupe_key": dedupe_key, "removed_at": timestamp, "restore_until": restore_until}
+
+    def restore_security_news_to_library(
+        self,
+        dedupe_key: str,
+        *,
+        actor: str = "team-member",
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        selected_now = now or datetime.now(timezone.utc)
+        timestamp = iso_timestamp(selected_now)
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM security_news_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown security news item: {dedupe_key}")
+            record = loads(row["record_json"])
+            if str(record.get("review_status") or "") != "removed":
+                raise ValueError(f"Security news item {dedupe_key} is not removed")
+            if not restore_deadline_is_open(record.get("restore_until"), now=selected_now):
+                raise ValueError("The 24-hour recovery window has expired.")
+            before = dict(record)
+            restored_status = str(record.get("previous_review_status") or "library")
+            if restored_status not in {"library", "watch"}:
+                restored_status = "library"
+            record.update(
+                {
+                    "review_status": restored_status,
+                    "reviewed_by": actor,
+                    "reviewed_at": timestamp,
+                    "review_reason": "Recovered to the team library.",
+                    "restored_by": actor,
+                    "restored_at": timestamp,
+                    "review": {
+                        "status": restored_status,
+                        "reviewed_by": actor,
+                        "reviewed_at": timestamp,
+                        "reason": "Recovered to the team library.",
+                    },
+                }
+            )
+            self._update_security_news_item_record(connection, record)
+            self._insert_audit_event(
+                connection,
+                create_audit_event(
+                    actor=actor,
+                    action="security_news_item_restored",
+                    object_type="security_news_item",
+                    object_id=dedupe_key,
+                    before=before,
+                    after=record,
+                    now=selected_now,
+                ),
+            )
+        return {"dedupe_key": dedupe_key, "restored_at": timestamp, "status": restored_status}
 
     def save_security_news_latest_snapshot(
         self,
@@ -3420,6 +3673,23 @@ class TeamResearchDatabase:
         }
         for key in ("reviewed_by", "reviewed_at", "review_reason", "review"):
             if existing.get(key):
+                record[key] = existing[key]
+        for key in (
+            "importance",
+            "importance_updated_at",
+            "importance_updated_by",
+            "member_relevance_label",
+            "member_relevance_updated_at",
+            "member_relevance_updated_by",
+            "comments",
+            "previous_review_status",
+            "removed_by",
+            "removed_at",
+            "restore_until",
+            "restored_by",
+            "restored_at",
+        ):
+            if key in existing:
                 record[key] = existing[key]
         if isinstance(item.get("ai_enrichment"), dict):
             record["ai_enrichment"] = item["ai_enrichment"]

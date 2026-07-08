@@ -25,6 +25,7 @@ from team.research_web import (
     add_security_news_interest,
     add_paper_comment,
     add_paper_tag,
+    add_security_news_comment_from_web,
     add_team_interest,
     add_security_news_tag_from_web,
     build_literature_radar_settings_payload,
@@ -40,9 +41,11 @@ from team.research_web import (
     render_today_page,
     parse_post_form,
     queue_paper_ai_analysis_from_web,
+    recover_security_news_to_library_from_web,
     recover_paper,
     remove_paper,
     remove_paper_tag,
+    remove_security_news_from_library_from_web,
     remove_security_news_tag_from_web,
     remove_security_news_interest,
     remove_security_news_source,
@@ -53,6 +56,7 @@ from team.research_web import (
     import_radar_recommendation_to_library,
     import_radar_paper_to_library,
     import_radar_queue_to_library,
+    library_redirect_path,
     make_handler,
     radar_queue_review_notice,
     review_radar_queue_usefulness,
@@ -67,6 +71,8 @@ from team.research_web import (
     submit_research_item,
     team_radar_source_validation_args,
     update_paper_tag,
+    update_security_news_importance_from_web,
+    update_security_news_relevance_from_web,
     update_security_news_tag_from_web,
     update_paper_importance,
     update_paper_interactions,
@@ -483,12 +489,41 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("library-type-badge news", library_html)
             self.assertIn("kernel-security", library_html)
             self.assertIn('action="/security-news/tag/add"', library_html)
+            self.assertIn('action="/security-news/importance"', library_html)
+            self.assertIn('action="/security-news/relevance"', library_html)
+            self.assertIn('action="/security-news/comment/add"', library_html)
+            self.assertIn('action="/security-news/remove"', library_html)
             self.assertIn("Source: Example Security", library_html)
             self.assertIn("Priority", library_html)
             self.assertIn('<option value="news" selected>News</option>', library_html)
             filtered_html = render_latest_papers_page(database, content="news", tag="kernel-security")
             self.assertIn("Critical Linux kernel RCE patch released", filtered_html)
             self.assertNotIn("Legacy saved cloud advisory", filtered_html)
+
+            update_security_news_importance_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "importance": "4", "actor": "alice"},
+            )
+            update_security_news_relevance_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "relevance_label": "low_relevance", "actor": "alice"},
+            )
+            add_security_news_comment_from_web(
+                database,
+                {
+                    "dedupe_key": record["dedupe_key"],
+                    "name": "alice",
+                    "content": "Good example for kernel patch triage.",
+                },
+            )
+            interacted = database.get_security_news_item(record["dedupe_key"])
+            self.assertEqual(interacted["importance"], 4)
+            self.assertEqual(interacted["member_relevance_label"], "low_relevance")
+            self.assertEqual(interacted["comments"][0]["content"], "Good example for kernel patch triage.")
+            interacted_html = render_latest_papers_page(database, content="news")
+            self.assertIn('<option value="4" selected>4</option>', interacted_html)
+            self.assertIn('<option value="low_relevance" selected>low_relevance</option>', interacted_html)
+            self.assertIn("Good example for kernel patch triage.", interacted_html)
 
             add_security_news_tag_from_web(database, {"dedupe_key": record["dedupe_key"], "tag": "cloud security"})
             self.assertIn("cloud-security", database.get_security_news_item_tags(record["dedupe_key"]))
@@ -502,6 +537,56 @@ class TeamResearchWebTest(unittest.TestCase):
                 {"dedupe_key": record["dedupe_key"], "old_tag": "cloud-incident"},
             )
             self.assertNotIn("cloud-incident", database.get_security_news_item_tags(record["dedupe_key"]))
+
+            remove_security_news_from_library_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "actor": "alice"},
+            )
+            removed = database.get_security_news_item(record["dedupe_key"])
+            self.assertEqual(removed["review_status"], "removed")
+            self.assertIn("restore_until", removed)
+            removed_html = render_latest_papers_page(database, content="news")
+            self.assertIn("Critical Linux kernel RCE patch released", removed_html)
+            self.assertIn("Recover before", removed_html)
+            self.assertIn('action="/security-news/recover"', removed_html)
+
+            recover_security_news_to_library_from_web(
+                database,
+                {"dedupe_key": record["dedupe_key"], "actor": "alice"},
+            )
+            recovered = database.get_security_news_item(record["dedupe_key"])
+            self.assertEqual(recovered["review_status"], "library")
+
+            database.remove_security_news_from_library(
+                record["dedupe_key"],
+                actor="alice",
+                now=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            expired_hidden_html = render_latest_papers_page(database, content="news")
+            self.assertNotIn("Critical Linux kernel RCE patch released", expired_hidden_html)
+            expired_visible_html = render_latest_papers_page(database, content="news", show_removed=True)
+            self.assertIn("Critical Linux kernel RCE patch released", expired_visible_html)
+            self.assertIn("Recovery expired", expired_visible_html)
+
+    def test_security_news_library_actions_preserve_current_library_filter(self) -> None:
+        self.assertEqual(
+            library_redirect_path(
+                "http://127.0.0.1:8790/library?content=all&sort=importance",
+                notice="Updated news importance for item.",
+            ),
+            "/library?content=all&sort=importance&notice=Updated+news+importance+for+item.",
+        )
+        self.assertEqual(
+            library_redirect_path(
+                "http://127.0.0.1:8790/library?content=news&tag=kernel-security",
+                notice="Updated news relevance for item.",
+            ),
+            "/library?content=news&tag=kernel-security&notice=Updated+news+relevance+for+item.",
+        )
+        self.assertEqual(
+            library_redirect_path("http://127.0.0.1:8790/security-news", notice="Updated."),
+            "/library?content=news&notice=Updated.",
+        )
 
     def test_latest_radar_queue_shows_failed_run_health_without_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
