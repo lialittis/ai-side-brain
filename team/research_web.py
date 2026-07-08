@@ -1134,6 +1134,36 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       display: grid;
       gap: 10px;
     }}
+    .news-source-link-list {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }}
+    .news-source-link {{
+      display: grid;
+      gap: 3px;
+      padding: 9px 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      text-decoration: none;
+      min-width: 0;
+    }}
+    .news-source-link:hover {{
+      border-color: #8ca5c4;
+      background: #f7fbff;
+    }}
+    .news-source-link strong {{
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }}
+    .news-source-link span {{
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }}
     .news-source-card {{
       display: grid;
       gap: 10px;
@@ -1141,6 +1171,11 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       border: 1px solid var(--line-soft);
       border-radius: 8px;
       background: #fbfcfe;
+    }}
+    .news-source-add-card {{
+      border-color: #9fb8c9;
+      background: #f4faf8;
+      box-shadow: inset 0 0 0 1px rgba(45, 125, 105, 0.08);
     }}
     .news-source-head {{
       display: flex;
@@ -1168,6 +1203,15 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 8px;
       align-items: center;
       flex-wrap: wrap;
+    }}
+    .radar-review-controls {{
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      flex-wrap: wrap;
+    }}
+    .radar-review-controls form {{
+      margin: 0;
     }}
     .today-hero {{
       display: grid;
@@ -1999,7 +2043,7 @@ def render_security_news_config_page(database: TeamResearchDatabase, notice: str
       <section class="panel">
         <div class="today-head">
           <div>
-            <h2>Sources</h2>
+            <h2>Add Source</h2>
             <div class="muted">{enabled_count} enabled of {len(sources)} configured RSS/Atom source{'' if len(sources) == 1 else 's'}.</div>
           </div>
           <div class="news-config-actions">
@@ -2007,8 +2051,14 @@ def render_security_news_config_page(database: TeamResearchDatabase, notice: str
             <a class="button" href="/security-news.json?limit=20&amp;review=unreviewed">JSON</a>
           </div>
         </div>
-        {render_security_news_source_cards(sources)}
         {render_security_news_add_source_form()}
+        <div class="radar-provenance">
+          <div class="radar-provenance-section">
+            <div class="radar-provenance-title">Configured Sources</div>
+            {render_security_news_source_link_list(sources)}
+          </div>
+        </div>
+        {render_security_news_source_cards(sources)}
       </section>
       <aside class="panel">
         <h2>Run Defaults</h2>
@@ -2030,6 +2080,31 @@ def render_security_news_source_cards(sources: list[dict[str, Any]]) -> str:
         return '<div class="empty">No news sources configured.</div>'
     cards = "".join(render_security_news_source_card(source) for source in sources)
     return f'<div class="news-source-list">{cards}</div>'
+
+
+def render_security_news_source_link_list(sources: list[dict[str, Any]]) -> str:
+    if not sources:
+        return '<div class="empty">No source links yet.</div>'
+    links = []
+    for source in sources:
+        url = str(source.get("url") or "").strip()
+        if not url:
+            continue
+        name = str(source.get("name") or source.get("id") or "Source").strip()
+        source_type = str(source.get("source_type") or "rss").replace("_", " ")
+        run_day = str(source.get("run_day") or "daily")
+        state = "enabled" if source.get("enabled", True) else "disabled"
+        links.append(
+            f"""
+            <a class="news-source-link" href="{html_escape(url)}" target="_blank" rel="noopener">
+              <strong>{html_escape(name)}</strong>
+              <span>{html_escape(source_type)} · {html_escape(run_day)} · {html_escape(state)}</span>
+            </a>
+            """
+        )
+    if not links:
+        return '<div class="empty">No source links yet.</div>'
+    return f'<div class="news-source-link-list">{"".join(links)}</div>'
 
 
 def render_security_news_source_card(source: dict[str, Any]) -> str:
@@ -2089,9 +2164,9 @@ def render_security_news_source_card(source: dict[str, Any]) -> str:
 
 def render_security_news_add_source_form() -> str:
     return f"""
-    <form class="news-source-card" method="post" action="/security-news/config/source/add">
+    <form class="news-source-card news-source-add-card" method="post" action="/security-news/config/source/add">
       <div class="news-source-head">
-        <h3>Add Source</h3>
+        <h3>New RSS/Atom Source</h3>
         <span class="tag">RSS/Atom</span>
       </div>
       <div class="news-source-fields">
@@ -2332,14 +2407,28 @@ def render_security_news_review_reason(record: dict[str, Any]) -> str:
 def render_security_news_review_controls(dedupe_key: str, *, review_filter: str, limit: int) -> str:
     if not dedupe_key:
         return ""
+    selected_review = html_escape(clean_security_news_status_filter(review_filter))
+    selected_limit = max(1, int(limit or 20))
+    escaped_key = html_escape(dedupe_key)
     return f"""
-    <form class="radar-review-controls" method="post" action="/security-news/save">
-      <input type="hidden" name="dedupe_key" value="{html_escape(dedupe_key)}">
-      <input type="hidden" name="review_filter" value="{html_escape(clean_security_news_status_filter(review_filter))}">
-      <input type="hidden" name="limit" value="{max(1, int(limit or 20))}">
-      <input type="hidden" name="actor" value="team-member">
-      <button class="mini-button primary" type="submit">Save to Library</button>
-    </form>
+    <div class="radar-review-controls">
+      <form method="post" action="/security-news/save">
+        <input type="hidden" name="dedupe_key" value="{escaped_key}">
+        <input type="hidden" name="review_filter" value="{selected_review}">
+        <input type="hidden" name="limit" value="{selected_limit}">
+        <input type="hidden" name="actor" value="team-member">
+        <button class="mini-button primary" type="submit">Save to Library</button>
+      </form>
+      <form method="post" action="/security-news/review">
+        <input type="hidden" name="dedupe_key" value="{escaped_key}">
+        <input type="hidden" name="status" value="dismissed">
+        <input type="hidden" name="reason" value="Dismissed from the News stack.">
+        <input type="hidden" name="review_filter" value="{selected_review}">
+        <input type="hidden" name="limit" value="{selected_limit}">
+        <input type="hidden" name="actor" value="team-member">
+        <button class="mini-button danger" type="submit">Dismiss</button>
+      </form>
+    </div>
     """
 
 

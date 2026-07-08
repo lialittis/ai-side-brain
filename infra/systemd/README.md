@@ -15,6 +15,75 @@ under `infra/systemd/user/` assume the repository lives at:
 If the checkout is somewhere else and you copy templates manually, edit
 `WorkingDirectory`, `ExecStart`, and `Documentation` after copying the files.
 
+## Current Quick Setup
+
+The current Team Side-Brain setup is:
+
+| Unit | Kind | Purpose | Schedule |
+| --- | --- | --- | --- |
+| `ai-side-brain-team-literature-radar-cycle.timer` | timer | Runs the Team paper/literature radar daily cycle. | Daily at `06:00` local time. |
+| `ai-side-brain-team-security-news-radar.timer` | timer | Runs the Team Security News Radar from saved `/security-news/config` sources. | Daily at `06:20` local time plus up to `10m` randomized delay. |
+| `ai-side-brain-team-research-web.service` | service | Serves the Team web UI. | Long-running service at `http://127.0.0.1:8790` by default. |
+
+If the Personal Side-Brain radar should also run automatically, use the
+recommended restore command below; it also enables
+`ai-side-brain-personal-literature-radar-cycle.timer`.
+
+Fast restore after reboot, user-manager reset, or checkout path changes:
+
+```bash
+cd /home/tianchi/workspace/ai-side-brain
+
+# Stop a manually-started web process first so systemd can own port 8790.
+scripts/stop_research_web.sh
+
+# Restore Team Literature Radar, Team News Radar, Personal Literature Radar,
+# and the Team web UI service. Linger lets timers run before login after reboot.
+infra/systemd/restore_user_timers.sh --recommended --with-linger
+```
+
+Team-only restore:
+
+```bash
+cd /home/tianchi/workspace/ai-side-brain
+scripts/stop_research_web.sh
+infra/systemd/restore_user_timers.sh --team-cycle --no-web
+infra/systemd/restore_user_timers.sh --team-news --with-web --with-linger
+```
+
+Check what is active:
+
+```bash
+systemctl --user list-timers 'ai-side-brain-*' --all --no-pager
+systemctl --user status ai-side-brain-team-research-web.service --no-pager
+```
+
+Quick shutdown for the recommended systemd-managed setup:
+
+```bash
+systemctl --user disable --now \
+  ai-side-brain-team-literature-radar-cycle.timer \
+  ai-side-brain-team-security-news-radar.timer \
+  ai-side-brain-personal-literature-radar-cycle.timer \
+  ai-side-brain-team-research-web.service
+```
+
+Temporary stop without disabling startup:
+
+```bash
+systemctl --user stop \
+  ai-side-brain-team-literature-radar-cycle.timer \
+  ai-side-brain-team-security-news-radar.timer \
+  ai-side-brain-personal-literature-radar-cycle.timer \
+  ai-side-brain-team-research-web.service
+```
+
+If the web UI was started manually instead of by systemd, stop it with:
+
+```bash
+scripts/stop_research_web.sh
+```
+
 Recommended Team daily setup:
 
 ```bash

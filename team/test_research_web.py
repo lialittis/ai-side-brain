@@ -330,6 +330,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("News Radar Config", html)
             self.assertIn("SecurityWeek", html)
             self.assertIn('action="/security-news/config/source/add"', html)
+            self.assertIn("news-source-add-card", html)
+            self.assertIn("Configured Sources", html)
+            self.assertIn('class="news-source-link" href="https://feeds.feedburner.com/Securityweek"', html)
             self.assertIn('action="/security-news/config/settings"', html)
             self.assertIn("Run day", html)
             self.assertIn("Run News Now", html)
@@ -453,8 +456,9 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Critical Linux kernel RCE patch released", stack_html)
             self.assertNotIn("Legacy saved cloud advisory", stack_html)
             self.assertIn("Save to Library", stack_html)
+            self.assertIn("Dismiss", stack_html)
+            self.assertIn('name="status" value="dismissed"', stack_html)
             self.assertNotIn("Research Digest", stack_html)
-            self.assertNotIn("Dismiss", stack_html)
 
             result = save_security_news_item_to_library_from_web(
                 database,
