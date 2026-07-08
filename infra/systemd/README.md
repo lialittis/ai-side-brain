@@ -65,7 +65,7 @@ infra/systemd/install_user_timers.sh --recommended
 ```
 
 After reboot, user-manager reset, or a checkout path change, restore the safe
-recommended timer set in one command:
+recommended timer set and the Team web UI service in one command:
 
 ```bash
 infra/systemd/restore_user_timers.sh
@@ -84,6 +84,19 @@ while restoring:
 infra/systemd/restore_user_timers.sh --with-linger
 ```
 
+The restore helper also installs and starts
+`ai-side-brain-team-research-web.service`, which serves the Team web UI on
+`http://127.0.0.1:8790` by default. Use timer-only recovery when the web UI is
+managed another way:
+
+```bash
+infra/systemd/restore_user_timers.sh --no-web
+```
+
+The web service runs `scripts/serve_research_web.sh` in the foreground so
+systemd can supervise and restart it. Set `HOST`, `PORT`, or `DB_PATH` in
+`.env` to override the default bind address, port, or database path.
+
 Manual equivalent:
 
 ```bash
@@ -93,6 +106,7 @@ cp infra/systemd/user/ai-side-brain-*.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ai-side-brain-team-literature-radar-cycle.timer
 systemctl --user enable --now ai-side-brain-personal-literature-radar-cycle.timer
+systemctl --user enable --now ai-side-brain-team-research-web.service
 ```
 
 Use the separate `ai-side-brain-team-literature-radar.timer` and
@@ -112,12 +126,14 @@ systemctl --user start ai-side-brain-team-literature-radar.service
 systemctl --user start ai-side-brain-personal-literature-radar.service
 systemctl --user start ai-side-brain-team-literature-radar-brief.service
 systemctl --user start ai-side-brain-personal-literature-radar-brief.service
+systemctl --user start ai-side-brain-team-research-web.service
 journalctl --user -u ai-side-brain-team-literature-radar-cycle.service -n 80
 journalctl --user -u ai-side-brain-personal-literature-radar-cycle.service -n 80
 journalctl --user -u ai-side-brain-team-literature-radar.service -n 80
 journalctl --user -u ai-side-brain-personal-literature-radar.service -n 80
 journalctl --user -u ai-side-brain-team-literature-radar-brief.service -n 80
 journalctl --user -u ai-side-brain-personal-literature-radar-brief.service -n 80
+journalctl --user -u ai-side-brain-team-research-web.service -n 80
 ```
 
 Check Radar readiness and latest-run queue health without collecting sources:

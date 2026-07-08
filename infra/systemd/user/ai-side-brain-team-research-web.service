@@ -1,0 +1,14 @@
+[Unit]
+Description=AI Side-Brain Team Research Web UI
+Documentation=file:%h/workspace/ai-side-brain/team/README.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/ai-side-brain
+ExecStart=%h/workspace/ai-side-brain/scripts/serve_research_web.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

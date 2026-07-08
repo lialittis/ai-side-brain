@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
 import sys
+import threading
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse, urlunparse
 from urllib import error as urllib_error
@@ -112,7 +113,7 @@ from team.literature_radar import (
     team_radar_scoring_profile,
     team_radar_source_presets,
 )
-from team.research_ai import analyze_submitted_item
+from team.research_ai import analyze_queued_item, analyze_submitted_item, queue_submitted_item_analysis
 from team.research_adapter import build_team_research_run
 from team.research_db import TeamResearchDatabase, default_db_path
 from team.security_news import (
@@ -686,12 +687,23 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .interest-section {{
       display: grid;
       gap: 12px;
-      padding: 14px 0;
-      border-top: 1px solid var(--line-soft);
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
     }}
-    .interest-section:first-child {{
-      padding-top: 0;
-      border-top: 0;
+    .interest-section + .interest-section {{
+      margin-top: 18px;
+      border-top: 3px solid #8aa4c4;
+    }}
+    .interest-section.paper {{
+      background: #f7fbfa;
+      border-color: #c9e1dd;
+    }}
+    .interest-section.news {{
+      background: #f6f8fc;
+      border-color: #ccd8ea;
+      border-top-color: #5d7fa8;
     }}
     .interest-section-head {{
       display: grid;
@@ -807,9 +819,16 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       grid-template-columns: minmax(180px, 1fr) 120px auto;
       gap: 8px;
       align-items: end;
-      margin-top: 2px;
+      margin-top: 4px;
       padding-top: 12px;
-      border-top: 1px solid var(--line-soft);
+      border-top: 1px solid rgba(102, 112, 133, 0.24);
+    }}
+    .interest-add .field {{
+      margin-bottom: 0;
+    }}
+    .interest-add button {{
+      min-height: 37px;
+      align-self: end;
     }}
     .radar-grid {{
       display: grid;
@@ -1225,6 +1244,13 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       flex-wrap: wrap;
       margin-top: 6px;
     }}
+    .paper-ai-row {{
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 7px;
+    }}
     .source-label {{
       border-color: #b6dfcc;
       background: #edf8f2;
@@ -1252,6 +1278,7 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
     .tag.active, .pill.active {{ border-color: #9db7e8; background: #eef4ff; color: #24427a; }}
     .pill.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
     .pill.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
+    .pill.error {{ border-color: #d0a0a0; background: #fff1f1; color: #8a1f1f; }}
     .tag.good {{ border-color: #b6dfcc; background: #edf8f2; color: var(--good); }}
     .tag.warn {{ border-color: #f5d29b; background: #fff8eb; color: var(--warn); }}
     .actions {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }}
@@ -5121,10 +5148,20 @@ def relevance_pill(label: str | None) -> str:
 
 
 def ai_status_pill(status: str | None) -> str:
-    value = status or "local"
-    warn_statuses = {"pending", "running", "failed", "pending_unsupported_link", "rejected_non_paper"}
-    css = "good" if value == "succeeded" else "warn" if value in warn_statuses else ""
-    return f'<span class="pill {css}">AI: {html_escape(value)}</span>'
+    value = str(status or "local").strip() or "local"
+    if value == "local":
+        return ""
+    labels = {
+        "pending": "AI pending",
+        "running": "AI running",
+        "succeeded": "AI enriched",
+        "failed": "AI failed",
+        "pending_unsupported_link": "AI needs PDF",
+        "pending_unsupported_input": "AI needs metadata",
+        "rejected_non_paper": "AI rejected non-paper",
+    }
+    css = "good" if value == "succeeded" else "error" if value in {"failed", "rejected_non_paper"} else "warn"
+    return f'<span class="pill {css}" title="{html_escape(value)}">{html_escape(labels.get(value, f"AI {value}"))}</span>'
 
 
 TODAY_AI_MIN_SCORE = 60
@@ -6793,6 +6830,7 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
                   {html_escape(item.get("year") or "n.d.")} · {html_escape(", ".join(item.get("authors", [])) or "unknown authors")}
                 </div>
                 {render_library_source_badges(paper)}
+                {render_paper_ai_status_row(paper)}
                 <p class="abstract">{html_escape(abstract[:360])}{'...' if len(abstract) > 360 else ''}</p>
                 {render_paper_radar_insight(item, paper.get("radar_history"), card=paper.get("card"), screening=screening)}
                 <div class="tags">{tag_html or '<span class="muted">No tags</span>'}</div>
@@ -6813,6 +6851,23 @@ def render_paper_list(papers: list[dict[str, Any]]) -> str:
             """
         )
     return "\n".join(rows)
+
+
+def render_paper_ai_status_row(paper: dict[str, Any]) -> str:
+    status = str(paper.get("ai_status") or "local")
+    pill = ai_status_pill(status)
+    if not pill:
+        return ""
+    ai_run = paper.get("ai_run") if isinstance(paper.get("ai_run"), dict) else {}
+    detail = ""
+    if status in {"pending", "running"}:
+        detail = "analysis in progress"
+    elif status in {"failed", "pending_unsupported_link", "pending_unsupported_input"}:
+        detail = normalize_inline_text(ai_run.get("error") or "")
+    elif status == "rejected_non_paper":
+        detail = normalize_inline_text(ai_run.get("error") or "not a research paper")
+    detail_html = f'<span class="tag">{html_escape(detail[:160])}</span>' if detail else ""
+    return f'<div class="paper-ai-row">{pill}{detail_html}</div>'
 
 
 def render_paper_radar_insight(
@@ -7352,7 +7407,7 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
     {render_topline("Topics", "Separate interest profiles for paper Radar and security news Radar.", "/", "Latest")}
     {render_notice(notice)}
     <div class="panel">
-      <section class="interest-section" aria-labelledby="paper-radar-topics">
+      <section class="interest-section paper" aria-labelledby="paper-radar-topics">
         <div class="interest-section-head">
           <div>
             <h2 id="paper-radar-topics">Paper Radar Topics</h2>
@@ -7365,7 +7420,7 @@ def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> s
         </div>
         {render_interest_add_form()}
       </section>
-      <section class="interest-section" aria-labelledby="security-news-interests">
+      <section class="interest-section news" aria-labelledby="security-news-interests">
         <div class="interest-section-head">
           <div>
             <h2 id="security-news-interests">Security News Interests</h2>
@@ -7677,6 +7732,32 @@ def upload_paper_pdf(
     if analyze:
         analyze_submitted_item(database, item_id)
     return item_id
+
+
+def queue_paper_ai_analysis_from_web(database: TeamResearchDatabase, item_id: str) -> dict[str, Any]:
+    existing = database.latest_ai_analysis_run(item_id)
+    if existing and existing.get("status") in {"pending", "running", "succeeded", "rejected_non_paper"}:
+        return existing
+    run = queue_submitted_item_analysis(database, item_id)
+    thread = threading.Thread(
+        target=analyze_paper_ai_run_in_background,
+        args=(database.db_path, run["id"]),
+        daemon=True,
+        name=f"team-ai-analysis-{run['id']}",
+    )
+    thread.start()
+    return run
+
+
+def analyze_paper_ai_run_in_background(db_path: Path, run_id: str) -> None:
+    database = TeamResearchDatabase(db_path)
+    try:
+        analyze_queued_item(database, run_id)
+    except Exception as error:
+        try:
+            database.complete_ai_analysis_run(run_id, status="failed", error=str(error))
+        except Exception:
+            pass
 
 
 def update_paper_interactions(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
@@ -8520,8 +8601,10 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             fields, upload = parse_post_form(self, self.rfile.read(length))
             parsed = urlparse(self.path)
             if parsed.path == "/submit":
-                item_id = submit_research_item(self.database, fields, upload=upload)
-                self.redirect(f"/library?notice={quote(f'Added {item_id} to the library.')}")
+                item_id = submit_research_item(self.database, fields, upload=upload, analyze=False)
+                ai_run = queue_paper_ai_analysis_from_web(self.database, item_id)
+                notice = f"Added {item_id} to the library. AI analysis {ai_run.get('status', 'queued')}."
+                self.redirect(f"/library?notice={quote(notice)}")
             elif parsed.path == "/radar/import":
                 item_id = import_radar_recommendation_to_library(self.database, fields)
                 run_id = fields.get("run_id") or ""
@@ -8658,8 +8741,10 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 item_id = add_paper_comment(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Added comment to {item_id}.')}")
             elif parsed.path == "/paper/pdf/upload":
-                item_id = upload_paper_pdf(self.database, fields, upload=upload)
-                self.redirect(f"/library?notice={quote(f'Uploaded PDF for {item_id}.')}")
+                item_id = upload_paper_pdf(self.database, fields, upload=upload, analyze=False)
+                ai_run = queue_paper_ai_analysis_from_web(self.database, item_id)
+                notice = f"Uploaded PDF for {item_id}. AI analysis {ai_run.get('status', 'queued')}."
+                self.redirect(f"/library?notice={quote(notice)}")
             elif parsed.path == "/paper/relevance":
                 item_id = update_paper_relevance(self.database, fields)
                 self.redirect(f"/library?notice={quote(f'Updated relevance for {item_id}.')}")

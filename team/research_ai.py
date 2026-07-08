@@ -154,9 +154,13 @@ class TeamResearchAnalyzer:
         return getattr(config, "model", "test-model")
 
     def analyze_item(self, item_id: str) -> dict[str, Any]:
+        run = self.create_pending_run(item_id)
+        return self.analyze_run(run)
+
+    def create_pending_run(self, item_id: str) -> dict[str, Any]:
         bundle = self.database.get_bundle(item_id)
         item = bundle["item"]
-        run = self.database.create_ai_analysis_run(
+        return self.database.create_ai_analysis_run(
             item_id=item_id,
             source_id=first_source_id(item),
             provider="openrouter",
@@ -164,7 +168,6 @@ class TeamResearchAnalyzer:
             prompt_version=PROMPT_VERSION,
             status="pending",
         )
-        return self.analyze_run(run)
 
     def analyze_run(self, run: dict[str, Any]) -> dict[str, Any]:
         bundle = self.database.get_bundle(run["item_id"])
@@ -249,6 +252,17 @@ class TeamResearchAnalyzer:
 
 def analyze_submitted_item(database: TeamResearchDatabase, item_id: str) -> dict[str, Any]:
     return TeamResearchAnalyzer(database).analyze_item(item_id)
+
+
+def queue_submitted_item_analysis(database: TeamResearchDatabase, item_id: str) -> dict[str, Any]:
+    return TeamResearchAnalyzer(database).create_pending_run(item_id)
+
+
+def analyze_queued_item(database: TeamResearchDatabase, run_id: str) -> dict[str, Any]:
+    run = database.get_ai_analysis_run(run_id)
+    if run is None:
+        raise KeyError(f"Unknown AI analysis run: {run_id}")
+    return TeamResearchAnalyzer(database).analyze_run(run)
 
 
 def enrich_radar_recommendations_with_ai(

@@ -35,6 +35,7 @@ from team.research_web import (
     render_today_history_page,
     render_today_page,
     parse_post_form,
+    queue_paper_ai_analysis_from_web,
     recover_paper,
     remove_paper,
     remove_paper_tag,
@@ -3032,6 +3033,58 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('action="/paper/pdf/upload"', html)
             self.assertIn("Upload PDF", html)
             self.assertNotIn("AI: local", html)
+
+    def test_library_card_shows_running_ai_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/memory-safety-paper",
+                    "title": "Memory safety paper",
+                    "brief": "A paper about memory safety and exploit mitigation.",
+                },
+                analyze=False,
+            )
+            database.create_ai_analysis_run(
+                item_id=item_id,
+                source_id=None,
+                provider="openrouter",
+                model="test/model",
+                prompt_version="test-prompt",
+                status="running",
+            )
+
+            html = render_latest_papers_page(database)
+
+            self.assertIn("AI running", html)
+            self.assertIn("analysis in progress", html)
+            self.assertNotIn("AI: local", html)
+
+    def test_web_ai_queue_creates_pending_run_before_background_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            item_id = submit_research_item(
+                database,
+                {
+                    "source_type": "manual_link",
+                    "url": "https://example.org/queued-paper",
+                    "title": "Queued memory safety paper",
+                    "brief": "A paper about memory safety and exploit mitigation.",
+                },
+                analyze=False,
+            )
+
+            with mock.patch("team.research_web.threading.Thread") as thread_class:
+                thread = thread_class.return_value
+                run = queue_paper_ai_analysis_from_web(database, item_id)
+
+            self.assertEqual(run["status"], "pending")
+            self.assertEqual(database.latest_ai_analysis_run(item_id)["status"], "pending")
+            thread.start.assert_called_once()
+            html = render_latest_papers_page(database)
+            self.assertIn("AI pending", html)
 
     def test_manual_link_submission_uses_team_interest_relevance_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

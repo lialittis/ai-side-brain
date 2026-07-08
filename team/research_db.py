@@ -1516,6 +1516,15 @@ class TeamResearchDatabase:
             self._upsert_ai_analysis_run(connection, run)
         return run
 
+    def get_ai_analysis_run(self, run_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT record_json FROM ai_analysis_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        return loads(row["record_json"]) if row else None
+
     def latest_ai_analysis_run(self, item_id: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as connection:

@@ -37,6 +37,14 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("Persistent=true", timer)
         self.assertIn("Unit=ai-side-brain-personal-literature-radar-cycle.service", timer)
 
+    def test_team_web_service_runs_foreground_web_runner(self) -> None:
+        service = self.read_unit("ai-side-brain-team-research-web.service")
+
+        self.assertIn("Type=simple", service)
+        self.assertIn("ExecStart=%h/workspace/ai-side-brain/scripts/serve_research_web.sh", service)
+        self.assertIn("Restart=on-failure", service)
+        self.assertIn("WantedBy=default.target", service)
+
     def test_systemd_timers_reference_existing_services(self) -> None:
         timer_paths = sorted(SYSTEMD_USER_DIR.glob("*.timer"))
         self.assertGreaterEqual(len(timer_paths), 1)
@@ -172,11 +180,14 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("ai-side-brain-team-literature-radar-cycle.timer", result.stdout)
         self.assertIn("ai-side-brain-personal-literature-radar-cycle.timer", result.stdout)
         self.assertIn("Linger unchanged.", result.stdout)
+        self.assertIn("ai-side-brain-team-research-web.service", result.stdout)
+        self.assertIn("systemctl --user enable --now ai-side-brain-team-research-web.service", result.stdout)
         self.assertIn("systemctl --user list-timers ai-side-brain-\\*", result.stdout)
+        self.assertIn("systemctl --user list-units ai-side-brain-team-research-web.service", result.stdout)
 
     def test_restore_helper_can_preview_linger_setup(self) -> None:
         result = subprocess.run(
-            [str(RESTORE_SCRIPT), "--dry-run", "--team-cycle", "--with-linger", "--no-list"],
+            [str(RESTORE_SCRIPT), "--dry-run", "--team-cycle", "--with-linger", "--no-list", "--no-web"],
             cwd=ROOT,
             check=True,
             text=True,
@@ -186,6 +197,7 @@ class LiteratureRadarSystemdTest(unittest.TestCase):
         self.assertIn("Restoring AI Side-Brain user timers with profile: team-cycle", result.stdout)
         self.assertIn("Installing profile: team-cycle", result.stdout)
         self.assertIn("loginctl enable-linger", result.stdout)
+        self.assertIn("Skipped Team web UI service because --no-web was set.", result.stdout)
         self.assertNotIn("systemctl --user list-timers", result.stdout)
 
 
