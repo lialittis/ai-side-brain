@@ -35,6 +35,7 @@ from shared.literature_radar import (
     cache_recommendation_pdfs,
     collect_arxiv,
     collect_configured_official_accepted_pages,
+    collect_curated_research_pages,
     collect_crossref_works,
     collect_dblp_author_publications,
     collect_dblp_venue_publications,
@@ -90,6 +91,7 @@ from shared.literature_radar import (
     radar_source_skip_stat,
     radar_supported_source_ids,
     radar_text_discussion_terms,
+    official_accepted_pages_from_venue_profiles,
     recommend_papers,
 )
 from shared.literature_radar.collectors import fetch_url
@@ -143,7 +145,6 @@ TEAM_RADAR_TOPIC_PROFILE: dict[str, Any] = {
 DEFAULT_RADAR_SOURCES = (
     "arxiv",
     "dblp",
-    "semantic_scholar",
     "openalex",
     "crossref",
     "openreview_venues",
@@ -155,18 +156,65 @@ SEMANTIC_SCHOLAR_SEED_SOURCES = {
     "semantic_scholar_references",
     "semantic_scholar_recommendations",
 }
+TEAM_RADAR_SEMANTIC_SCHOLAR_SOURCE_IDS = frozenset(
+    {
+        "semantic_scholar",
+        "semantic_scholar_authors",
+        "semantic_scholar_citations",
+        "semantic_scholar_references",
+        "semantic_scholar_recommendations",
+    }
+)
+TEAM_RADAR_TRACKED_DBLP_AUTHORS: tuple[dict[str, str], ...] = (
+    {"name": "Mathias Payer", "dblp_pid": "31/1273"},
+    {"name": "Mahmoud Ammar", "dblp_pid": "02/5804"},
+    {"name": "M. Tarek Ibn Ziad", "dblp_pid": "151/4037"},
+)
+TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS = tuple(author["dblp_pid"] for author in TEAM_RADAR_TRACKED_DBLP_AUTHORS)
+
+
+def team_semantic_scholar_api_key_configured(value: str | None = None) -> bool:
+    return bool(radar_config_value(value) or radar_config_value(os.environ.get("SEMANTIC_SCHOLAR_API_KEY")))
+
+
+def filter_semantic_scholar_sources_without_key(
+    sources: list[str] | tuple[str, ...],
+    *,
+    semantic_scholar_api_key: str | None = None,
+    semantic_scholar_api_key_configured: bool | None = None,
+) -> list[str]:
+    key_configured = (
+        bool(semantic_scholar_api_key_configured)
+        if semantic_scholar_api_key_configured is not None
+        else team_semantic_scholar_api_key_configured(semantic_scholar_api_key)
+    )
+    selected_sources = list(sources or [])
+    if key_configured:
+        return selected_sources
+    return [source for source in selected_sources if source not in TEAM_RADAR_SEMANTIC_SCHOLAR_SOURCE_IDS]
 
 
 def team_radar_source_presets() -> list[dict[str, Any]]:
     presets = []
     for preset in radar_source_presets():
         if preset["id"] == "security_memory_agentic_daily":
+            default_sources = [source for source in list(preset.get("sources") or []) if source != "dblp_venues"]
             presets.append(
                 {
                     **preset,
                     "id": "team_security_daily",
                     "name": "Team Security Daily",
-                    "description": "Daily security, memory-safety, and agentic-security discovery across preprints, metadata APIs, top security/PL venues, and OpenReview AI venues.",
+                    "description": "Daily security, memory-safety, and agentic-security discovery across preprints, metadata APIs, official security accepted pages, OpenReview AI venues, and tracked team authors.",
+                    "sources": [
+                        *default_sources,
+                        *(
+                            ["dblp_authors"]
+                            if "dblp_authors" not in default_sources
+                            else []
+                        ),
+                    ],
+                    "venue_profiles": [],
+                    "dblp_author_pids": list(TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS),
                 }
             )
         else:
@@ -195,8 +243,13 @@ def apply_team_radar_source_preset(settings: dict[str, Any], preset_id: str | No
         return dict(settings)
     updated = dict(settings)
     updated["source_preset"] = preset["id"]
-    updated["sources"] = list(preset.get("sources") or [])
-    for key in ("venue_profiles", "openreview_venue_profiles", "usenix_security_cycles"):
+    updated["sources"] = filter_semantic_scholar_sources_without_key(
+        list(preset.get("sources") or []),
+        semantic_scholar_api_key_configured=bool(updated.get("semantic_scholar_api_key_configured"))
+        if "semantic_scholar_api_key_configured" in updated
+        else None,
+    )
+    for key in ("venue_profiles", "openreview_venue_profiles", "usenix_security_cycles", "dblp_author_pids"):
         if not updated.get(key):
             updated[key] = list(preset.get(key) or [])
     return updated
@@ -228,6 +281,7 @@ def run_team_literature_radar(
     negative_seed_paper_ids: list[str] | None = None,
     openalex_mailto: str | None = None,
     openreview_invitations: list[str] | None = None,
+    curated_research_pages: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
@@ -255,16 +309,12 @@ def run_team_literature_radar(
     selected_dblp_venue_profiles = dblp_venue_profiles
     selected_openreview_venue_profiles = openreview_venue_profiles
     selected_usenix_security_cycles = usenix_security_cycles
-    if preset:
-        if selected_dblp_venue_profiles is None:
-            selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
-        if selected_openreview_venue_profiles is None:
-            selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
-        if selected_usenix_security_cycles is None:
-            selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
     selected_seed_paper_ids = seed_paper_ids or env_list("RADAR_SEED_PAPER_IDS")
     selected_negative_seed_paper_ids = negative_seed_paper_ids or env_list("RADAR_NEGATIVE_SEED_PAPER_IDS")
     selected_semantic_scholar_author_ids = semantic_scholar_author_ids or env_list("RADAR_AUTHOR_IDS")
+    selected_semantic_scholar_api_key_configured = team_semantic_scholar_api_key_configured(
+        semantic_scholar_api_key
+    )
     selected_dblp_author_pids = dblp_author_pids or env_list("RADAR_DBLP_AUTHOR_PIDS")
     selected_openalex_author_ids = openalex_author_ids or env_list("RADAR_OPENALEX_AUTHOR_IDS")
     selected_arxiv_categories = arxiv_categories or env_list("RADAR_ARXIV_CATEGORIES") or None
@@ -273,13 +323,42 @@ def run_team_literature_radar(
         or env_list("RADAR_OPENREVIEW_INVITATIONS")
         or env_list("OPENREVIEW_INVITATIONS")
     )
+    selected_curated_research_pages = curated_research_pages or env_list("RADAR_CURATED_RESEARCH_PAGES")
+    if preset:
+        if selected_dblp_venue_profiles is None:
+            selected_dblp_venue_profiles = list(preset.get("venue_profiles") or [])
+        if selected_openreview_venue_profiles is None:
+            selected_openreview_venue_profiles = list(preset.get("openreview_venue_profiles") or [])
+        if selected_usenix_security_cycles is None:
+            selected_usenix_security_cycles = list(preset.get("usenix_security_cycles") or [])
+        if not selected_dblp_author_pids:
+            selected_dblp_author_pids = list(preset.get("dblp_author_pids") or [])
+    if preset or not sources:
+        selected_sources = filter_semantic_scholar_sources_without_key(
+            selected_sources,
+            semantic_scholar_api_key_configured=selected_semantic_scholar_api_key_configured,
+        )
     if selected_dblp_venue_profiles is None:
         selected_dblp_venue_profiles = env_list("RADAR_DBLP_VENUES")
     if selected_openreview_venue_profiles is None:
         selected_openreview_venue_profiles = env_list("RADAR_OPENREVIEW_VENUES")
-    if selected_seed_paper_ids and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
+    selected_conference_year = conference_year or radar_year(now)
+    selected_official_accepted_pages = official_accepted_pages_from_venue_profiles(
+        selected_dblp_venue_profiles,
+        year=selected_conference_year,
+        configured_pages=official_accepted_pages,
+    )
+    if (
+        selected_semantic_scholar_api_key_configured
+        and selected_seed_paper_ids
+        and not any(source in selected_sources for source in SEMANTIC_SCHOLAR_SEED_SOURCES)
+    ):
         selected_sources.append("semantic_scholar_recommendations")
-    if selected_semantic_scholar_author_ids and "semantic_scholar_authors" not in selected_sources:
+    if (
+        selected_semantic_scholar_api_key_configured
+        and selected_semantic_scholar_author_ids
+        and "semantic_scholar_authors" not in selected_sources
+    ):
         selected_sources.append("semantic_scholar_authors")
     if selected_dblp_author_pids and "dblp_authors" not in selected_sources:
         selected_sources.append("dblp_authors")
@@ -288,11 +367,15 @@ def run_team_literature_radar(
     if selected_dblp_venue_profiles and not any(
         source in selected_sources for source in {"dblp_venues", "openalex_venues"}
     ):
-        selected_sources.append("dblp_venues")
+        selected_sources.append("openalex_venues")
     if selected_openreview_invitations and "openreview" not in selected_sources:
         selected_sources.append("openreview")
+    if selected_curated_research_pages and "curated_research_pages" not in selected_sources:
+        selected_sources.append("curated_research_pages")
     if selected_openreview_venue_profiles and "openreview_venues" not in selected_sources:
         selected_sources.append("openreview_venues")
+    if selected_official_accepted_pages and "official_accepted_pages" not in selected_sources:
+        selected_sources.append("official_accepted_pages")
     collection_config = team_radar_collection_config(
         selected_sources=selected_sources,
         source_preset=(preset or {}).get("id"),
@@ -314,18 +397,19 @@ def run_team_literature_radar(
         negative_seed_paper_ids=selected_negative_seed_paper_ids,
         openalex_mailto=openalex_mailto,
         openreview_invitations=selected_openreview_invitations,
+        curated_research_pages=selected_curated_research_pages,
         crossref_mailto=crossref_mailto,
         unpaywall_email=unpaywall_email,
         semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
         dblp_author_pids=selected_dblp_author_pids,
         openalex_author_ids=selected_openalex_author_ids,
         arxiv_categories=selected_arxiv_categories,
-        conference_year=conference_year,
+        conference_year=selected_conference_year,
         dblp_venue_profiles=selected_dblp_venue_profiles,
         openreview_venue_profiles=selected_openreview_venue_profiles,
         openreview_accepted_only=openreview_accepted_only,
         usenix_security_cycles=selected_usenix_security_cycles,
-        official_accepted_pages=official_accepted_pages,
+        official_accepted_pages=selected_official_accepted_pages,
         cache_pdfs=cache_pdfs,
         pdf_cache_dir=pdf_cache_dir,
         pdf_cache_max_bytes=pdf_cache_max_bytes,
@@ -358,17 +442,18 @@ def run_team_literature_radar(
             negative_seed_paper_ids=selected_negative_seed_paper_ids,
             openalex_mailto=openalex_mailto,
             openreview_invitations=selected_openreview_invitations,
+            curated_research_pages=selected_curated_research_pages,
             crossref_mailto=crossref_mailto,
             unpaywall_email=unpaywall_email,
             semantic_scholar_author_ids=selected_semantic_scholar_author_ids,
             dblp_author_pids=selected_dblp_author_pids,
             openalex_author_ids=selected_openalex_author_ids,
-            conference_year=conference_year,
+            conference_year=selected_conference_year,
             dblp_venue_profiles=selected_dblp_venue_profiles,
             openreview_venue_profiles=selected_openreview_venue_profiles,
             openreview_accepted_only=openreview_accepted_only,
             usenix_security_cycles=selected_usenix_security_cycles,
-            official_accepted_pages=official_accepted_pages,
+            official_accepted_pages=selected_official_accepted_pages,
             source_errors=source_errors,
             source_stats=source_stats,
             collection_config=collection_config,
@@ -1740,6 +1825,7 @@ def team_radar_collection_config(
     negative_seed_paper_ids: list[str] | None,
     openalex_mailto: str | None,
     openreview_invitations: list[str] | None,
+    curated_research_pages: list[str] | None,
     crossref_mailto: str | None,
     unpaywall_email: str | None,
     semantic_scholar_author_ids: list[str] | None,
@@ -1826,6 +1912,12 @@ def team_radar_collection_config(
             openreview_invitations,
             "RADAR_OPENREVIEW_INVITATIONS",
             "OPENREVIEW_INVITATIONS",
+        ),
+        curated_research_pages=resolved_source_list(
+            selected_sources,
+            {"curated_research_pages"},
+            curated_research_pages,
+            "RADAR_CURATED_RESEARCH_PAGES",
         ),
         semantic_scholar_api_key_configured=bool(team_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(team_openalex_mailto(openalex_mailto)),
@@ -1993,6 +2085,7 @@ def collect_team_radar_candidates(
     negative_seed_paper_ids: list[str] | None = None,
     openalex_mailto: str | None = None,
     openreview_invitations: list[str] | None = None,
+    curated_research_pages: list[str] | None = None,
     crossref_mailto: str | None = None,
     unpaywall_email: str | None = None,
     semantic_scholar_author_ids: list[str] | None = None,
@@ -2050,6 +2143,12 @@ def collect_team_radar_candidates(
             "RADAR_OPENREVIEW_INVITATIONS",
             "OPENREVIEW_INVITATIONS",
         ),
+        curated_research_pages=resolved_source_list(
+            sources,
+            {"curated_research_pages"},
+            curated_research_pages,
+            "RADAR_CURATED_RESEARCH_PAGES",
+        ),
         semantic_scholar_api_key_configured=bool(team_semantic_scholar_api_key(semantic_scholar_api_key)),
         openalex_mailto_configured=bool(selected_openalex_mailto),
         crossref_mailto_configured=bool(selected_crossref_mailto),
@@ -2095,6 +2194,16 @@ def collect_team_radar_candidates(
                 query_terms=query_terms,
                 max_results=max_results,
                 mailto=selected_crossref_mailto,
+            ),
+        )
+    if "curated_research_pages" in sources:
+        collect_source(
+            "curated_research_pages",
+            lambda: collect_curated_research_pages(
+                curated_research_pages
+                or (collection_config.get("curated_research_pages") if isinstance(collection_config, dict) else []),
+                max_results=max_results,
+                now=now,
             ),
         )
     if "dblp" in sources:

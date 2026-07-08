@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from email.message import Message
+from http.client import RemoteDisconnected
 import json
+import os
+import tempfile
 import unittest
+from unittest import mock
+from urllib.error import HTTPError
 
 from shared.literature_radar import (
     build_arxiv_query_url,
@@ -24,6 +30,7 @@ from shared.literature_radar import (
     build_ndss_accepted_papers_url,
     build_usenix_security_accepted_papers_url,
     collect_arxiv,
+    collect_curated_research_pages,
     collect_semantic_scholar_author_papers,
     collect_crossref_works,
     collect_dblp_author_publications,
@@ -44,6 +51,7 @@ from shared.literature_radar import (
     expand_openreview_venue_profiles,
     openreview_venue_profiles,
     parse_arxiv_atom,
+    parse_curated_research_page,
     parse_semantic_scholar_author_papers,
     parse_crossref_works,
     parse_dblp_author_publications,
@@ -58,6 +66,7 @@ from shared.literature_radar import (
     parse_usenix_security_accepted_papers,
     parse_unpaywall_record,
 )
+from shared.literature_radar import collectors as collector_module
 
 
 ARXIV_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -169,6 +178,25 @@ DBLP_VENUE_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
     </hit>
   </hits>
 </dblp>
+"""
+
+
+DBLP_VENUE_HTML_FIXTURE = """
+<!doctype html>
+<html>
+  <body>
+    <cite class="data tts-content">
+      <span itemprop="author" itemscope="itemscope">
+        <span itemprop="name">Alice Example</span>
+      </span>
+      <span itemprop="author" itemscope="itemscope">
+        <span itemprop="name">Bob Example</span>
+      </span>
+      <span class="title">Memory Safety for Systems Security</span>
+      <a href="https://dblp.org/rec/conf/ccs/MemorySafety2026.html">view</a>
+    </cite>
+  </body>
+</html>
 """
 
 
@@ -577,7 +605,247 @@ OPENREVIEW_VENUE_FIXTURE = """
 """
 
 
+class FakeHttpResponse:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def __enter__(self) -> "FakeHttpResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self.body
+
+
 class LiteratureRadarCollectorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.env_patcher = mock.patch.dict(
+            collector_module.os.environ,
+            {"RADAR_SOURCE_RATE_LIMIT_CACHE_PATH": ""},
+        )
+        self.env_patcher.start()
+
+    def tearDown(self) -> None:
+        collector_module._HOST_LAST_REQUEST_AT.clear()
+        collector_module._HOST_RATE_LIMIT_UNTIL.clear()
+        self.env_patcher.stop()
+
+    def test_fetch_url_retries_rate_limited_response_with_retry_after(self) -> None:
+        calls = []
+        sleeps = []
+        headers = Message()
+        headers["Retry-After"] = "0.25"
+        rate_limit_error = HTTPError(
+            "https://api.openalex.org/works",
+            429,
+            "Too Many Requests",
+            headers,
+            None,
+        )
+
+        def opener(request: object, timeout: int) -> FakeHttpResponse:
+            calls.append((request, timeout))
+            if len(calls) == 1:
+                raise rate_limit_error
+            return FakeHttpResponse(b'{"ok": true}')
+
+        content = collector_module.fetch_url(
+            "https://api.openalex.org/works",
+            retry_total=2,
+            use_host_pacing=False,
+            opener=opener,
+            sleeper=sleeps.append,
+        )
+
+        self.assertEqual(content, b'{"ok": true}')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.25])
+
+    def test_fetch_url_defers_when_retry_after_exceeds_local_cap(self) -> None:
+        calls = []
+        sleeps = []
+        headers = Message()
+        headers["Retry-After"] = "600"
+        rate_limit_error = HTTPError(
+            "https://api.openalex.org/works",
+            429,
+            "Too Many Requests",
+            headers,
+            None,
+        )
+
+        def opener(request: object, timeout: int) -> FakeHttpResponse:
+            calls.append((request, timeout))
+            raise rate_limit_error
+
+        with mock.patch.dict(
+            collector_module.os.environ,
+            {"RADAR_SOURCE_RETRY_AFTER_MAX_SECONDS": "2"},
+        ):
+            with self.assertRaises(collector_module.RateLimitDeferredError):
+                collector_module.fetch_url(
+                    "https://api.openalex.org/works",
+                    retry_total=2,
+                    use_host_pacing=False,
+                    opener=opener,
+                    sleeper=sleeps.append,
+                    now_func=lambda: 100.0,
+                )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sleeps, [])
+        self.assertGreater(collector_module._HOST_RATE_LIMIT_UNTIL["api.openalex.org"], 100.0)
+
+    def test_fetch_url_skips_host_during_rate_limit_cooldown(self) -> None:
+        calls = []
+        collector_module._HOST_RATE_LIMIT_UNTIL["api.openalex.org"] = 200.0
+
+        def opener(request: object, timeout: int) -> FakeHttpResponse:
+            calls.append((request, timeout))
+            return FakeHttpResponse(b"{}")
+
+        with self.assertRaises(collector_module.RateLimitDeferredError):
+            collector_module.fetch_url(
+                "https://api.openalex.org/works",
+                retry_total=1,
+                use_host_pacing=False,
+                opener=opener,
+                now_func=lambda: 100.0,
+            )
+
+        self.assertEqual(calls, [])
+
+    def test_fetch_url_persists_rate_limit_cooldown_across_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = os.path.join(temp_dir, "rate-limits.json")
+            headers = Message()
+            headers["Retry-After"] = "600"
+            rate_limit_error = HTTPError(
+                "https://api.openalex.org/works",
+                429,
+                "Too Many Requests",
+                headers,
+                None,
+            )
+            first_calls = []
+
+            def first_opener(request: object, timeout: int) -> FakeHttpResponse:
+                first_calls.append((request, timeout))
+                raise rate_limit_error
+
+            with mock.patch.dict(
+                collector_module.os.environ,
+                {
+                    "RADAR_SOURCE_RATE_LIMIT_CACHE_PATH": cache_path,
+                    "RADAR_SOURCE_RETRY_AFTER_MAX_SECONDS": "2",
+                },
+            ):
+                with self.assertRaises(collector_module.RateLimitDeferredError):
+                    collector_module.fetch_url(
+                        "https://api.openalex.org/works",
+                        retry_total=2,
+                        use_host_pacing=False,
+                        opener=first_opener,
+                        now_func=lambda: 100.0,
+                    )
+
+                self.assertTrue(os.path.exists(cache_path))
+                collector_module._HOST_RATE_LIMIT_UNTIL.clear()
+                second_calls = []
+
+                def second_opener(request: object, timeout: int) -> FakeHttpResponse:
+                    second_calls.append((request, timeout))
+                    return FakeHttpResponse(b"{}")
+
+                with self.assertRaises(collector_module.RateLimitDeferredError):
+                    collector_module.fetch_url(
+                        "https://api.openalex.org/works",
+                        retry_total=1,
+                        use_host_pacing=False,
+                        opener=second_opener,
+                        now_func=lambda: 100.0,
+                    )
+
+        self.assertEqual(len(first_calls), 1)
+        self.assertEqual(second_calls, [])
+
+    def test_fetch_url_retries_remote_disconnected(self) -> None:
+        calls = []
+        sleeps = []
+
+        def opener(request: object, timeout: int) -> FakeHttpResponse:
+            calls.append((request, timeout))
+            if len(calls) == 1:
+                raise RemoteDisconnected("remote end closed connection without response")
+            return FakeHttpResponse(b"<ok />")
+
+        with mock.patch.object(collector_module.random, "uniform", return_value=0.0):
+            content = collector_module.fetch_url(
+                "https://dblp.org/search/publ/api?q=test",
+                retry_total=2,
+                use_host_pacing=False,
+                opener=opener,
+                sleeper=sleeps.append,
+            )
+
+        self.assertEqual(content, b"<ok />")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [1.0])
+
+    def test_retry_after_delay_is_capped(self) -> None:
+        headers = Message()
+        headers["Retry-After"] = "600"
+        rate_limit_error = HTTPError(
+            "https://api.openalex.org/works",
+            429,
+            "Too Many Requests",
+            headers,
+            None,
+        )
+
+        with mock.patch.dict(
+            collector_module.os.environ,
+            {"RADAR_SOURCE_RETRY_AFTER_MAX_SECONDS": "2"},
+        ):
+            delay = collector_module.http_retry_delay_seconds(
+                rate_limit_error,
+                attempt=1,
+                backoff_seconds=1,
+            )
+
+        self.assertEqual(delay, 2)
+
+    def test_fetch_url_paces_repeated_dblp_requests(self) -> None:
+        sleeps = []
+        now_values = iter([100.0, 100.2, 101.0])
+
+        def opener(request: object, timeout: int) -> FakeHttpResponse:
+            return FakeHttpResponse(b"<ok />")
+
+        def now_func() -> float:
+            return next(now_values)
+
+        with mock.patch.object(collector_module.random, "uniform", return_value=0.0):
+            collector_module.fetch_url(
+                "https://dblp.org/search/publ/api?q=one",
+                retry_total=1,
+                opener=opener,
+                sleeper=sleeps.append,
+                now_func=now_func,
+            )
+            collector_module.fetch_url(
+                "https://dblp.org/search/publ/api?q=two",
+                retry_total=1,
+                opener=opener,
+                sleeper=sleeps.append,
+                now_func=now_func,
+            )
+
+        self.assertEqual(len(sleeps), 1)
+        self.assertAlmostEqual(sleeps[0], 0.8)
+
     def test_builds_arxiv_query_for_configured_categories_and_terms(self) -> None:
         url = build_arxiv_query_url(
             query_terms=["memory safety", "agentic security"],
@@ -824,7 +1092,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
 
         def fetcher(url: str) -> bytes:
             seen_urls.append(url)
-            return DBLP_VENUE_FIXTURE.encode("utf-8")
+            return DBLP_VENUE_HTML_FIXTURE.encode("utf-8")
 
         papers = collect_dblp_venue_publications(
             venue_profiles=["acm_ccs"],
@@ -838,9 +1106,10 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         paper = papers[0]
         self.assertEqual(paper["source_id"], "dblp")
         self.assertEqual(paper["title"], "Memory Safety for Systems Security")
+        self.assertEqual(paper["authors"], ["Alice Example", "Bob Example"])
         self.assertEqual(paper["year"], 2026)
-        self.assertEqual(paper["venue"], "CCS")
-        self.assertIn("ACM+CCS+2026", seen_urls[0])
+        self.assertEqual(paper["venue"], "ACM CCS")
+        self.assertEqual(seen_urls[0], "https://dblp.org/db/conf/ccs/ccs2026.html")
         self.assertEqual(paper["source_records"][0]["venue_profile_id"], "acm_ccs")
         self.assertEqual(paper["source_records"][0]["collector_id"], "dblp_venues")
         self.assertEqual(paper["source_records"][0]["venue_group"], "security")
@@ -964,7 +1233,7 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
             now=datetime(2026, 7, 1, tzinfo=timezone.utc),
         )
 
-        self.assertIn("primary_location.source.id%3AS123456789", works_url)
+        self.assertIn("locations.source.id%3AS123456789", works_url)
         self.assertIn("publication_year%3A2026", works_url)
         self.assertEqual(len(papers), 1)
         paper = papers[0]
@@ -986,6 +1255,71 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
         )
         self.assertEqual(paper["source_provenance"]["source_id"], "openalex_venues")
         self.assertEqual(paper["source_provenance_records"][0]["source_id"], "openalex_venues")
+
+    def test_collect_openalex_venue_publications_skips_container_records(self) -> None:
+        works_fixture = """
+{
+  "meta": {"count": 2, "page": 1, "per_page": 2},
+  "results": [
+    {
+      "id": "https://openalex.org/W111",
+      "ids": {"openalex": "https://openalex.org/W111"},
+      "display_name": "Proceedings of the ACM Conference on Computer and Communications Security",
+      "publication_year": 2026,
+      "publication_date": "2026-11-01",
+      "type": "paratext",
+      "authorships": [],
+      "primary_location": {"source": {"display_name": "ACM Conference on Computer and Communications Security"}},
+      "best_oa_location": {},
+      "open_access": {},
+      "cited_by_count": 0,
+      "concepts": [],
+      "topics": []
+    },
+    {
+      "id": "https://openalex.org/W222",
+      "ids": {"openalex": "https://openalex.org/W222"},
+      "display_name": "Precise Memory Safety for Systems Security",
+      "abstract_inverted_index": {"Memory": [0], "safety": [1]},
+      "publication_year": 2026,
+      "publication_date": "2026-11-02",
+      "type": "article",
+      "authorships": [{"author": {"display_name": "Alice Example"}}],
+      "primary_location": {
+        "landing_page_url": "https://example.org/paper",
+        "source": {"display_name": "ACM Conference on Computer and Communications Security"}
+      },
+      "best_oa_location": {},
+      "open_access": {},
+      "cited_by_count": 1,
+      "concepts": [],
+      "topics": []
+    }
+  ]
+}
+"""
+        seen_urls = []
+
+        def fetcher(url: str) -> bytes:
+            seen_urls.append(url)
+            if "api.openalex.org/sources" in url:
+                return OPENALEX_SOURCE_FIXTURE.encode("utf-8")
+            return works_fixture.encode("utf-8")
+
+        papers = collect_openalex_venue_publications(
+            venue_profiles=["acm_ccs"],
+            year=2026,
+            max_results=1,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+
+        works_urls = [url for url in seen_urls if "api.openalex.org/works" in url]
+        self.assertTrue(works_urls)
+        self.assertIn("locations.source.id%3AS123456789", works_urls[0])
+        self.assertIn("per-page=10", works_urls[0])
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["title"], "Precise Memory Safety for Systems Security")
 
     def test_builds_and_parses_openreview_notes(self) -> None:
         url = build_openreview_notes_url(
@@ -1353,6 +1687,50 @@ class LiteratureRadarCollectorTest(unittest.TestCase):
     def test_semantic_scholar_recommendations_require_positive_seed_ids(self) -> None:
         with self.assertRaisesRegex(ValueError, "positive seed paper ID"):
             build_semantic_scholar_recommendations_body(positive_paper_ids=[])
+
+    def test_curated_research_page_parser_keeps_paper_links_and_drops_navigation(self) -> None:
+        html = """
+        <html><body>
+          <nav><a href="/publications">Publications</a></nav>
+          <a href="/paper-1">GPU-Accelerated Fuzzing for Secure Systems</a>
+          <a href="/paper-2">Memory Safety Regression Testing in Large Codebases</a>
+          <a href="/paper-1">GPU-Accelerated Fuzzing for Secure Systems</a>
+          <a href="/privacy">Privacy Policy</a>
+        </body></html>
+        """
+        papers = parse_curated_research_page(
+            html,
+            page_url="https://research.example.org/publications",
+            max_results=10,
+            collected_at=datetime(2026, 7, 8, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual([paper["title"] for paper in papers], [
+            "GPU-Accelerated Fuzzing for Secure Systems",
+            "Memory Safety Regression Testing in Large Codebases",
+        ])
+        self.assertEqual(papers[0]["source_id"], "curated_research_pages")
+        self.assertEqual(papers[0]["links"]["landing"], "https://research.example.org/paper-1")
+        self.assertEqual(papers[0]["source_records"][0]["source_page"], "https://research.example.org/publications")
+        self.assertFalse(papers[0]["source_records"][0]["authoritative_metadata"])
+
+    def test_collect_curated_research_pages_fetches_configured_pages_without_crawling(self) -> None:
+        seen_urls: list[str] = []
+
+        def fetcher(fetch_url: str) -> bytes:
+            seen_urls.append(fetch_url)
+            return b'<a href="/paper">Capability-Oriented Kernel Isolation for Secure Systems</a>'
+
+        papers = collect_curated_research_pages(
+            ["https://research.example.org/publications"],
+            max_results=3,
+            fetcher=fetcher,
+            now=datetime(2026, 7, 8, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(seen_urls, ["https://research.example.org/publications"])
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["links"]["landing"], "https://research.example.org/paper")
 
     def test_parses_and_applies_unpaywall_enrichment(self) -> None:
         url = build_unpaywall_doi_url(doi="https://doi.org/10.1145/example", email="radar@example.com")

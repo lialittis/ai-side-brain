@@ -52,7 +52,7 @@ if [[ "${RADAR_CYCLE_SAVE_TODAY_SNAPSHOT:-1}" == "1" ]]; then
   SNAPSHOT_ARGS=(
     "team/research_cli.py"
     "radar-today-snapshot"
-    "--limit" "${RADAR_TODAY_LIMIT:-6}"
+    "--limit" "${RADAR_TODAY_LIMIT:-20}"
     "--actor" "${RADAR_TODAY_SNAPSHOT_ACTOR:-literature-radar-cycle}"
   )
   if [[ -n "${RADAR_DB_PATH:-}" ]]; then
@@ -67,11 +67,11 @@ if [[ "${RADAR_CYCLE_SAVE_TODAY_SNAPSHOT:-1}" == "1" ]]; then
     cp "$SNAPSHOT_JSON_PATH" "$LATEST_SNAPSHOT_JSON_PATH"
     cp "$SNAPSHOT_PATH" "$LATEST_SNAPSHOT_PATH"
   fi
-  echo "Literature Radar Today snapshot: $SNAPSHOT_PATH"
-  echo "Literature Radar Today snapshot JSON: $SNAPSHOT_JSON_PATH"
+  echo "Literature Radar Latest stack snapshot: $SNAPSHOT_PATH"
+  echo "Literature Radar Latest stack snapshot JSON: $SNAPSHOT_JSON_PATH"
   if [[ "${RADAR_WRITE_LATEST:-1}" == "1" ]]; then
-    echo "Literature Radar latest Today snapshot: $LATEST_SNAPSHOT_PATH"
-    echo "Literature Radar latest Today snapshot JSON: $LATEST_SNAPSHOT_JSON_PATH"
+    echo "Literature Radar latest stack snapshot: $LATEST_SNAPSHOT_PATH"
+    echo "Literature Radar latest stack snapshot JSON: $LATEST_SNAPSHOT_JSON_PATH"
   fi
 fi
 

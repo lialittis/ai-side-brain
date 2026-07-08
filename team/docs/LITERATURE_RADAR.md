@@ -233,19 +233,24 @@ triage plan, the same Source Health and Daily Review Plan start-here sections as
 the queue, per-paper triage next-step lines, and a Team Activity section when
 watch, dismiss, clear, or import decisions occurred inside the requested window.
 Entering Semantic Scholar seed IDs without selecting a seed-based source enables
-recommendations; selecting references or citations uses the same positive seed
-IDs for graph expansion. Negative seed IDs are saved with the same Team defaults
-and steer Semantic Scholar recommendations away from known low-value directions.
-OpenReview invitation IDs, OpenReview venue profiles, Semantic Scholar author
-IDs, and DBLP venue profiles automatically enable their matching collectors for
-that run.
+recommendations only when `SEMANTIC_SCHOLAR_API_KEY` is configured; selecting
+references or citations uses the same positive seed IDs for graph expansion.
+Negative seed IDs are saved with the same Team defaults and steer Semantic
+Scholar recommendations away from known low-value directions when that source is
+enabled. OpenReview invitation IDs, OpenReview venue profiles, and DBLP venue
+profiles automatically enable their matching collectors for that run. Semantic
+Scholar author IDs automatically enable their collector only when a Semantic
+Scholar API key is configured.
 
 The Source preset selector is the daily-use shortcut. New browser sessions
 default to `Team Security Daily`, the recommended current team preset for
 system security, memory safety, and agentic security: it
-combines arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref, DBLP security/PL
-venue profiles, OpenReview ICLR/NeurIPS/ICML venue profiles, USENIX Security,
-and NDSS. `Broad Daily` remains available as a simpler metadata sweep, and
+combines arXiv, DBLP, OpenAlex, Crossref, OpenReview ICLR/NeurIPS/ICML venue
+profiles, USENIX Security, NDSS, and DBLP tracked authors. DBLP venue-profile
+collection is opt-in because the live DBLP endpoint can rate-limit venue sweeps.
+Semantic Scholar is added to the preset only when
+`SEMANTIC_SCHOLAR_API_KEY` is configured. `Broad Daily` remains available as a
+simpler metadata sweep, and
 `Top Venue Sweep` is proceedings-focused across security, systems,
 PL/memory-safety, software-engineering, and AI/ML venue profiles.
 
@@ -261,11 +266,13 @@ Team web usage aligned with the same supported API/accepted-page collectors used
 by Personal Radar and the CLI.
 The Radar Profile block also shows pre-run source readiness for the saved form
 settings. It flags missing required inputs such as seed paper IDs or OpenReview
-invitation IDs before a team member starts a run, and it shows recommended
-configuration such as OpenAlex or Crossref contact mail. It also shows
-primary-source coverage for the objective's required families, so saved settings
-cannot silently omit arXiv, DBLP, Semantic Scholar, OpenAlex, Crossref,
-OpenReview, USENIX Security, NDSS, or Unpaywall OA enrichment. The active Team
+invitation IDs before a team member starts a run, and it flags the Semantic
+Scholar API key when a Semantic Scholar source is selected. OpenAlex, Crossref,
+and Unpaywall contact email remains optional. It also shows primary-source
+coverage for the objective's required families, so saved settings cannot
+silently omit arXiv, DBLP, OpenAlex, Crossref, OpenReview, USENIX Security,
+NDSS, or enabled optional families such as Semantic Scholar and Unpaywall OA
+enrichment. The active Team
 MVP target is the `thin_mvp_readiness` daily queue loop. The stricter
 `mvp_readiness` payload remains for compatibility, but the web UI presents it
 as beta/backlog readiness so source coverage, live validation, and operations
@@ -287,17 +294,21 @@ will drive relevance before a scheduled run spends API calls. It also reports
 `oa_enrichment` for Unpaywall so operators can see whether legal OA PDF/license
 resolution is ready for DOI-capable source selections, plus
 `source_validation_plan` with `network_performed=false` so automation can decide
-whether to configure missing source inputs, add recommended contact/API details,
-or proceed to a live collector run. `source_validation_guidance` turns that plan
-into an operator checklist with blocked required inputs, API-key/contact
-warnings, the recommended one-result live validation sample size, and compact
+whether to configure missing source inputs, add required API details, record
+optional contact metadata, or proceed to a live collector run.
+`source_validation_guidance` turns that plan
+into an operator checklist with blocked required inputs, Semantic Scholar API
+key requirements, optional contact metadata, the recommended one-result live
+validation sample size, and compact
 `Next:` action lines on the Radar Profile page. When DBLP,
 OpenAlex, or OpenReview venue profile selectors are configured, the payload also
 includes `venue_profile_summary` with the expanded top-conference profiles that
 will be queried. The DBLP/OpenAlex section includes `required_coverage` so the
 Radar page, CLI settings output, and automation can show how many required
 security, systems, PL/memory-safety, and software-engineering top venues are
-covered by the current selectors. Optional trend-signal sources such as Hugging
+covered by the current selectors. OpenAlex venue profiles are the default venue
+collection path; DBLP venue profiles remain available for explicit top-venue
+checks. Optional trend-signal sources such as Hugging
 Face Papers are reported in `trend_signal_options` as read-only, not-yet-runnable
 signals rather than authoritative bibliographic collectors. Queue evidence
 readiness also verifies that each recommendation carries an existing-work or
@@ -313,7 +324,7 @@ surface.
 The current runnable Team entry point is:
 
 ```bash
-python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --output team/logs/literature-radar.md
+python team/research_cli.py radar-run --source arxiv --source dblp --source openalex --source crossref --output team/logs/literature-radar.md
 python team/research_cli.py radar-settings
 python team/research_cli.py radar-settings --json
 python team/research_cli.py radar-validate-sources --use-saved-defaults
@@ -328,8 +339,9 @@ policy, expanded venue profile summary, and pre-run readiness without starting
 collectors, downloading PDFs, or calling AI. Use it before enabling a
 cron/systemd job or after changing `/radar` defaults, Team Interest weights, or
 venue selectors. The default direct source set includes OpenReview venue
-profiles with ICLR, NeurIPS, and ICML accepted-paper profiles; Unpaywall still
-requires contact email before legal OA/PDF enrichment is considered ready.
+profiles with ICLR, NeurIPS, and ICML accepted-paper profiles. Unpaywall contact
+email is optional; without it, legal OA/PDF enrichment is skipped or marked
+optional rather than blocking readiness.
 `radar-evaluate-relevance` is also read-only and offline. It runs the shared
 golden relevance cases that match the current Team Interest weights, covering
 active system-security, memory-safety, agentic-security, and negative/noise
@@ -343,10 +355,11 @@ Passing `--live` performs a small metadata-only validation through the existing
 collectors, using `--validation-max-results 1` by default, then reports
 succeeded, failed, blocked, or skipped source checks. It does not import papers,
 download PDFs, or call AI. The output also prints validation guidance for
-missing required source inputs, Semantic Scholar API keys, OpenAlex/Crossref
-contact mail, and Unpaywall OA-enrichment contact setup. A source can be
-reported as `skipped` when live validation was run but the source was not called
-because recommended setup such as Unpaywall email/contact is missing. When live validation
+missing required source inputs and Semantic Scholar API keys for selected
+Semantic Scholar sources. OpenAlex, Crossref, and Unpaywall contact mail are
+optional and do not produce default setup warnings. A source can be reported as
+`skipped` when live validation was run but the source was not called because
+required setup is missing. When live validation
 does fail, the result includes `result_guidance` that classifies likely rate
 limits, transient service-unavailable responses, auth/access failures, network
 issues, parser/response-shape failures, blocked config, skipped samples, and
@@ -367,7 +380,7 @@ over source settings, primary-source coverage, live validation, relevance
 checks, latest-run freshness, the active review queue, recommendation evidence
 quality, engineering guardrails, and operations readiness. This strict checklist
 is intentionally broader than the thin daily-use MVP: operations backup evidence
-full live-source coverage, and missing recommended API/contact metadata are
+full live-source coverage, and optional contact metadata are
 beta-hardening gates, not blockers for manually trying the Radar Queue and
 Brief. Its `next_action` is the safest
 single next step for getting the Team Radar into unattended daily use, such as
@@ -383,11 +396,10 @@ The same payload includes `mvp_setup_actions`, an ordered beta/backlog operator
 action plan for stricter deployment gates. It folds source-validation guidance,
 missing or misconfigured primary-source requirements, live-validation commands,
 and backup/operations readiness into compact steps. If the source families are
-selected but Unpaywall/contact setup is missing, the plan reports
+selected but the Semantic Scholar API key is missing, the plan reports
 `configure_primary_source_requirements` rather than a generic source-expansion
 step. Source metadata actions include `env_vars` and `example_env` hints such
-as `SEMANTIC_SCHOLAR_API_KEY=api-key` or
-`RADAR_SOURCE_CONTACT_EMAIL=you@example.org`. Actions that require networked source
+as `SEMANTIC_SCHOLAR_API_KEY=api-key`. Actions that require networked source
 APIs, such as live validation, are marked with `external_api=true` so dev
 snapshots can separate local setup from API calls.
 The JSON plan also includes `setup_env_block.lines` and `setup_env_block.text`
@@ -482,25 +494,27 @@ Useful options:
 - `--import-results`: import high-scoring recommendations into the Team library.
 - `--import-limit`: cap imported recommendations.
 - `--min-score`: minimum score required before import.
-- `--semantic-scholar-api-key`: optional API key for higher Semantic Scholar
-  API rate limits; `SEMANTIC_SCHOLAR_API_KEY` is also supported.
+- `--semantic-scholar-api-key`: API key required for Semantic Scholar sources;
+  `SEMANTIC_SCHOLAR_API_KEY` is also supported.
 - `--dblp-author-pid`: DBLP person PID to track; repeatable. Use with the
   `dblp_authors` source to collect recent DBLP-indexed publications from authors
   the team already follows. DBLP PIDs look like `65/9612` and can be copied from
   DBLP person export URLs.
 - `--semantic-scholar-author-id`: Semantic Scholar author ID to track; repeatable.
   Use with the `semantic_scholar_authors` source to collect recent papers from
-  authors the team already follows.
+  authors the team already follows. It auto-enables that collector only when a
+  Semantic Scholar API key is configured.
 - `--seed-paper-id`: positive Semantic Scholar seed paper ID for seed-based
   graph expansion; repeatable. Passing a seed ID without an explicit seed-based
-  source automatically enables `semantic_scholar_recommendations`. Explicit
-  sources can use `semantic_scholar_recommendations`,
+  source automatically enables `semantic_scholar_recommendations` only when a
+  Semantic Scholar API key is configured. Explicit sources can use
+  `semantic_scholar_recommendations`,
   `semantic_scholar_references`, or `semantic_scholar_citations`.
 - `--negative-seed-paper-id`: Semantic Scholar seed paper ID to steer related
   recommendations away from; repeatable.
-- `--source-contact-email`: fallback contact email for OpenAlex polite-pool
-  requests, Crossref polite-pool requests, and Unpaywall OA/PDF enrichment when
-  service-specific options are unset.
+- `--source-contact-email`: optional fallback contact email for OpenAlex
+  polite-pool requests, Crossref polite-pool requests, and Unpaywall OA/PDF
+  enrichment when service-specific options are unset.
 - `--openalex-mailto`: optional email for OpenAlex polite-pool requests;
   `OPENALEX_MAILTO` is also supported.
 - `--openalex-author-id`: OpenAlex author ID to track; repeatable. Use with the
@@ -521,17 +535,18 @@ Useful options:
   `CROSSREF_MAILTO` is also supported.
 - `--unpaywall-email`: optional email for Unpaywall legal OA/PDF enrichment;
   `UNPAYWALL_EMAIL` is also supported. When unset, the runner skips Unpaywall
-  and does not resolve extra OA PDFs. The `/radar` form's saved source contact
-  email is reused for OpenAlex, Crossref, and Unpaywall in web-triggered runs
-  and scheduled CLI runs with `--use-saved-defaults`.
+  and does not resolve extra OA PDFs, but readiness does not warn by default.
+  The `/radar` form's saved source contact email is reused for OpenAlex,
+  Crossref, and Unpaywall in web-triggered runs and scheduled CLI runs with
+  `--use-saved-defaults`.
 - `--conference-year`: accepted-paper page year for USENIX Security and NDSS;
   defaults to the current calendar year.
-- `--venue-profile`: DBLP venue profile or group for the `dblp_venues` source;
-  repeatable. The same selectors also drive the `openalex_venues` source for
-  source-ID-based OpenAlex cross-checking. Supported group selectors include `security`, `systems`,
+- `--venue-profile`: venue profile or group for the `openalex_venues` source,
+  or for explicit `dblp_venues` runs; repeatable. Supported group selectors include `security`, `systems`,
   `programming_languages_memory_safety`, and `software_engineering`; specific
-  selectors include `acm_ccs`, `ieee_sp`, `pldi`, `icse`, and the other profile
-  IDs documented in the shared source.
+  selectors include `acm_ccs`, `ieee_sp`, `acns`, `acsac`, `asia_ccs`,
+  `euro_sp`, `sosp`, `isca`, `osdi`, `eurosys`, `pldi`, `icse`, and the other
+  profile IDs documented in the shared source.
 - `--usenix-cycle`: USENIX Security submission cycle to collect; repeatable;
   defaults to cycle 1.
 - `--json`: emit machine-readable output for automation.
@@ -576,11 +591,11 @@ python team/research_cli.py radar-run --source arxiv --summarize --summary-provi
 python team/research_cli.py radar-run --source arxiv --summary-provider openrouter --summary-limit 3 --summary-min-score 70
 ```
 
-Example top-conference DBLP metadata:
+Example top-conference metadata:
 
 ```bash
-python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
 python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 ```
 
@@ -786,12 +801,15 @@ team/scripts/build_literature_radar_brief.sh
 
 The cycle script is the recommended team-facing scheduled command. It runs a
 readiness check, then a weekday-rotated collection pass, saves the member-facing
-Today selection, and immediately builds a stored-run brief. By default it sets
+Latest stack, and immediately builds a stored-run brief. By default it sets
 `RADAR_WEEKDAY_ROTATION=1`, which forces `RADAR_USE_SAVED_DEFAULTS=0` for the
-collection phase and rotates source families by day: Monday arXiv, Tuesday
-metadata APIs, Wednesday DBLP/OpenAlex venues, Thursday OpenReview venues,
-Friday USENIX/NDSS accepted pages, Saturday Semantic Scholar seed expansion,
-and Sunday catch-up. Set `RADAR_WEEKDAY_ROTATION=0` for jobs that should reuse
+collection phase and rotates source families by day: Monday CCS/NDSS, Tuesday
+USENIX Security/IEEE S&P, Wednesday the remaining configured system/security
+conference profiles, Thursday arXiv plus Crossref, Friday manually curated
+research publication pages, Saturday tracked DBLP/OpenAlex authors plus Semantic
+Scholar seed expansion only when the required key and seed IDs are configured,
+and Sunday OpenReview plus broad metadata catch-up. Set
+`RADAR_WEEKDAY_ROTATION=0` for jobs that should reuse
 web-saved source defaults or an explicit `RADAR_SOURCE_PRESET`.
 The readiness phase writes status/settings/queue/source-validation/relevance
 snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness` unless
@@ -802,14 +820,14 @@ the cycle run `radar-import-queue` after collection and before the brief. Use
 `RADAR_IMPORT_QUEUE_TRIAGE_ACTION`, `RADAR_IMPORT_QUEUE_RECENT_DAYS`, and
 `RADAR_IMPORT_QUEUE_ACTOR` to tune that opt-in promotion step; timestamped and
 latest queue-import JSON/text snapshots are written under `RADAR_OUTPUT_DIR`.
-Today snapshot persistence is on by default. Set
-`RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0` to skip writing the current high-signal
-Today cards to `/today/history`.
+Latest snapshot persistence is on by default. Set
+`RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0` to skip writing the current unhandled
+Latest stack to `/latest/history`.
 
 After validating the scheduled workflow and before waiting for the first clean
 automatic collection, use `python team/research_cli.py radar-reset-current-data
 --json` to inspect the Radar-only reset plan. Confirmed deletion clears stored
-Radar runs, deduplicated Radar papers, Radar recommendations, and Today
+Radar runs, deduplicated Radar papers, Radar recommendations, and Latest
 snapshots; it does not remove member-submitted or library papers. Actual
 deletion requires `--confirm-delete-current-radar-data` plus either
 `--backup-path PATH` or `--skip-backup`.
@@ -937,6 +955,9 @@ It reads `.env` first and supports these optional variables:
 - `RADAR_WEEKDAY_ROTATION=1`: use the scheduled weekday source rotation. This is
   the default for `run_literature_radar_cycle.sh`; it clears fixed source
   presets and saved source defaults for collection.
+  The rotation is Monday CCS/NDSS, Tuesday USENIX Security/IEEE S&P, Wednesday
+  other configured system/security conferences, Thursday arXiv/Crossref, Friday
+  curated publication pages, Saturday tracked authors, and Sunday catch-up.
 - `RADAR_USE_SAVED_DEFAULTS=1`: start from the Team defaults saved in the
   `/radar` form, then let explicit environment variables override them.
   Set `RADAR_WEEKDAY_ROTATION=0` before relying on saved source defaults in the
@@ -947,17 +968,19 @@ It reads `.env` first and supports these optional variables:
   snapshots to `${RADAR_OUTPUT_DIR:-team/logs}/readiness`.
 - `RADAR_CYCLE_RUN_COLLECTION=0`: skip collection when using
   `run_literature_radar_cycle.sh`.
-- `RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0`: skip saving the morning Today selection
+- `RADAR_CYCLE_SAVE_TODAY_SNAPSHOT=0`: skip saving the morning Latest stack
   after collection.
 - `RADAR_CYCLE_BUILD_BRIEF=0`: skip brief generation when using
   `run_literature_radar_cycle.sh`.
 - `RADAR_SOURCES`: space-separated sources. Default:
-  `arxiv dblp semantic_scholar openalex crossref openreview_venues usenix_security ndss`.
+  `arxiv dblp openalex crossref openreview_venues usenix_security ndss`.
   Optional seed-based sources include `semantic_scholar_recommendations`,
   `semantic_scholar_references`, and `semantic_scholar_citations`; author
   tracking uses `semantic_scholar_authors`, `dblp_authors`, or
   `openalex_authors`; venue cross-checking can use `openalex_venues`;
-  OpenReview venue presets use `openreview_venues`.
+  OpenReview venue presets use `openreview_venues`. All Semantic Scholar
+  sources require `SEMANTIC_SCHOLAR_API_KEY` and are removed from default or
+  preset runs when the key is absent.
 - `RADAR_ARXIV_CATEGORIES`: optional arXiv category scope. Default:
   `cs.CR cs.PL cs.SE cs.AI cs.LG cs.CL`.
 - `RADAR_SOURCE_PRESET`: named source bundle for scheduled runs. Use
@@ -1039,15 +1062,27 @@ variables are still applied to the preflight snapshot.
   source wrapper. The collection and status scripts both pass this into the
   settings/preflight snapshot, so operators can verify the configured pages
   before or after scheduled runs.
-- `RADAR_DBLP_VENUES`: space-separated DBLP venue profile/group selectors for
-  the `dblp_venues` source.
+- `RADAR_CURATED_RESEARCH_PAGES`: space-separated manually curated publication
+  page URLs for the Friday curated-page lane, for example
+  `https://research.nvidia.com/publications`. The collector fetches only the
+  configured pages and does not crawl their outbound paper links.
+- `RADAR_PUBLIC_SITE_REQUEST_INTERVAL_SECONDS`, `RADAR_SOURCE_RETRY_TOTAL`,
+  `RADAR_SOURCE_RETRY_AFTER_MAX_SECONDS`, and
+  `RADAR_SOURCE_RATE_LIMIT_COOLDOWN_SECONDS`: optional public-site pacing and
+  retry controls. The weekday scheduler exports conservative defaults so
+  official/curated pages are checked at low volume.
+- `RADAR_DBLP_VENUES`: space-separated venue profile/group selectors for
+  `openalex_venues` or explicit `dblp_venues` runs.
 - `RADAR_DBLP_AUTHOR_PIDS`: space-separated DBLP person PIDs for the
-  `dblp_authors` source.
+  `dblp_authors` source. Team defaults track Mathias Payer (`31/1273`),
+  Mahmoud Ammar (`02/5804`), and M. Tarek Ibn Ziad (`151/4037`) when the Team
+  source preset or Saturday author expansion plan is used.
 - `RADAR_OPENALEX_AUTHOR_IDS`: space-separated OpenAlex author IDs for the
   `openalex_authors` source.
 - `RADAR_SOURCE_CONTACT_EMAIL`: preferred Team contact email for OpenAlex
   polite-pool requests, Crossref polite-pool requests, and Unpaywall legal
-  OA/PDF and license enrichment.
+  OA/PDF and license enrichment. This is optional and does not create default
+  setup warnings when unset.
 - `RADAR_OPENALEX_MAILTO`, `RADAR_CROSSREF_MAILTO`, and
   `RADAR_UNPAYWALL_EMAIL`: optional Team-specific overrides when a provider
   needs a different address; generic `OPENALEX_MAILTO`, `CROSSREF_MAILTO`, and
@@ -1062,9 +1097,12 @@ variables are still applied to the preflight snapshot.
 - `RADAR_OPENREVIEW_INCLUDE_UNACCEPTED=1`: include non-accepted OpenReview
   submissions for preset venue runs.
 - `RADAR_SEED_PAPER_IDS`, `RADAR_NEGATIVE_SEED_PAPER_IDS`: space-separated
-  Semantic Scholar paper IDs for related-paper expansion.
+  Semantic Scholar paper IDs for related-paper expansion. These are used only
+  when `SEMANTIC_SCHOLAR_API_KEY` is configured or a Semantic Scholar source is
+  explicitly selected with a key.
 - `RADAR_AUTHOR_IDS`: space-separated Semantic Scholar author IDs for the
-  `semantic_scholar_authors` source.
+  `semantic_scholar_authors` source. These are used only when
+  `SEMANTIC_SCHOLAR_API_KEY` is configured.
 - `RADAR_DB_PATH`, `RADAR_OUTPUT_DIR`.
 - `RADAR_BRIEF_DAYS`: brief history window; default `7`.
 - `RADAR_BRIEF_RECOMMENDATION_LIMIT`: maximum recommendations in the brief;
@@ -1073,7 +1111,8 @@ variables are still applied to the preflight snapshot.
 - `RADAR_BRIEF_OUTPUT_DIR`: brief output directory; default `team/logs`.
 - `RADAR_FRESHNESS_MAX_AGE_HOURS`: latest-run freshness threshold for queue and
   brief snapshots; default `36`.
-- API etiquette/config: prefer `SEMANTIC_SCHOLAR_API_KEY` and
+- API etiquette/config: set `SEMANTIC_SCHOLAR_API_KEY` only when Semantic
+  Scholar access is available. Optional contact metadata can use
   `RADAR_SOURCE_CONTACT_EMAIL`; use `RADAR_OPENALEX_MAILTO`,
   `RADAR_CROSSREF_MAILTO`, `RADAR_UNPAYWALL_EMAIL`, `OPENALEX_MAILTO`,
   `CROSSREF_MAILTO`, or `UNPAYWALL_EMAIL` only as service-specific contact
@@ -1176,7 +1215,7 @@ User-level systemd timer templates are also available under
 daily timer is `ai-side-brain-team-literature-radar-cycle.timer`. It runs
 `team/scripts/run_literature_radar_cycle.sh` at 06:00 local time. The cycle uses
 weekday source rotation by default, runs offline readiness, refreshes queue and
-Today-history snapshots, and builds the stored brief in one scheduled job. Do
+Latest-history snapshots, and builds the stored brief in one scheduled job. Do
 not enable it together with
 `ai-side-brain-team-literature-radar.timer`, because both run Team collection.
 Use the separate Team collection and Team brief timers only when those phases

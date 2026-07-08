@@ -64,6 +64,7 @@ from shared.literature_radar import (
     radar_primary_source_coverage_summary,
     radar_relevance_evaluation_cases_for_interests,
     radar_history_record_source_ids,
+    official_accepted_pages_from_venue_profiles,
     radar_history_review_status,
     radar_latest_signal_lines,
     radar_guardrail_readiness,
@@ -104,6 +105,7 @@ from team.literature_radar import (
     import_radar_paper_record,
     import_radar_recommendation,
     run_team_literature_radar,
+    team_semantic_scholar_api_key_configured,
     team_radar_collection_config,
     team_radar_queue_link,
     team_radar_queue_review_context,
@@ -175,6 +177,7 @@ RADAR_LIST_SETTING_KEYS = {
     "negative_seed_paper_ids",
     "openreview_invitations",
     "openreview_venue_profiles",
+    "curated_research_pages",
     "venue_profiles",
 }
 
@@ -322,13 +325,13 @@ def canonical_paper_url(url: str) -> str:
 
 
 def page(title: str, body: str, *, active: str = "papers") -> str:
-    today_active = active in {"today", "radar_queue"}
+    latest_active = active in {"latest", "today", "radar_queue"}
     nav = "\n".join(
         [
-            f'<a class="nav-item {"active" if today_active else ""}" href="/">Today</a>',
+            f'<a class="nav-item {"active" if latest_active else ""}" href="/">Latest</a>',
             f'<a class="nav-item {"active" if active in {"papers", "library"} else ""}" href="/library">Library</a>',
             f'<a class="nav-item {"active" if active == "radar_brief" else ""}" href="/radar/brief?days=7&amp;limit=20">Digest</a>',
-            f'<a class="nav-item {"active" if active == "today_history" else ""}" href="/today/history">History</a>',
+            f'<a class="nav-item {"active" if active == "today_history" else ""}" href="/latest/history">History</a>',
             f'<a class="nav-item {"active" if active == "submit" else ""}" href="/submit">Submit</a>',
             f'<a class="nav-item {"active" if active == "interests" else ""}" href="/interests">Topics</a>',
         ]
@@ -1525,7 +1528,7 @@ def render_literature_radar_page(
         else []
     )
     body = f"""
-    {render_topline("Radar Ops", "Source settings, run controls, diagnostics, and owner-facing Radar status.", "/radar/queue?limit=20", "Open Today")}
+    {render_topline("Radar Ops", "Source settings, run controls, diagnostics, and owner-facing Radar status.", "/radar/queue?limit=20", "Open Latest Stack")}
     {render_notice(notice)}
     {render_radar_daily_overview(database, runs)}
     <div class="radar-grid radar-dashboard-grid">
@@ -1573,7 +1576,7 @@ def render_literature_radar_brief_page(
         configured_primary_source_coverage=team_saved_primary_source_coverage(database),
     )
     body = f"""
-    {render_topline("Research Digest", "A short roll-up of new papers and Radar signals.", "/", "Today")}
+    {render_topline("Research Digest", "A short roll-up of new papers and Radar signals.", "/", "Latest")}
     <section class="panel">
       {render_notice(notice)}
       {render_radar_brief_form(days=days, limit=limit, run_limit=run_limit, queue_recent_days=selected_queue_recent_days)}
@@ -1628,12 +1631,12 @@ def render_literature_radar_queue_page(
         queue_window=queue_window,
     )
     body = f"""
-    {render_topline("Radar Today", "New Radar items ranked by likely value for the team.", "/radar/brief?days=7&amp;limit=20", "Open Digest")}
+    {render_topline("Radar Queue", "Unhandled Radar items ranked by likely value for the team.", "/radar/brief?days=7&amp;limit=20", "Open Digest")}
     {render_notice(notice)}
-    <section class="panel radar-queue" aria-label="Literature Radar today feed">
+    <section class="panel radar-queue" aria-label="Literature Radar latest stack">
       <div class="radar-queue-head">
         <div>
-          <h2>Worth Reading Today</h2>
+          <h2>Latest Worth Reading</h2>
           <div class="muted">{html_escape(radar_today_status_line(review_counts, len(records)))}</div>
         </div>
         <div class="radar-queue-actions">
@@ -1666,7 +1669,7 @@ def render_literature_radar_queue_page(
       )}
     </section>
     """
-    return page("Radar Today", body, active="radar_queue")
+    return page("Radar Queue", body, active="radar_queue")
 
 
 def render_literature_radar_papers_page(
@@ -1754,10 +1757,10 @@ def render_radar_daily_overview(database: TeamResearchDatabase, runs: list[dict[
       <div class="radar-overview-head">
         <div>
           <h2>Radar Operations</h2>
-          <div class="muted">Refresh sources, inspect diagnostics, and keep the member-facing Today feed healthy.</div>
+          <div class="muted">Refresh sources, inspect diagnostics, and keep the member-facing Latest stack healthy.</div>
         </div>
         <div class="radar-overview-actions">
-          <a class="button primary" href="/radar/queue?limit=20">Open Today</a>
+          <a class="button primary" href="/radar/queue?limit=20">Open Latest Stack</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
           <a class="button" href="/interests">Topics</a>
         </div>
@@ -2534,6 +2537,8 @@ def team_radar_source_validation_args(settings_payload: dict[str, Any]) -> list[
         argv.extend(["--openreview-invitation", str(invitation)])
     for venue_profile in settings.get("openreview_venue_profiles") or []:
         argv.extend(["--openreview-venue-profile", str(venue_profile)])
+    for page_url in settings.get("curated_research_pages") or []:
+        argv.extend(["--curated-research-page", str(page_url)])
     if settings.get("include_openreview_unaccepted"):
         argv.append("--include-openreview-unaccepted")
     for page in settings.get("official_accepted_pages") or []:
@@ -2860,6 +2865,8 @@ def radar_settings_venue_profile_summary(settings: dict[str, Any]) -> dict[str, 
 def radar_settings_top_venue_coverage_label(settings: dict[str, Any]) -> str:
     summary = radar_settings_venue_profile_summary(settings)
     section = summary.get("dblp_openalex") if isinstance(summary.get("dblp_openalex"), dict) else {}
+    if not int(section.get("profile_count") or 0):
+        return ""
     coverage = section.get("required_coverage") if isinstance(section.get("required_coverage"), dict) else {}
     required = int(coverage.get("required_count") or 0)
     if not required:
@@ -2930,6 +2937,7 @@ def radar_settings_collection_config(settings: dict[str, Any]) -> dict[str, Any]
         negative_seed_paper_ids=list(settings.get("negative_seed_paper_ids") or []),
         openalex_mailto=str(settings.get("openalex_mailto") or settings.get("source_contact_email") or "") or None,
         openreview_invitations=list(settings.get("openreview_invitations") or []),
+        curated_research_pages=list(settings.get("curated_research_pages") or []),
         crossref_mailto=str(settings.get("crossref_mailto") or settings.get("source_contact_email") or "") or None,
         unpaywall_email=str(settings.get("unpaywall_email") or settings.get("source_contact_email") or "") or None,
         semantic_scholar_author_ids=list(settings.get("semantic_scholar_author_ids") or []),
@@ -2953,7 +2961,7 @@ def render_radar_history_actions(database: TeamResearchDatabase) -> str:
     review_counts = database.literature_radar_paper_review_counts()
     return f"""
     <div class="radar-brief-link">
-      <a class="button" href="/radar/queue?limit=20">Radar Today</a>
+      <a class="button" href="/radar/queue?limit=20">Latest Stack</a>
       <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
       <a class="button" href="/radar/brief.json?days=7&amp;limit=20">Brief JSON</a>
       <a class="button" href="/radar/papers?limit=50">Paper History</a>
@@ -3533,6 +3541,10 @@ def render_radar_run_form(database: TeamResearchDatabase) -> str:
       <label>
         <span class="muted">Venue profiles</span>
         <input name="venue_profiles" placeholder="security, systems" value="{html_escape(radar_list_form_value(settings, 'venue_profiles'))}">
+      </label>
+      <label>
+        <span class="muted">Curated publication pages</span>
+        <textarea name="curated_research_pages" placeholder="https://research.nvidia.com/publications">{html_escape(radar_list_form_value(settings, 'curated_research_pages'))}</textarea>
       </label>
       <label>
         <span class="muted">Official accepted pages</span>
@@ -4193,6 +4205,7 @@ def render_radar_collection_config(config: Any) -> str:
         ("seed_paper_ids", "seed papers"),
         ("negative_seed_paper_ids", "negative seeds"),
         ("openreview_invitations", "OpenReview invitations"),
+        ("curated_research_pages", "curated pages"),
     ]
     for key, label in list_fields:
         value = config.get(key)
@@ -4836,9 +4849,9 @@ def render_today_page(
     database: TeamResearchDatabase,
     *,
     notice: str = "",
-    limit: int = 6,
+    limit: int = 20,
 ) -> str:
-    selected_limit = max(1, int(limit or 6))
+    selected_limit = max(1, int(limit or 20))
     payload = build_today_radar_selection_payload(database, limit=selected_limit)
     records = payload.get("papers") if isinstance(payload.get("papers"), list) else []
     counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
@@ -4847,17 +4860,17 @@ def render_today_page(
     selected_review = str(payload.get("review") or "all")
     queue_window = {"limit": selected_limit, "triage_action": "", "recent_days": 0}
     body = f"""
-    {render_topline("Today", "New research signals worth attention, ranked for a quick skim.", "/submit", "Submit")}
+    {render_topline("Latest", "Unhandled research papers worth reading, kept as a review stack until the team acts on them.", "/submit", "Submit")}
     {render_notice(notice)}
-    <section class="panel today-hero" aria-label="Today research feed">
+    <section class="panel today-hero" aria-label="Latest research stack">
       <div class="today-head">
         <div>
-          <h2 class="today-title">Worth Reading Today</h2>
+          <h2 class="today-title">Latest Worth Reading</h2>
           <div class="today-summary">{html_escape(radar_today_status_line(counts, len(records), today_selection))}</div>
         </div>
         <div class="radar-overview-actions">
           <a class="button primary" href="/radar/brief?days=7&amp;limit=20">Open Digest</a>
-          <a class="button" href="/today/history">History</a>
+          <a class="button" href="/latest/history">History</a>
           <a class="button" href="/library">Library</a>
         </div>
       </div>
@@ -4866,11 +4879,11 @@ def render_today_page(
     {render_today_feed(records, review_filter=selected_review, queue_window=queue_window)}
     {render_empty_today(records, counts)}
     """
-    return page("Today", body, active="today")
+    return page("Latest", body, active="latest")
 
 
 def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit: int) -> dict[str, Any]:
-    selected_limit = max(1, int(limit or 6))
+    selected_limit = max(1, int(limit or 20))
     payload = build_team_literature_radar_queue_payload(
         database,
         limit=1,
@@ -4879,34 +4892,59 @@ def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit
     counts = payload.get("review_counts") if isinstance(payload.get("review_counts"), dict) else {}
     unreviewed_queue = build_today_review_queue(database, counts, review_status="unreviewed")
     unreviewed_records = unreviewed_queue.get("papers") if isinstance(unreviewed_queue.get("papers"), list) else []
+    watch_queue = build_today_review_queue(database, counts, review_status="watch")
+    saved_records = watch_queue.get("papers") if isinstance(watch_queue.get("papers"), list) else []
     high_signal_new = [record for record in unreviewed_records if today_record_worth_attention(record)]
-    mode = "new"
-    selected_records = high_signal_new
-    saved_records: list[dict[str, Any]] = []
-    if not selected_records:
-        watch_queue = build_today_review_queue(database, counts, review_status="watch")
-        saved_records = watch_queue.get("papers") if isinstance(watch_queue.get("papers"), list) else []
-        if saved_records:
-            selected_records = saved_records
-            mode = "saved"
-        else:
-            mode = "empty"
+    selected_records = latest_stack_records(high_signal_new, saved_records)
+    selected_new_count = sum(1 for record in selected_records if radar_history_review_status(record) != "watch")
+    selected_saved_count = sum(1 for record in selected_records if radar_history_review_status(record) == "watch")
+    mode = "latest" if selected_records else "empty"
     visible_records = selected_records[:selected_limit]
     payload = dict(payload)
     payload["papers"] = visible_records
-    payload["review"] = "watch" if mode == "saved" else "unreviewed"
+    payload["review"] = "all"
     payload["today_selection"] = {
         "mode": mode,
         "visible_count": len(visible_records),
+        "active_count": len(unreviewed_records) + len(saved_records),
+        "stack_count": len(selected_records),
         "new_active_count": len(unreviewed_records),
-        "new_high_signal_count": len(high_signal_new),
-        "saved_active_count": len(saved_records),
+        "new_high_signal_count": selected_new_count,
+        "saved_active_count": selected_saved_count,
         "thresholds": {
             "ai_min_score": TODAY_AI_MIN_SCORE,
             "local_min_score": TODAY_LOCAL_MIN_SCORE,
         },
     }
     return payload
+
+
+def latest_stack_records(
+    high_signal_new: list[dict[str, Any]],
+    saved_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    selected: dict[str, dict[str, Any]] = {}
+    for record in [*high_signal_new, *saved_records]:
+        if radar_review_triage_hint(record).get("action") == "already_imported":
+            continue
+        key = str(record.get("dedupe_key") or record.get("id") or record.get("title") or "")
+        if not key:
+            continue
+        selected[key] = record
+    return sorted(selected.values(), key=latest_stack_priority_key, reverse=True)
+
+
+def latest_stack_priority_key(record: dict[str, Any]) -> tuple[float, int, str, str]:
+    score = today_effective_score(record)
+    if today_has_ai_support(record):
+        score += 8
+    review_boost = 1 if radar_history_review_status(record) == "watch" else 0
+    return (
+        score,
+        review_boost,
+        str(record.get("latest_seen_at") or record.get("first_seen_at") or ""),
+        str(record.get("title") or "").lower(),
+    )
 
 
 def build_today_review_queue(
@@ -4955,9 +4993,44 @@ def radar_today_status_line(
 ) -> str:
     selected = selection if isinstance(selection, dict) else {}
     mode = str(selected.get("mode") or "")
-    new_active_count = int(selected.get("new_active_count") or counts.get("unreviewed") or 0)
-    new_high_signal_count = int(selected.get("new_high_signal_count") or visible_count or 0)
-    saved_active_count = int(selected.get("saved_active_count") or counts.get("watch") or 0)
+
+    def selection_count(key: str, fallback: Any = 0) -> int:
+        if key in selected:
+            try:
+                return int(selected.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+        try:
+            return int(fallback or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    stack_count = selection_count("stack_count", visible_count)
+    active_count = selection_count("active_count", 0)
+    new_active_count = selection_count("new_active_count", counts.get("unreviewed"))
+    new_high_signal_count = selection_count("new_high_signal_count", visible_count)
+    saved_active_count = selection_count("saved_active_count", counts.get("watch"))
+    if visible_count and not mode:
+        return (
+            f"Showing {visible_count} active Radar paper"
+            f"{'' if visible_count == 1 else 's'} from the unhandled review queue."
+        )
+    if visible_count and mode == "latest":
+        visible_text = f"{visible_count} of {stack_count}" if stack_count > visible_count else str(visible_count)
+        source_parts = []
+        if new_high_signal_count:
+            source_parts.append(
+                f"{new_high_signal_count} new high-signal paper{'' if new_high_signal_count == 1 else 's'}"
+            )
+        if saved_active_count:
+            source_parts.append(
+                f"{saved_active_count} saved follow-up{'' if saved_active_count == 1 else 's'}"
+            )
+        source_text = " and ".join(source_parts) if source_parts else "active Radar papers"
+        return (
+            f"Showing {visible_text} unhandled worth-reading paper"
+            f"{'' if visible_count == 1 else 's'} from {source_text}."
+        )
     if visible_count and mode == "new":
         visible_text = f"{visible_count} of {new_high_signal_count}" if new_high_signal_count > visible_count else str(visible_count)
         return (
@@ -4967,14 +5040,14 @@ def radar_today_status_line(
         )
     if visible_count and mode == "saved":
         return (
-            f"No new papers meet today's threshold. Showing {visible_count} saved follow-up paper"
+            f"No new high-signal papers right now. Showing {visible_count} saved follow-up paper"
             f"{'' if visible_count == 1 else 's'}."
         )
     if new_active_count:
         active_suffix = "" if new_active_count == 1 else "s"
         active_verb = "remains" if new_active_count == 1 else "remain"
         return (
-            f"No new papers meet today's high-signal threshold. {new_active_count} active Radar candidate"
+            f"No unhandled papers meet the worth-reading threshold. {new_active_count} active Radar candidate"
             f"{active_suffix} {active_verb} in the full Radar feed."
         )
     if saved_active_count:
@@ -4982,7 +5055,12 @@ def radar_today_status_line(
             f"No new high-signal papers right now. {saved_active_count} saved paper"
             f"{'' if saved_active_count == 1 else 's'} available for follow-up."
         )
-    return "No new Radar items are waiting in today's feed."
+    if active_count:
+        return (
+            f"No unhandled papers meet the worth-reading threshold. {active_count} active Radar candidate"
+            f"{'' if active_count == 1 else 's'} remain in the full Radar feed."
+        )
+    return "No unhandled Radar papers are waiting in the latest stack."
 
 
 def build_today_snapshot_payload(
@@ -5043,31 +5121,31 @@ def render_today_history_page(
 ) -> str:
     snapshots = database.list_literature_radar_today_snapshots(limit=limit)
     body = f"""
-    {render_topline("Today History", "Previous morning selections saved from the automatic Radar cycle.", "/", "Today")}
+    {render_topline("Latest History", "Previous morning Latest stack snapshots saved from the automatic Radar cycle.", "/", "Latest")}
     {render_notice(notice)}
-    <section class="panel today-hero" aria-label="Today history">
+    <section class="panel today-hero" aria-label="Latest history">
       <div class="today-head">
         <div>
-          <h2 class="today-title">Previous Selections</h2>
+          <h2 class="today-title">Previous Stack Snapshots</h2>
           <div class="today-summary">{html_escape(today_history_status_line(snapshots))}</div>
         </div>
         <div class="radar-overview-actions">
-          <a class="button primary" href="/">Today</a>
+          <a class="button primary" href="/">Latest</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
         </div>
       </div>
     </section>
     {render_today_history_snapshots(snapshots)}
     """
-    return page("Today History", body, active="today_history")
+    return page("Latest History", body, active="today_history")
 
 
 def today_history_status_line(snapshots: list[dict[str, Any]]) -> str:
     if not snapshots:
-        return "No saved morning selections yet. The 6:00 cycle will create the first snapshot after it runs."
+        return "No saved Latest snapshots yet. The 6:00 cycle will create the first snapshot after it runs."
     total_papers = sum(int(snapshot.get("paper_count") or 0) for snapshot in snapshots)
     return (
-        f"Showing {len(snapshots)} saved morning selection"
+        f"Showing {len(snapshots)} saved Latest snapshot"
         f"{'' if len(snapshots) == 1 else 's'} with {total_papers} paper"
         f"{'' if total_papers == 1 else 's'}."
     )
@@ -5075,7 +5153,7 @@ def today_history_status_line(snapshots: list[dict[str, Any]]) -> str:
 
 def render_today_history_snapshots(snapshots: list[dict[str, Any]]) -> str:
     if not snapshots:
-        return '<section class="panel"><div class="empty">No previous Today selections have been saved yet.</div></section>'
+        return '<section class="panel"><div class="empty">No previous Latest snapshots have been saved yet.</div></section>'
     return "".join(render_today_history_snapshot(snapshot) for snapshot in snapshots)
 
 
@@ -5095,7 +5173,7 @@ def render_today_history_snapshot(snapshot: dict[str, Any]) -> str:
         </div>
         {f'<a class="button" href="/radar?run={quote(run_id, safe="")}">Open run</a>' if run_id else ''}
       </div>
-      {f'<div class="today-paper-list">{cards}</div>' if records else '<div class="empty">No papers met the Today threshold for this snapshot.</div>'}
+      {f'<div class="today-paper-list">{cards}</div>' if records else '<div class="empty">No papers met the Latest threshold for this snapshot.</div>'}
     </section>
     """
 
@@ -5146,7 +5224,7 @@ def render_empty_today(records: list[dict[str, Any]], counts: dict[str, Any]) ->
         return ""
     total = int(counts.get("all") or 0)
     if total:
-        return '<section class="panel"><div class="empty">No new items match today\'s priority filters. Try the full Radar feed or the digest.</div></section>'
+        return '<section class="panel"><div class="empty">No unhandled papers match the Latest priority filters. Try the full Radar feed or the digest.</div></section>'
     return '<section class="panel"><div class="empty">No Radar items yet. Submit a paper or wait for the next collector run.</div></section>'
 
 
@@ -5163,7 +5241,7 @@ def render_today_feed(
         for record in records
     )
     return f"""
-    <section class="today-feed" aria-label="Papers worth reading today">
+    <section class="today-feed" aria-label="Unhandled papers worth reading">
       <div class="today-paper-list">{items}</div>
     </section>
     """
@@ -5516,11 +5594,11 @@ def render_latest_radar_queue(database: TeamResearchDatabase) -> str:
     <section class="panel radar-queue" aria-label="Literature Radar review queue">
       <div class="radar-queue-head">
         <div>
-          <h2>Radar Today</h2>
+          <h2>Latest Stack</h2>
           <div class="muted">{html_escape(radar_today_status_line(counts, len(priority_records)))}</div>
         </div>
         <div class="radar-queue-actions">
-          <a class="button" href="/radar/queue?limit=20">See More New Items</a>
+          <a class="button" href="/radar/queue?limit=20">See Full Stack</a>
           <a class="button" href="/radar/brief?days=7&amp;limit=20">Digest</a>
           <a class="button" href="/radar">Radar Ops</a>
           <a class="button" href="/radar/queue.json?limit=20">JSON</a>
@@ -5550,7 +5628,7 @@ def render_radar_queue_overview(
         render_radar_kpi_card(
             "Best Next Step",
             next_action,
-            "for today's feed",
+            "for the Latest stack",
             css="good" if active_count else "",
         ),
         render_radar_kpi_card(
@@ -5782,7 +5860,7 @@ def render_latest_radar_queue_preview(
     )
     return f"""
     <div class="radar-queue-preview">
-      <h3>Worth Reading Today</h3>
+      <h3>Latest Worth Reading</h3>
       {items}
     </div>
     """
@@ -5927,7 +6005,7 @@ def render_radar_queue_usefulness_review(
     optional_feedback_chip = (
         ""
         if usefulness_id in {"useful", "partly_useful"}
-        else '<span class="tag">optional feedback: Today feed usefulness</span>'
+        else '<span class="tag">optional feedback: Latest stack usefulness</span>'
     )
     quick_actions = [
         ("useful", "Useful"),
@@ -5944,15 +6022,15 @@ def render_radar_queue_usefulness_review(
       <input type="hidden" name="run_id" value="{html_escape(run_id)}">
       {render_radar_queue_hidden_inputs(queue_window)}
       <div class="radar-queue-review-summary">
-        <span class="muted">Was today's feed useful?</span>
+        <span class="muted">Was the Latest stack useful?</span>
         {latest_summary}
         {review_scope_chip}
         {thin_mvp_chip}
         {optional_feedback_chip}
       </div>
       <input name="reviewer" placeholder="Name (optional)" aria-label="Reviewer name">
-      <input name="note" placeholder="Short note" aria-label="Today feed note">
-      <span class="radar-queue-review-actions" role="group" aria-label="Today feed usefulness decision">
+      <input name="note" placeholder="Short note" aria-label="Latest stack note">
+      <span class="radar-queue-review-actions" role="group" aria-label="Latest stack usefulness decision">
         {action_buttons}
       </span>
     </form>
@@ -6984,7 +7062,7 @@ def render_submit_page(database: TeamResearchDatabase, notice: str = "") -> str:
 def render_interests_page(database: TeamResearchDatabase, notice: str = "") -> str:
     interests = database.list_team_interest_keywords()
     body = f"""
-    {render_topline("Topics", "Weighted research interests that shape Radar ranking.", "/", "Today")}
+    {render_topline("Topics", "Weighted research interests that shape Radar ranking.", "/", "Latest")}
     {render_notice(notice)}
     <div class="panel">
       <div class="interest-bars">
@@ -7495,6 +7573,7 @@ def run_literature_radar_from_web(database: TeamResearchDatabase, fields: dict[s
         negative_seed_paper_ids=settings["negative_seed_paper_ids"],
         openalex_mailto=settings["source_contact_email"] or None,
         openreview_invitations=settings["openreview_invitations"],
+        curated_research_pages=settings["curated_research_pages"] or None,
         openreview_venue_profiles=settings["openreview_venue_profiles"],
         openreview_accepted_only=not settings["include_openreview_unaccepted"],
         crossref_mailto=settings["source_contact_email"] or None,
@@ -7554,6 +7633,7 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
         "negative_seed_paper_ids": split_form_list(fields.get("negative_seed_paper_ids", "")),
         "openreview_invitations": split_form_list(fields.get("openreview_invitations", "")),
         "openreview_venue_profiles": split_form_list(fields.get("openreview_venue_profiles", "")),
+        "curated_research_pages": split_form_list(fields.get("curated_research_pages", "")),
         "venue_profiles": split_form_list(fields.get("venue_profiles", "")),
         "official_accepted_pages": parse_official_accepted_page_lines(fields.get("official_accepted_pages", "")),
     }
@@ -7565,20 +7645,38 @@ def radar_settings_from_fields(fields: dict[str, str]) -> dict[str, Any]:
 def ensure_radar_sources_for_settings(settings: dict[str, Any]) -> None:
     ensure_radar_settings_list_fields(settings)
     selected_sources = settings["sources"]
+    settings["official_accepted_pages"] = official_accepted_pages_from_venue_profiles(
+        settings.get("venue_profiles") or [],
+        year=int(settings.get("conference_year") or datetime.now(timezone.utc).year),
+        configured_pages=list(settings.get("official_accepted_pages") or []),
+    )
     if settings.get("dblp_author_pids") and "dblp_authors" not in selected_sources:
         selected_sources.append("dblp_authors")
-    if settings.get("semantic_scholar_author_ids") and "semantic_scholar_authors" not in selected_sources:
+    semantic_scholar_key_configured = bool(
+        settings.get("semantic_scholar_api_key_configured")
+    ) or team_semantic_scholar_api_key_configured()
+    if (
+        semantic_scholar_key_configured
+        and settings.get("semantic_scholar_author_ids")
+        and "semantic_scholar_authors" not in selected_sources
+    ):
         selected_sources.append("semantic_scholar_authors")
     if settings.get("openalex_author_ids") and "openalex_authors" not in selected_sources:
         selected_sources.append("openalex_authors")
-    if settings.get("seed_paper_ids") and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES):
+    if (
+        semantic_scholar_key_configured
+        and settings.get("seed_paper_ids")
+        and not any(source in selected_sources for source in RADAR_WEB_SEED_SOURCES)
+    ):
         selected_sources.append("semantic_scholar_recommendations")
     if settings.get("openreview_invitations") and "openreview" not in selected_sources:
         selected_sources.append("openreview")
     if settings.get("openreview_venue_profiles") and "openreview_venues" not in selected_sources:
         selected_sources.append("openreview_venues")
+    if settings.get("curated_research_pages") and "curated_research_pages" not in selected_sources:
+        selected_sources.append("curated_research_pages")
     if settings.get("venue_profiles") and "dblp_venues" not in selected_sources and "openalex_venues" not in selected_sources:
-        selected_sources.append("dblp_venues")
+        selected_sources.append("openalex_venues")
     if settings.get("official_accepted_pages") and "official_accepted_pages" not in selected_sources:
         selected_sources.append("official_accepted_pages")
 
@@ -7789,9 +7887,15 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             notice = query.get("notice", [""])[0]
-            if parsed.path in {"/", "/today"}:
-                self.respond_html(render_today_page(self.database, notice=notice))
-            elif parsed.path == "/today/history":
+            if parsed.path in {"/", "/latest", "/today"}:
+                self.respond_html(
+                    render_today_page(
+                        self.database,
+                        notice=notice,
+                        limit=clean_positive_int(query.get("limit", [""])[0], default=20, maximum=200),
+                    )
+                )
+            elif parsed.path in {"/latest/history", "/today/history"}:
                 self.respond_html(
                     render_today_history_page(
                         self.database,
@@ -7799,7 +7903,7 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                         notice=notice,
                     )
                 )
-            elif parsed.path == "/today/history.json":
+            elif parsed.path in {"/latest/history.json", "/today/history.json"}:
                 self.respond_json(
                     {
                         "success": True,

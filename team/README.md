@@ -77,18 +77,20 @@ Useful commands:
 python team/research_cli.py add-manual --title "..." --abstract "..."
 python team/research_cli.py inbox
 python team/research_cli.py analyze-pending --retry-failed
-python team/research_cli.py radar-run --source arxiv --source dblp --source semantic_scholar --source openalex --source crossref --source usenix_security --source ndss --output team/logs/literature-radar.md
-python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source arxiv --source dblp --source openalex --source crossref --source usenix_security --source ndss --output team/logs/literature-radar.md
 python team/research_cli.py radar-run --source openalex_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source dblp_venues --venue-profile security --conference-year 2026
+python team/research_cli.py radar-run --source dblp_venues --venue-profile acm_ccs --venue-profile ieee_sp --venue-profile acns --venue-profile asia_ccs --venue-profile euro_sp --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile iclr --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile neurips --conference-year 2026
 python team/research_cli.py radar-run --source openreview_venues --openreview-venue-profile icml --conference-year 2026
-python team/research_cli.py radar-run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+SEMANTIC_SCHOLAR_API_KEY=... python team/research_cli.py radar-run --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+python team/research_cli.py radar-run --source dblp_authors --dblp-author-pid 31/1273 --dblp-author-pid 02/5804 --dblp-author-pid 151/4037
 python team/research_cli.py radar-run --source dblp_authors --dblp-author-pid DBLP_PERSON_PID
 python team/research_cli.py radar-run --source openalex_authors --openalex-author-id OPENALEX_AUTHOR_ID
-python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
-python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
-python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+SEMANTIC_SCHOLAR_API_KEY=... python team/research_cli.py radar-run --source semantic_scholar_authors --semantic-scholar-author-id SEMANTIC_SCHOLAR_AUTHOR_ID
+SEMANTIC_SCHOLAR_API_KEY=... python team/research_cli.py radar-run --source semantic_scholar_references --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
+SEMANTIC_SCHOLAR_API_KEY=... python team/research_cli.py radar-run --source semantic_scholar_citations --seed-paper-id SEMANTIC_SCHOLAR_PAPER_ID
 python team/research_cli.py radar-run --source arxiv --summarize --summary-provider openrouter
 python team/research_cli.py radar-run --source arxiv --cache-pdfs --pdf-cache-dir team/data/literature-radar-pdfs
 python team/research_cli.py radar-status --json
@@ -119,7 +121,7 @@ cron, enable the user-level systemd
 `ai-side-brain-team-literature-radar-cycle.timer`, or open `/radar` and use
 `Run Radar` for an ad hoc check. The recommended timer runs at 06:00 local time.
 By default the cycle rotates source families by weekday, collects papers, saves
-the member-facing Today selection to `/today/history`, generates queue/status
+the member-facing Latest stack to `/latest/history`, generates queue/status
 snapshots, and builds the stored brief in one command; use
 `team/scripts/run_literature_radar.sh` or
 `team/scripts/build_literature_radar_brief.sh` when you need only one phase.
@@ -149,7 +151,7 @@ leave queue feedback without blocking readiness. Set
 `RADAR_THIN_MVP_RUN_COMMAND`, `RADAR_THIN_MVP_REVIEW_URL`, or
 `RADAR_THIN_MVP_QUEUE_REVIEW_COMMAND` when the server uses a different wrapper
 or URL.
-Use `/today/history` for prior morning Today selections. Use `/radar/brief` for a weekly or daily roll-up over stored runs without
+Use `/latest/history` for prior morning Latest stack snapshots. Use `/radar/brief` for a weekly or daily roll-up over stored runs without
 collecting again. `/radar/brief.json?days=7&limit=20` exposes the same stored
 brief for local dashboards or notification scripts. Use `/radar/papers` to
 inspect deduplicated collected-paper history and add stored papers to the library. The
@@ -166,28 +168,36 @@ when a scheduled run exists, even if no papers were stored. The Radar form can s
 papers, venue profiles, conference year, USENIX cycles, source contact email,
 official accepted-paper pages, PDF cache settings, source presets, and run
 limits as reusable Team defaults.
-Use the weekday rotation for normal scheduled runs: Monday arXiv preprints,
-Tuesday metadata APIs, Wednesday DBLP/OpenAlex venue proceedings, Thursday
-OpenReview venues, Friday USENIX/NDSS accepted pages, Saturday Semantic Scholar
-seed expansion, and Sunday catch-up. Set `RADAR_WEEKDAY_ROTATION=0` if a job
-should instead reuse `/radar` saved defaults or an explicit `RADAR_SOURCE_PRESET`
-such as `team_security_daily`.
+Use the weekday rotation for normal scheduled runs: Monday CCS/NDSS, Tuesday
+USENIX Security/IEEE S&P, Wednesday the remaining configured system/security
+conference profiles, Thursday arXiv plus Crossref, Friday manually curated
+research publication pages such as `https://research.nvidia.com/publications`,
+Saturday tracked DBLP/OpenAlex authors plus Semantic Scholar seed expansion
+only when the required key and seed IDs are configured, and Sunday OpenReview
+plus broad metadata catch-up. Set
+`RADAR_WEEKDAY_ROTATION=0` if a job should instead reuse `/radar` saved defaults
+or an explicit `RADAR_SOURCE_PRESET` such as `team_security_daily`.
 For venue pages that do not yet have a dedicated wrapper, scheduled runs can set
 `RADAR_OFFICIAL_ACCEPTED_PAGES` with one newline-delimited
-`source_id | venue name | year | URL` entry per official accepted-paper page;
-the status script uses the same variable for settings/preflight snapshots.
+`source_id | venue name | year | URL` entry per official accepted-paper page.
+Set `RADAR_CURATED_RESEARCH_PAGES` to space-separated publication-page URLs for
+the Friday curated-page lane. The status script uses the same variables for
+settings/preflight snapshots.
 `team/scripts/check_literature_radar_status.sh` also accepts the same
 env-driven source preset, source list, venue, author, seed, official-page,
 PDF-cache, and summary settings as the scheduled collection script, so server
 deployments can validate `.env` configuration without collecting papers.
-Radar settings JSON and CLI preflight output include DBLP/OpenAlex required
+Radar settings JSON and CLI preflight output include venue-profile required
 top-venue coverage counts, so operators can tell whether the current selectors
 cover all configured security, systems, PL/memory-safety, and
-software-engineering venue groups before collection runs. The same preflight
-output reports Unpaywall OA enrichment readiness for legal PDF/license checks.
-For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can provide one fallback
-contact address for OpenAlex, Crossref, and Unpaywall unless service-specific
-settings are configured.
+software-engineering venue groups before collection runs. `openalex_venues` is
+the default venue-profile source; `dblp_venues` remains available as an explicit
+opt-in for DBLP proceedings checks. The same preflight
+output reports Unpaywall OA enrichment status for legal PDF/license checks.
+For script-based runs, `RADAR_SOURCE_CONTACT_EMAIL` can optionally provide one
+fallback contact address for OpenAlex, Crossref, and Unpaywall unless
+service-specific settings are configured; missing contact email is not a default
+setup warning.
 For terminal review, use `python team/research_cli.py radar-queue`; it uses the
 same active, unimported queue priority as the web UI and prints latest-run
 health, pipeline phase status, source readiness, and Unpaywall OA enrichment

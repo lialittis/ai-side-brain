@@ -170,8 +170,8 @@ class TeamResearchWebTest(unittest.TestCase):
             latest = render_latest_papers_page(database)
             submit = render_submit_page(database)
 
-        self.assertIn("Today", today)
-        self.assertIn("Worth Reading Today", today)
+        self.assertIn("Latest", today)
+        self.assertIn("Latest Worth Reading", today)
         self.assertIn("Team Library", latest)
         self.assertIn("No relevant papers yet", latest)
         self.assertNotIn("Submit Research", latest)
@@ -179,7 +179,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("Topics", latest)
         self.assertIn("Filter by source", latest)
         self.assertNotIn("Radar Ops", latest)
-        self.assertIn('href="/">Today</a>', latest)
+        self.assertIn('href="/">Latest</a>', latest)
         self.assertIn('href="/library">Library</a>', latest)
         self.assertIn('href="/radar/brief?days=7&amp;limit=20">Digest</a>', latest)
         self.assertIn('href="/submit">Submit</a>', latest)
@@ -299,12 +299,12 @@ class TeamResearchWebTest(unittest.TestCase):
                 now=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
             )
 
-            self.assertIn("Worth Reading Today", html)
-            self.assertIn("No new Radar items are waiting", html)
+            self.assertIn("Latest Worth Reading", html)
+            self.assertIn("No unhandled Radar papers are waiting", html)
             self.assertIn("Updated 2026-07-01 07:31", html)
             self.assertNotIn("some sources may be incomplete", html)
             self.assertNotIn("Latest run health:", html)
-            self.assertNotIn("Worth Reading Today</h3>", html)
+            self.assertNotIn("Latest Worth Reading</h3>", html)
             self.assertEqual(payload["latest_run"]["status"], "failed")
             self.assertEqual(payload["latest_run"]["freshness"]["status"], "fresh")
             self.assertEqual(payload["latest_run"]["source_coverage"]["status"], "failed")
@@ -363,7 +363,6 @@ class TeamResearchWebTest(unittest.TestCase):
                 reviewer="Alice",
                 note="First-page queue is useful for daily review.",
                 queue_counts={"all": 1, "unreviewed": 1, "watch": 0, "dismissed": 0},
-                now=datetime(2026, 7, 1, 8, 12, tzinfo=timezone.utc),
             )
 
             server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(database))
@@ -496,7 +495,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["papers"][0]["triage_hint"]["label"], "Import")
             self.assertEqual(
                 queue_payload["daily_source_health"]["next_action"],
-                "run_saved_defaults_and_configure_primary_sources",
+                "run_saved_source_defaults",
             )
             self.assertIn("reason_to_read", queue_payload["papers"][0])
             self.assertIn("headline", queue_payload["papers"][0]["reason_to_read"])
@@ -509,16 +508,16 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(queue_payload["links"]["radar_papers"], "/radar/papers?limit=1")
             self.assertEqual(queue_html_status, 200)
             self.assertEqual(queue_html_content_type, "text/html; charset=utf-8")
-            self.assertIn("Radar Today", queue_html)
-            self.assertIn("Worth Reading Today", queue_html)
+            self.assertIn("Radar Queue", queue_html)
+            self.assertIn("Latest Worth Reading", queue_html)
             self.assertIn("Feed guidance:", queue_html)
             self.assertIn("Source health:", queue_html)
             self.assertIn("Daily workflow:", queue_html)
-            self.assertIn("Was today's feed useful?", queue_html)
+            self.assertIn("Was the Latest stack useful?", queue_html)
             self.assertIn("last: useful; by Alice", queue_html)
             self.assertIn("thin MVP review recorded", queue_html)
             self.assertIn("First-page queue is useful for daily review.", queue_html)
-            self.assertIn("source action: run saved defaults and configure primary sources", queue_html)
+            self.assertIn("source action: run saved source defaults", queue_html)
             self.assertIn("Start here:", queue_html)
             self.assertIn("Start with Route Verified Radar Queue Paper.", queue_html)
             self.assertIn("next: Worth saving", queue_html)
@@ -539,7 +538,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("https://arxiv.org/abs/2601.00051", queue_html)
             self.assertIn("legally downloadable PDF", queue_html)
             self.assertIn('href="/radar/queue.json?limit=1">Queue JSON</a>', queue_html)
-            self.assertIn('class="nav-item active" href="/">Today</a>', queue_html)
+            self.assertIn('class="nav-item active" href="/">Latest</a>', queue_html)
             self.assertIn('name="reason" placeholder="Why save this?"', queue_html)
             self.assertIn('name="reason" placeholder="Why is this not relevant?"', queue_html)
             self.assertIn('name="return_to" value="queue"', queue_html)
@@ -615,17 +614,19 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(setup_env_status, 200)
             self.assertEqual(setup_env_content_type, "text/plain; charset=utf-8")
             self.assertIn("# Team Literature Radar MVP local setup", setup_env_text)
-            self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", setup_env_text)
-            self.assertIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", setup_env_text)
+            self.assertIn("# Source API/contact metadata: no missing examples reported by current readiness.", setup_env_text)
+            self.assertNotIn("SEMANTIC_SCHOLAR_API_KEY=api-key", setup_env_text)
+            self.assertNotIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", setup_env_text)
             self.assertIn("RADAR_BACKUP_TARGETS=/absolute/path/to/team-radar-backups", setup_env_text)
             self.assertIn("radar-validate-sources", setup_env_text)
             self.assertIn("--source-preset team_security_daily", setup_env_text)
-            self.assertIn("--venue-profile security", setup_env_text)
+            self.assertIn("--dblp-author-pid 31/1273", setup_env_text)
+            self.assertNotIn("--venue-profile security", setup_env_text)
             self.assertTrue(submit_page_url.endswith("/submit"))
             self.assertIn("Submit Research", submit_page_html)
             self.assertIn("Drop PDF or browse", submit_page_html)
             self.assertEqual(today_page_status, 200)
-            self.assertIn("Worth Reading Today", today_page_html)
+            self.assertIn("Latest Worth Reading", today_page_html)
             self.assertIn("--openreview-venue-profile iclr", setup_env_text)
             self.assertIn("--usenix-cycle 1", setup_env_text)
             self.assertIn("--live --validation-max-results 1 --json", setup_env_text)
@@ -643,7 +644,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(status_payload["links"]["setup_env_text"], "/radar/setup-env.txt")
             self.assertIn("hugging_face_papers", settings_payload["supported_trend_signal_ids"])
             self.assertEqual(settings_payload["trend_signal_options"][0]["collector_status"], "not_implemented")
-            self.assertEqual(settings_payload["source_readiness"]["status"], "ready_with_warnings")
+            self.assertEqual(settings_payload["source_readiness"]["status"], "ready")
             self.assertEqual(settings_payload["settings"]["sources"], list(settings_payload["source_policy"]["authoritative_source_ids"]))
             self.assertEqual(brief_payload["source_policy"]["authoritative_count"], 1)
             self.assertEqual(brief_payload["source_policy"]["trend_signal_count"], 0)
@@ -730,12 +731,12 @@ class TeamResearchWebTest(unittest.TestCase):
 
             html = render_literature_radar_queue_page(database, limit=20)
 
-        self.assertIn("Was today's feed useful?", html)
+        self.assertIn("Was the Latest stack useful?", html)
         self.assertIn("not reviewed yet", html)
         self.assertIn("review scope: 0 visible / 0 active", html)
         self.assertIn("optional feed feedback", html)
-        self.assertIn("optional feedback: Today feed usefulness", html)
-        self.assertIn('role="group" aria-label="Today feed usefulness decision"', html)
+        self.assertIn("optional feedback: Latest stack usefulness", html)
+        self.assertIn('role="group" aria-label="Latest stack usefulness decision"', html)
         self.assertIn('placeholder="Name (optional)" aria-label="Reviewer name"', html)
         self.assertNotIn('aria-label="Reviewer name" required', html)
         self.assertIn('name="usefulness" value="useful">Useful</button>', html)
@@ -769,12 +770,12 @@ class TeamResearchWebTest(unittest.TestCase):
 
             html = render_literature_radar_queue_page(database, limit=20)
 
-        self.assertIn("Was today's feed useful?", html)
+        self.assertIn("Was the Latest stack useful?", html)
         self.assertIn("last: partly useful; by Alice", html)
         self.assertIn("review scope: 0 visible / 0 active", html)
         self.assertIn("thin MVP review recorded", html)
         self.assertNotIn("optional feed feedback", html)
-        self.assertNotIn("optional feedback: Today feed usefulness", html)
+        self.assertNotIn("optional feedback: Latest stack usefulness", html)
 
     def test_radar_queue_usefulness_review_defaults_blank_reviewer(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -971,12 +972,12 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("active step:", html)
             self.assertIn("Beta readiness:", html)
             self.assertIn("Beta/backlog setup:", html)
-            self.assertIn("env block: 3 lines", html)
+            self.assertIn("env block: 1 lines", html)
             self.assertIn("Beta/Backlog Setup Env", html)
             self.assertIn("Next Commands", html)
             self.assertIn('href="/radar/setup-env.txt">Open Setup Env</a>', html)
-            self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", html)
-            self.assertIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", html)
+            self.assertNotIn("SEMANTIC_SCHOLAR_API_KEY=api-key", html)
+            self.assertNotIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", html)
             self.assertIn("RADAR_BACKUP_TARGETS=/absolute/path/to/team-radar-backups", html)
             self.assertIn("RADAR_BACKUP_DRY_RUN=1 team/scripts/backup_literature_radar.sh", html)
             self.assertIn("invalid: 0", html)
@@ -991,7 +992,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Validation commands:", html)
             self.assertIn("radar-validate-sources", html)
             self.assertIn("Validation evidence:", html)
-            self.assertIn("sources: arXiv, DBLP, Semantic Scholar +6 more", html)
+            self.assertIn("sources: arXiv, DBLP, OpenAlex +5 more", html)
             self.assertIn("max/source: 20", html)
             self.assertIn("last run: 2026-07-01 10:00", html)
             self.assertIn("collected: 1", html)
@@ -1022,7 +1023,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Baseline Paper", html)
             self.assertIn("shared interests: memory safety", html)
             self.assertIn("local-radar-summary-v0.1", html)
-            self.assertIn("Worth Reading Today", queue_html)
+            self.assertIn("Latest Worth Reading", queue_html)
             self.assertIn("Memory Safety for Agentic Security Workflows", queue_html)
             self.assertIn("Released: 2026-06-30", queue_html)
             self.assertIn("Worth team attention.", queue_html)
@@ -1271,22 +1272,23 @@ class TeamResearchWebTest(unittest.TestCase):
                 recommendations=recommendations,
                 now=datetime(2026, 7, 1, 10, 1, tzinfo=timezone.utc),
             )
-            item_id = import_radar_recommendation_to_library(
-                database,
-                {
-                    "run_id": run["id"],
-                    "dedupe_key": ndss_paper["dedupe_key"],
-                    "actor": "alice",
-                },
-            )
-            import_radar_recommendation_to_library(
-                database,
-                {
-                    "run_id": run["id"],
-                    "dedupe_key": arxiv_paper["dedupe_key"],
-                    "actor": "alice",
-                },
-            )
+            with mock.patch("team.literature_radar.enrich_imported_item", return_value=None):
+                item_id = import_radar_recommendation_to_library(
+                    database,
+                    {
+                        "run_id": run["id"],
+                        "dedupe_key": ndss_paper["dedupe_key"],
+                        "actor": "alice",
+                    },
+                )
+                import_radar_recommendation_to_library(
+                    database,
+                    {
+                        "run_id": run["id"],
+                        "dedupe_key": arxiv_paper["dedupe_key"],
+                        "actor": "alice",
+                    },
+                )
             database.set_item_tags(item_id, ["ndss", "memory-safety"])
 
             html = render_latest_papers_page(database)
@@ -1348,12 +1350,10 @@ class TeamResearchWebTest(unittest.TestCase):
             [
                 "arxiv",
                 "dblp_authors",
-                "semantic_scholar_authors",
                 "openalex_authors",
-                "semantic_scholar_recommendations",
                 "openreview",
                 "openreview_venues",
-                "dblp_venues",
+                "openalex_venues",
             ],
         )
         self.assertEqual(kwargs["max_results"], 100)
@@ -1484,7 +1484,7 @@ class TeamResearchWebTest(unittest.TestCase):
 
             self.assertEqual(run_id, "radar_run_saved_defaults")
             settings = database.get_team_setting(RADAR_SETTINGS_KEY)
-            self.assertEqual(settings["sources"], ["openalex_authors", "dblp_venues"])
+            self.assertEqual(settings["sources"], ["openalex_authors", "openalex_venues"])
             self.assertEqual(settings["max_results"], 7)
             self.assertEqual(settings["limit"], 3)
             self.assertFalse(settings["summarize"])
@@ -1530,7 +1530,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Validation commands:", html)
             self.assertIn("radar-validate-sources", html)
             self.assertIn("Validation evidence:", html)
-            self.assertIn("sources: OpenAlex Authors, DBLP Venues", html)
+            self.assertIn("sources: OpenAlex Authors, OpenAlex Venues", html)
             self.assertIn("max/source: 7", html)
             self.assertIn("recommendations: 3", html)
             self.assertIn("provider: openrouter", html)
@@ -1538,7 +1538,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("source contact: yes", html)
             self.assertIn("conference year: 2026", html)
             self.assertIn("OA enrichment: ready, contact yes", html)
-            self.assertIn("top venues: 6/18 12 missing", html)
+            self.assertIn("top venues: 9/22 13 missing", html)
             self.assertIn("tracked lists: 3", html)
             self.assertIn("last run: none", html)
             self.assertIn("Save as defaults", html)
@@ -1581,26 +1581,27 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertIn("check: Source settings", html)
         self.assertIn("scoring", html)
         self.assertIn("agentic security=95", html)
-        self.assertIn("OA enrichment: missing recommended, contact no", html)
+        self.assertIn("OA enrichment: optional, contact no", html)
         self.assertIn("Primary sources:", html)
-        self.assertIn("covered: 3/9", html)
+        self.assertIn("covered: 3/8", html)
         self.assertIn("missing sources: arxiv, dblp, crossref, usenix_security, ndss", html)
         self.assertIn("status: blocked", html)
         self.assertIn("Live validation plan:", html)
         self.assertIn("Validation guidance:", html)
         self.assertIn("next: configure blocked sources", html)
-        self.assertIn("checks: 4", html)
+        self.assertIn("checks: 3", html)
         self.assertIn("live max: 1", html)
         self.assertIn("network: yes pending", html)
         self.assertIn("blocked checks: semantic_scholar_recommendations, openreview", html)
         self.assertIn("blocked sources: semantic_scholar_recommendations, openreview", html)
+        self.assertIn("missing: semantic_scholar_recommendations needs Semantic Scholar API key", html)
         self.assertIn("missing: semantic_scholar_recommendations needs Semantic Scholar positive seed paper ID", html)
         self.assertIn("missing: openreview needs OpenReview invitation ID", html)
-        self.assertIn("recommended: openalex uses OpenAlex mailto/contact", html)
-        self.assertIn("Next: semantic_scholar_recommendations / required_config / configure_required_source_input", html)
+        self.assertNotIn("recommended: openalex uses OpenAlex mailto/contact", html)
+        self.assertIn("Next: semantic_scholar_recommendations / api_key / configure_required_source_input", html)
         self.assertIn("Configure Semantic Scholar positive seed paper ID before running live validation", html)
-        self.assertIn("Next: openalex / contact / add_recommended_source_config", html)
-        self.assertIn("Add OpenAlex mailto/contact for OpenAlex", html)
+        self.assertNotIn("Next: openalex / contact / add_recommended_source_config", html)
+        self.assertNotIn("Add OpenAlex mailto/contact for OpenAlex", html)
 
     def test_literature_radar_settings_payload_is_read_only_status_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1630,7 +1631,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["links"]["setup_env_text"], "/radar/setup-env.txt")
         self.assertEqual(
             payload["settings"]["sources"],
-            ["semantic_scholar_recommendations", "openalex", "openreview_venues", "dblp_venues"],
+            ["semantic_scholar_recommendations", "openalex", "openreview_venues", "openalex_venues"],
         )
         self.assertEqual(payload["collection_config"]["seed_paper_ids"], ["seed-1"])
         self.assertEqual(payload["collection_config"]["summary_min_score"], 70)
@@ -1642,12 +1643,12 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertTrue(payload["oa_enrichment"]["configured"])
         self.assertEqual(
             payload["oa_enrichment"]["relevant_source_ids"],
-            ["semantic_scholar_recommendations", "openalex", "dblp_venues"],
+            ["semantic_scholar_recommendations", "openalex", "openalex_venues"],
         )
         self.assertEqual(payload["primary_source_coverage"]["status"], "partial")
         self.assertEqual(
             payload["primary_source_coverage"]["missing_primary_source_ids"],
-            ["arxiv", "crossref", "usenix_security", "ndss"],
+            ["arxiv", "dblp", "crossref", "usenix_security", "ndss"],
         )
         self.assertEqual(payload["source_validation_plan"]["status"], "ready")
         self.assertEqual(payload["source_validation_plan"]["next_action"], "run_live_source_validation")
@@ -1670,9 +1671,9 @@ class TeamResearchWebTest(unittest.TestCase):
         )
         self.assertIn("use-after-free", memory_profile["positive_keywords"])
         self.assertIn("human memory", memory_profile["negative_keywords"])
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["required_count"], 18)
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 9)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["required_count"], 22)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 9)
         self.assertFalse(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["complete"])
         self.assertIn(
             "USENIX Security",
@@ -1684,7 +1685,7 @@ class TeamResearchWebTest(unittest.TestCase):
         self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
         self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
-        self.assertEqual(selected, ["dblp_venues", "semantic_scholar_recommendations", "openalex", "openreview_venues"])
+        self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex", "openalex_venues", "openreview_venues"])
         self.assertIn("primary metadata", payload["source_options"][0]["metadata"])
         self.assertNotIn("secret-s2-key", json.dumps(payload))
 
@@ -1697,10 +1698,12 @@ class TeamResearchWebTest(unittest.TestCase):
 
         self.assertEqual(payload["settings"]["source_preset"], "team_security_daily")
         self.assertEqual(payload["source_preset_label"], "Team Security Daily")
-        self.assertIn("dblp_venues", payload["settings"]["sources"])
+        self.assertNotIn("dblp_venues", payload["settings"]["sources"])
+        self.assertIn("dblp_authors", payload["settings"]["sources"])
         self.assertIn("openreview_venues", payload["settings"]["sources"])
-        self.assertEqual(payload["settings"]["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(payload["settings"]["venue_profiles"], [])
         self.assertEqual(payload["settings"]["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+        self.assertEqual(payload["settings"]["dblp_author_pids"], ["31/1273", "02/5804", "151/4037"])
         self.assertIn('<option value="team_security_daily" selected>Team Security Daily</option>', html)
         self.assertIn("preset: Team Security Daily", html)
         self.assertIn("Interest Match Terms", html)
@@ -1921,27 +1924,33 @@ class TeamResearchWebTest(unittest.TestCase):
                 [
                     "arxiv",
                     "dblp",
-                    "semantic_scholar",
                     "openalex",
                     "crossref",
-                    "dblp_venues",
                     "openreview_venues",
                     "usenix_security",
                     "ndss",
+                    "dblp_authors",
                 ],
             )
-            self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
+            self.assertEqual(settings["venue_profiles"], [])
             self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
             self.assertEqual(settings["usenix_security_cycles"], [1])
+            self.assertEqual(settings["dblp_author_pids"], ["31/1273", "02/5804", "151/4037"])
             self.assertEqual(runner.call_args.kwargs["source_preset"], "team_security_daily")
-            self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], ["security", "programming_languages_memory_safety"])
+            self.assertEqual(runner.call_args.kwargs["dblp_venue_profiles"], [])
             self.assertEqual(runner.call_args.kwargs["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+            self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["31/1273", "02/5804", "151/4037"])
 
             html = render_literature_radar_page(database)
             self.assertIn('<option value="team_security_daily" selected>Team Security Daily</option>', html)
-            self.assertIn('name="source_dblp_venues" value="1" checked', html)
+            self.assertNotIn('name="source_dblp_venues" value="1" checked', html)
+            self.assertIn('name="source_dblp_authors" value="1" checked', html)
             self.assertIn('name="source_openreview_venues" value="1" checked', html)
-            self.assertIn('name="venue_profiles" placeholder="security, systems" value="security\nprogramming_languages_memory_safety"', html)
+            self.assertIn('name="venue_profiles" placeholder="security, systems" value=""', html)
+            self.assertIn(
+                '<textarea name="dblp_author_pids" placeholder="65/9612">31/1273\n02/5804\n151/4037</textarea>',
+                html,
+            )
             self.assertIn('name="openreview_venue_profiles" placeholder="iclr, ai_ml" value="iclr\nneurips\nicml"', html)
             self.assertIn("preset: Team Security Daily", html)
 
@@ -1974,6 +1983,41 @@ class TeamResearchWebTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             html = render_literature_radar_page(TeamResearchDatabase(Path(temp_dir) / "research.sqlite3"))
         self.assertIn("Official accepted pages", html)
+
+    def test_literature_radar_settings_payload_adds_official_pages_from_profile_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            with mock.patch.dict(
+                "os.environ",
+                {"RADAR_IEEE_SP_2026_ACCEPTED_PAGE_URL": "https://sp.example/accepted"},
+                clear=False,
+            ):
+                payload = build_literature_radar_settings_payload(
+                    database,
+                    settings={
+                        "source_preset": "custom",
+                        "sources": ["dblp_venues"],
+                        "venue_profiles": ["ieee_sp"],
+                        "conference_year": 2026,
+                        "official_accepted_pages": [],
+                    },
+                )
+
+        official_pages = [
+            {
+                "source_id": "ieee_sp",
+                "venue_profile_id": "ieee_sp",
+                "venue_group": "security",
+                "venue": "IEEE Symposium on Security and Privacy 2026",
+                "year": 2026,
+                "page_url": "https://sp.example/accepted",
+            }
+        ]
+        self.assertEqual(payload["settings"]["sources"], ["dblp_venues", "official_accepted_pages"])
+        self.assertEqual(payload["settings"]["official_accepted_pages"], official_pages)
+        self.assertEqual(payload["collection_config"]["official_accepted_pages"], official_pages)
+        selected = [option["id"] for option in payload["source_options"] if option["selected"]]
+        self.assertIn("official_accepted_pages", selected)
 
     def test_team_source_validation_args_preserve_source_selectors(self) -> None:
         args = team_radar_source_validation_args(
@@ -2199,7 +2243,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn('action="/paper/pdf/upload"', latest_html)
             self.assertIn("Upload PDF", latest_html)
             self.assertIn("Team Library", latest_html)
-            self.assertNotIn("Worth Reading Today</h3>", latest_html)
+            self.assertNotIn("Latest Worth Reading</h3>", latest_html)
             self.assertNotIn('action="/radar/papers/import"', latest_html)
 
             database.add_item_comment(
@@ -2487,10 +2531,13 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("<strong>Why:</strong>", unreviewed_history_html)
             self.assertIn("<strong>Matched:</strong>", unreviewed_history_html)
             latest_html = render_today_page(database)
-            self.assertIn("Worth Reading Today", latest_html)
-            self.assertIn("Showing 1 high-signal new paper from 1 active Radar candidate.", latest_html)
+            self.assertIn("Latest Worth Reading", latest_html)
+            self.assertIn(
+                "Showing 2 unhandled worth-reading papers from 1 new high-signal paper and 1 saved follow-up.",
+                latest_html,
+            )
             self.assertIn("Unreviewed Radar History Paper", latest_html)
-            self.assertNotIn("Watchable Memory Safety Radar Paper", latest_html)
+            self.assertIn("Watchable Memory Safety Radar Paper", latest_html)
             self.assertIn("today-paper-card", latest_html)
             self.assertIn("Stored queue signal for daily radar review.", latest_html)
             self.assertIn("<strong>Connects to:</strong> Strong match for system security.", latest_html)
@@ -2506,7 +2553,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertNotIn("<strong>Matched:</strong>", latest_html)
             self.assertIn('href="/radar/brief?days=7&amp;limit=20"', latest_html)
             self.assertNotIn('href="/radar">Radar Ops</a>', latest_html)
-            self.assertIn('name="review_filter" value="unreviewed"', latest_html)
+            self.assertIn('name="review_filter" value="all"', latest_html)
             self.assertIn('name="return_to" value="latest"', latest_html)
             self.assertIn('action="/radar/papers/import"', latest_html)
             self.assertIn('action="/radar/review"', latest_html)
@@ -2538,7 +2585,7 @@ class TeamResearchWebTest(unittest.TestCase):
             paper = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.01337",
-                title="AI Enriched Today Radar Paper",
+                title="AI Enriched Latest Radar Paper",
                 abstract="Memory safety and agentic security for autonomous vulnerability research.",
                 identifiers={"arxiv_id": "2601.01337"},
                 links={"arxiv": "https://arxiv.org/abs/2601.01337"},
@@ -2549,7 +2596,7 @@ class TeamResearchWebTest(unittest.TestCase):
             recommendation["scoring"]["score"] = 93
             recommendation["scoring"]["label"] = "highly_relevant"
             recommendation["summary"] = {
-                "short_summary": "Local summary should not lead today's card.",
+                "short_summary": "Local summary should not lead the Latest card.",
                 "relationship_to_interests": "Local interest relationship.",
             }
             recommendation["attention_summary"] = {
@@ -2609,14 +2656,14 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_today_page(database)
 
             self.assertEqual(stored["latest_recommendation"]["ai_enrichment"]["status"], "succeeded")
-            self.assertIn("AI Enriched Today Radar Paper", latest_html)
+            self.assertIn("AI Enriched Latest Radar Paper", latest_html)
             self.assertIn("AI finding: agents expose memory-safety failure modes quickly.", latest_html)
             self.assertIn("AI quick read", latest_html)
             self.assertIn("<strong>Why chosen:</strong> AI reason: directly supports agentic security triage.", latest_html)
             self.assertIn("<strong>Method:</strong> Hybrid static and dynamic analysis", latest_html)
             self.assertIn("Agent traces and vulnerability benchmarks", latest_html)
             self.assertIn("<strong>Use:</strong> Use this to prioritize unsafe-agent evaluation tasks.", latest_html)
-            self.assertNotIn("Local summary should not lead today's card.", latest_html)
+            self.assertNotIn("Local summary should not lead the Latest card.", latest_html)
             self.assertNotIn("Local attention should stay behind the AI quick read.", latest_html)
             self.assertNotIn("<strong>Matched:</strong>", latest_html)
             self.assertNotIn("PDF: arxiv_or_open_repository", latest_html)
@@ -2627,7 +2674,7 @@ class TeamResearchWebTest(unittest.TestCase):
             paper = create_radar_paper(
                 source_id="arxiv",
                 source_paper_id="2601.01338",
-                title="Saved Morning Today Radar Paper",
+                title="Saved Morning Latest Radar Paper",
                 abstract="Memory safety and agentic security for automatic morning literature radar.",
                 identifiers={"arxiv_id": "2601.01338"},
                 links={"arxiv": "https://arxiv.org/abs/2601.01338"},
@@ -2664,11 +2711,11 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertEqual(snapshot["paper_count"], 1)
             self.assertEqual(snapshot["run_id"], run["id"])
             self.assertEqual(database.list_literature_radar_today_snapshots()[0]["snapshot_date"], "2026-07-02")
-            self.assertIn("Today History", history_html)
-            self.assertIn("Previous Selections", history_html)
-            self.assertIn("Saved Morning Today Radar Paper", history_html)
+            self.assertIn("Latest History", history_html)
+            self.assertIn("Previous Stack Snapshots", history_html)
+            self.assertIn("Saved Morning Latest Radar Paper", history_html)
             self.assertIn("Morning snapshot signal.", history_html)
-            self.assertIn("Showing 1 saved morning selection with 1 paper.", history_html)
+            self.assertIn("Showing 1 saved Latest snapshot with 1 paper.", history_html)
 
     def test_latest_radar_queue_does_not_preview_dismissed_only_papers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2702,8 +2749,8 @@ class TeamResearchWebTest(unittest.TestCase):
             latest_html = render_today_page(database)
             dismissed_history_html = render_literature_radar_papers_page(database, review_status="dismissed")
 
-            self.assertIn("Worth Reading Today", latest_html)
-            self.assertIn("No new items match today's priority filters.", latest_html)
+            self.assertIn("Latest Worth Reading", latest_html)
+            self.assertIn("No unhandled papers match the Latest priority filters.", latest_html)
             self.assertNotIn("Dismissed Radar History Paper", latest_html)
             self.assertIn("<strong>Review note:</strong> Out of current system security scope.", dismissed_history_html)
 
@@ -2751,7 +2798,7 @@ class TeamResearchWebTest(unittest.TestCase):
 
             self.assertIn("Older Higher Priority Radar Paper", latest_html)
             self.assertNotIn("Recent Lower Priority Radar Paper", latest_html)
-            self.assertIn("Showing 1 high-signal new paper from 2 active Radar candidates.", latest_html)
+            self.assertIn("Showing 1 unhandled worth-reading paper from 1 new high-signal paper.", latest_html)
 
     def test_today_page_hides_low_signal_new_radar_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2760,7 +2807,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 source_id="arxiv",
                 source_paper_id="2601.00043",
                 title="Low Signal Radar Candidate",
-                abstract="A weakly related systems paper without enough relevance for the Today page.",
+                abstract="A weakly related systems paper without enough relevance for the Latest page.",
                 identifiers={"arxiv_id": "2601.00043"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00043"},
             )
@@ -2786,7 +2833,7 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertNotIn("Low Signal Radar Candidate", latest_html)
             self.assertNotIn('<article class="today-paper-card">', latest_html)
             self.assertIn(
-                "No new papers meet today&#x27;s high-signal threshold. 1 active Radar candidate remains in the full Radar feed.",
+                "No unhandled papers meet the worth-reading threshold. 1 active Radar candidate remains in the full Radar feed.",
                 latest_html,
             )
 
@@ -2797,7 +2844,7 @@ class TeamResearchWebTest(unittest.TestCase):
                 source_id="arxiv",
                 source_paper_id="2601.00044",
                 title="Low Signal New Radar Candidate",
-                abstract="A weakly related systems paper without enough relevance for the Today page.",
+                abstract="A weakly related systems paper without enough relevance for the Latest page.",
                 identifiers={"arxiv_id": "2601.00044"},
                 links={"arxiv": "https://arxiv.org/abs/2601.00044"},
             )
@@ -2834,7 +2881,7 @@ class TeamResearchWebTest(unittest.TestCase):
 
             latest_html = render_today_page(database)
 
-            self.assertIn("No new papers meet today&#x27;s threshold. Showing 1 saved follow-up paper.", latest_html)
+            self.assertIn("Showing 1 unhandled worth-reading paper from 1 saved follow-up.", latest_html)
             self.assertIn("Saved Follow Up Radar Paper", latest_html)
             self.assertNotIn("Low Signal New Radar Candidate", latest_html)
 
@@ -2867,7 +2914,7 @@ class TeamResearchWebTest(unittest.TestCase):
                         "status": "succeeded",
                         "research_card": {
                             "findings": ["AI reviewed this candidate against the team focus."],
-                            "relevance": "AI confirmed this is worth reading today.",
+                            "relevance": "AI confirmed this belongs in the Latest stack.",
                         },
                         "screening": {
                             "score": score,

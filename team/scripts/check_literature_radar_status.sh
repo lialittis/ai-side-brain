@@ -161,6 +161,13 @@ if [[ -n "${RADAR_OFFICIAL_ACCEPTED_PAGES:-}" ]]; then
     SETTINGS_TEXT_ARGS+=("--official-accepted-page" "$page_spec")
   done <<< "$RADAR_OFFICIAL_ACCEPTED_PAGES"
 fi
+if [[ -n "${RADAR_CURATED_RESEARCH_PAGES:-}" ]]; then
+  read -r -a CURATED_RESEARCH_PAGES <<< "$RADAR_CURATED_RESEARCH_PAGES"
+  for page_url in "${CURATED_RESEARCH_PAGES[@]}"; do
+    SETTINGS_ARGS+=("--curated-research-page" "$page_url")
+    SETTINGS_TEXT_ARGS+=("--curated-research-page" "$page_url")
+  done
+fi
 if [[ -n "${RADAR_SEED_PAPER_IDS:-}" ]]; then
   read -r -a SEED_PAPER_IDS <<< "$RADAR_SEED_PAPER_IDS"
   for paper_id in "${SEED_PAPER_IDS[@]}"; do

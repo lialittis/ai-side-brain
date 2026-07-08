@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -58,6 +59,7 @@ from shared.literature_radar import (
     radar_config_value,
     radar_effective_recommendation_scoring,
     radar_history_record_source_ids,
+    official_accepted_pages_from_venue_profiles,
     radar_latest_signal_lines,
     radar_pipeline_trace_summary,
     radar_relevance_evaluation_cases_for_interests,
@@ -83,6 +85,7 @@ from team.literature_radar import (
     import_literature_radar_queue,
     collect_team_radar_candidates,
     run_team_literature_radar,
+    team_semantic_scholar_api_key_configured,
     team_radar_queue_review_context,
     team_radar_query_terms,
     team_radar_source_presets,
@@ -264,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--venue-profile",
         action="append",
         default=[],
-        help="DBLP venue profile or group for dblp_venues; e.g. security, systems, acm_ccs",
+        help="venue profile or group for openalex_venues or explicit dblp_venues; e.g. security, systems, acm_ccs",
     )
     radar.add_argument("--usenix-cycle", action="append", type=int, default=[], help="USENIX Security cycle; repeatable")
     radar.add_argument(
@@ -272,6 +275,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
+    radar.add_argument(
+        "--curated-research-page",
+        action="append",
+        default=[],
+        help="team-curated publication page URL; repeatable",
     )
     radar.add_argument("--output", type=Path, help="write Markdown recommendation report")
     radar.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -307,15 +316,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     radar_today_snapshot = subparsers.add_parser(
         "radar-today-snapshot",
-        help="save the current member-facing Today selection for history",
+        help="save the current member-facing Latest stack for history",
     )
     add_db_args(radar_today_snapshot)
-    radar_today_snapshot.add_argument("--limit", type=int, default=6)
+    radar_today_snapshot.add_argument("--limit", type=int, default=20)
     radar_today_snapshot.add_argument("--date", default="", help="snapshot date, YYYY-MM-DD; defaults to today")
     radar_today_snapshot.add_argument("--actor", default="literature-radar-cycle")
     radar_today_snapshot.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
-    radar_today_history = subparsers.add_parser("radar-today-history", help="list saved Today selections")
+    radar_today_history = subparsers.add_parser("radar-today-history", help="list saved Latest stack snapshots")
     add_db_args(radar_today_history)
     radar_today_history.add_argument("--limit", type=int, default=14)
     radar_today_history.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -335,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     radar_reset.add_argument(
         "--confirm-delete-current-radar-data",
         action="store_true",
-        help="actually delete Radar runs, deduplicated papers, recommendations, and Today snapshots",
+        help="actually delete Radar runs, deduplicated papers, recommendations, and Latest snapshots",
     )
     radar_reset.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -431,6 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="configured official accepted page for the embedded settings preflight",
     )
     radar_status.add_argument(
+        "--curated-research-page",
+        action="append",
+        default=[],
+        help="team-curated publication page URL for the embedded settings preflight",
+    )
+    radar_status.add_argument(
         "--source-validation-json",
         type=Path,
         help="optional radar-validate-sources JSON snapshot to fold into beta/backlog readiness",
@@ -494,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="configured official accepted page: source_id | venue name | year | URL; repeatable",
     )
+    radar_settings.add_argument(
+        "--curated-research-page",
+        action="append",
+        default=[],
+        help="team-curated publication page URL; repeatable",
+    )
     radar_settings.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
     radar_validate = subparsers.add_parser(
@@ -543,6 +564,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="configured official accepted page: source_id | venue name | year | URL; repeatable",
+    )
+    radar_validate.add_argument(
+        "--curated-research-page",
+        action="append",
+        default=[],
+        help="team-curated publication page URL; repeatable",
     )
     radar_validate.add_argument("--live", action="store_true", help="perform one-sample network validation")
     radar_validate.add_argument(
@@ -1696,6 +1723,9 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
         "openreview_venue_profiles": args.openreview_venue_profile
         or saved_radar_list(saved_defaults, "openreview_venue_profiles")
         or radar_env_list("RADAR_OPENREVIEW_VENUES"),
+        "curated_research_pages": getattr(args, "curated_research_page", [])
+        or saved_radar_list(saved_defaults, "curated_research_pages")
+        or radar_env_list("RADAR_CURATED_RESEARCH_PAGES"),
         "venue_profiles": args.venue_profile
         or saved_radar_list(saved_defaults, "venue_profiles")
         or radar_env_list("RADAR_DBLP_VENUES"),
@@ -1709,20 +1739,36 @@ def radar_settings_from_cli_args(database: TeamResearchDatabase, args: argparse.
     if radar_config_value(args.unpaywall_email):
         settings["unpaywall_email"] = radar_config_value(args.unpaywall_email)
     settings = apply_team_radar_source_preset(settings, selected_source_preset)
-    if settings.get("seed_paper_ids") and not any(source in settings["sources"] for source in SEMANTIC_SCHOLAR_SEED_SOURCES):
+    settings["official_accepted_pages"] = official_accepted_pages_from_venue_profiles(
+        settings.get("venue_profiles") or [],
+        year=int(settings.get("conference_year") or datetime.now(timezone.utc).year),
+        configured_pages=list(settings.get("official_accepted_pages") or []),
+    )
+    semantic_scholar_key_configured = team_semantic_scholar_api_key_configured(args.semantic_scholar_api_key)
+    if (
+        semantic_scholar_key_configured
+        and settings.get("seed_paper_ids")
+        and not any(source in settings["sources"] for source in SEMANTIC_SCHOLAR_SEED_SOURCES)
+    ):
         settings["sources"].append("semantic_scholar_recommendations")
-    if settings.get("semantic_scholar_author_ids") and "semantic_scholar_authors" not in settings["sources"]:
+    if (
+        semantic_scholar_key_configured
+        and settings.get("semantic_scholar_author_ids")
+        and "semantic_scholar_authors" not in settings["sources"]
+    ):
         settings["sources"].append("semantic_scholar_authors")
     if settings.get("dblp_author_pids") and "dblp_authors" not in settings["sources"]:
         settings["sources"].append("dblp_authors")
     if settings.get("openalex_author_ids") and "openalex_authors" not in settings["sources"]:
         settings["sources"].append("openalex_authors")
     if settings.get("venue_profiles") and not any(source in settings["sources"] for source in {"dblp_venues", "openalex_venues"}):
-        settings["sources"].append("dblp_venues")
+        settings["sources"].append("openalex_venues")
     if settings.get("openreview_invitations") and "openreview" not in settings["sources"]:
         settings["sources"].append("openreview")
     if settings.get("openreview_venue_profiles") and "openreview_venues" not in settings["sources"]:
         settings["sources"].append("openreview_venues")
+    if settings.get("curated_research_pages") and "curated_research_pages" not in settings["sources"]:
+        settings["sources"].append("curated_research_pages")
     if settings.get("official_accepted_pages") and "official_accepted_pages" not in settings["sources"]:
         settings["sources"].append("official_accepted_pages")
     if "arxiv" in settings["sources"] and not settings.get("arxiv_categories"):
@@ -1755,12 +1801,12 @@ def build_team_literature_radar_source_validation_payload(
             negative_seed_paper_ids=list(settings.get("negative_seed_paper_ids") or []) or None,
             openalex_mailto=str(settings.get("openalex_mailto") or settings.get("source_contact_email") or "") or None,
             openreview_invitations=list(settings.get("openreview_invitations") or []) or None,
+            curated_research_pages=list(settings.get("curated_research_pages") or []) or None,
             crossref_mailto=str(settings.get("crossref_mailto") or settings.get("source_contact_email") or "") or None,
             unpaywall_email=str(settings.get("unpaywall_email") or settings.get("source_contact_email") or "") or None,
             semantic_scholar_author_ids=list(settings.get("semantic_scholar_author_ids") or []) or None,
             dblp_author_pids=list(settings.get("dblp_author_pids") or []) or None,
             openalex_author_ids=list(settings.get("openalex_author_ids") or []) or None,
-            arxiv_categories=list(settings.get("arxiv_categories") or []) or None,
             conference_year=settings.get("conference_year") or None,
             dblp_venue_profiles=list(settings.get("venue_profiles") or []) or None,
             openreview_venue_profiles=list(settings.get("openreview_venue_profiles") or []) or None,
@@ -1858,9 +1904,29 @@ def main(argv: list[str] | None = None) -> int:
         selected_source_preset = args.source_preset or (
             None if args.source else saved_radar_text(saved_defaults, "source_preset")
         )
+        selected_sources = list(args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES))
+        selected_conference_year = args.conference_year or saved_radar_optional_int(saved_defaults, "conference_year")
+        selected_dblp_venue_profiles = args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None
+        selected_curated_research_pages = (
+            args.curated_research_page
+            or saved_radar_list(saved_defaults, "curated_research_pages")
+            or radar_env_list("RADAR_CURATED_RESEARCH_PAGES")
+            or None
+        )
+        selected_official_accepted_pages = official_accepted_pages_from_venue_profiles(
+            selected_dblp_venue_profiles or [],
+            year=int(selected_conference_year or datetime.now(timezone.utc).year),
+            configured_pages=parse_official_accepted_page_specs(args.official_accepted_page)
+            or saved_radar_official_pages(saved_defaults)
+            or [],
+        )
+        if selected_curated_research_pages and "curated_research_pages" not in selected_sources:
+            selected_sources.append("curated_research_pages")
+        if selected_official_accepted_pages and "official_accepted_pages" not in selected_sources:
+            selected_sources.append("official_accepted_pages")
         result = run_team_literature_radar(
             database,
-            sources=args.source or saved_radar_list(saved_defaults, "sources") or list(DEFAULT_RADAR_SOURCES),
+            sources=selected_sources,
             query_terms=args.query_term or None,
             max_results=args.max_results or saved_radar_int(saved_defaults, "max_results", 25),
             recommendation_limit=args.limit or saved_radar_int(saved_defaults, "limit", 10),
@@ -1908,6 +1974,7 @@ def main(argv: list[str] | None = None) -> int:
             openreview_invitations=args.openreview_invitation
             or saved_radar_list(saved_defaults, "openreview_invitations")
             or None,
+            curated_research_pages=selected_curated_research_pages,
             openreview_venue_profiles=args.openreview_venue_profile
             or saved_radar_list(saved_defaults, "openreview_venue_profiles")
             or None,
@@ -1927,13 +1994,11 @@ def main(argv: list[str] | None = None) -> int:
             pdf_cache_dir=args.pdf_cache_dir or saved_radar_path(saved_defaults, "pdf_cache_dir"),
             pdf_cache_max_bytes=args.pdf_cache_max_bytes
             or saved_radar_int(saved_defaults, "pdf_cache_max_bytes", 50 * 1024 * 1024),
-            conference_year=args.conference_year or saved_radar_optional_int(saved_defaults, "conference_year"),
+            conference_year=selected_conference_year,
             dblp_author_pids=args.dblp_author_pid or saved_radar_list(saved_defaults, "dblp_author_pids") or None,
-            dblp_venue_profiles=args.venue_profile or saved_radar_list(saved_defaults, "venue_profiles") or None,
+            dblp_venue_profiles=selected_dblp_venue_profiles,
             usenix_security_cycles=args.usenix_cycle or saved_radar_int_list(saved_defaults, "usenix_security_cycles") or None,
-            official_accepted_pages=parse_official_accepted_page_specs(args.official_accepted_page)
-            or saved_radar_official_pages(saved_defaults)
-            or None,
+            official_accepted_pages=selected_official_accepted_pages or None,
             source_preset=selected_source_preset,
         )
         if args.output:
@@ -2018,7 +2083,7 @@ def main(argv: list[str] | None = None) -> int:
             print_json(result)
         else:
             print(
-                f"Saved Today snapshot {result['snapshot_date']}: "
+                f"Saved Latest snapshot {result['snapshot_date']}: "
                 f"{int(result.get('paper_count') or 0)} paper(s)."
             )
         return 0
@@ -2033,7 +2098,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             snapshots = result["snapshots"]
             if not snapshots:
-                print("No saved Today snapshots.")
+                print("No saved Latest snapshots.")
             for snapshot in snapshots:
                 print(
                     f"{snapshot.get('snapshot_date')}: "

@@ -88,6 +88,7 @@ from shared.literature_radar import (
     radar_daily_review_plan,
     radar_daily_source_health,
     radar_dblp_venue_profile_selection_summary,
+    official_accepted_pages_from_venue_profiles,
     radar_context_summary,
     radar_primary_source_coverage_summary,
     radar_primary_source_validation_coverage,
@@ -208,6 +209,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             "openalex_authors",
             "openalex_venues",
             "crossref",
+            "curated_research_pages",
             "openreview",
             "openreview_venues",
             "usenix_security",
@@ -386,54 +388,47 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(payload["trend_signal_options"][0]["collector_status"], "not_implemented")
         self.assertEqual(payload["trend_signal_options"][0]["policy"]["source_class"], "trend_signal")
         self.assertEqual(payload["source_policy"]["authoritative_count"], 2)
-        self.assertEqual(payload["source_readiness"]["status"], "ready_with_warnings")
-        self.assertEqual(payload["source_readiness"]["warning_source_ids"], ["semantic_scholar_recommendations"])
-        self.assertEqual(payload["oa_enrichment"]["status"], "missing_recommended")
+        self.assertEqual(payload["source_readiness"]["status"], "blocked")
+        self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations"])
+        self.assertEqual(payload["source_readiness"]["warning_source_ids"], [])
+        self.assertEqual(payload["oa_enrichment"]["status"], "optional")
         self.assertEqual(payload["oa_enrichment"]["provider"], "unpaywall")
         self.assertEqual(payload["oa_enrichment"]["relevant_source_ids"], ["semantic_scholar_recommendations", "openalex"])
-        self.assertIn("status=missing_recommended", format_radar_oa_enrichment(payload["oa_enrichment"]))
-        self.assertEqual(
-            format_radar_oa_enrichment_actions(payload["oa_enrichment"], product="team"),
-            [
-                "Next: unpaywall / contact / add_unpaywall_contact - "
-                "Set RADAR_UNPAYWALL_EMAIL, UNPAYWALL_EMAIL, or RADAR_SOURCE_CONTACT_EMAIL "
-                "so DOI-bearing candidates get legal OA/PDF checks."
-            ],
-        )
+        self.assertIn("status=optional", format_radar_oa_enrichment(payload["oa_enrichment"]))
+        self.assertEqual(format_radar_oa_enrichment_actions(payload["oa_enrichment"], product="team"), [])
         primary_coverage = payload["primary_source_coverage"]
         self.assertEqual(primary_coverage["status"], "partial")
         self.assertEqual(primary_coverage["covered_primary_source_ids"], ["semantic_scholar", "openalex"])
         self.assertEqual(
             primary_coverage["missing_primary_source_ids"],
-            ["arxiv", "dblp", "crossref", "openreview", "usenix_security", "ndss", "unpaywall"],
+            ["arxiv", "dblp", "crossref", "openreview", "usenix_security", "ndss"],
         )
-        self.assertEqual(primary_coverage["missing_config_primary_source_ids"], ["unpaywall"])
+        self.assertEqual(primary_coverage["missing_config_primary_source_ids"], [])
+        self.assertEqual(primary_coverage["inactive_primary_source_ids"], ["unpaywall"])
         primary_coverage_text = format_radar_primary_source_coverage(primary_coverage)
         self.assertIn("missing_sources=arxiv, dblp", primary_coverage_text)
-        self.assertIn("missing_config=unpaywall", primary_coverage_text)
+        self.assertNotIn("missing_config=unpaywall", primary_coverage_text)
         validation = payload["source_validation_plan"]
-        self.assertEqual(validation["status"], "ready_with_warnings")
-        self.assertEqual(validation["next_action"], "add_recommended_source_config")
+        self.assertEqual(validation["status"], "blocked")
+        self.assertEqual(validation["next_action"], "configure_blocked_sources")
         self.assertFalse(validation["network_performed"])
         self.assertTrue(validation["network_required"])
         self.assertEqual(validation["source_count"], 2)
-        self.assertEqual(validation["check_count"], 3)
+        self.assertEqual(validation["check_count"], 2)
         self.assertEqual(validation["api_source_count"], 2)
-        self.assertEqual(validation["oa_enrichment_status"], "missing_recommended")
+        self.assertEqual(validation["oa_enrichment_status"], "optional")
         checks = {check["source_id"]: check for check in validation["checks"]}
         self.assertEqual(checks["semantic_scholar_recommendations"]["validation_kind"], "api_metadata")
-        self.assertEqual(checks["semantic_scholar_recommendations"]["status"], "warning")
+        self.assertEqual(checks["semantic_scholar_recommendations"]["status"], "blocked")
         self.assertEqual(checks["openalex"]["status"], "ready")
-        self.assertEqual(checks["unpaywall"]["validation_kind"], "oa_enrichment")
-        self.assertEqual(checks["unpaywall"]["status"], "warning")
-        self.assertEqual(checks["unpaywall"]["relevant_source_ids"], ["semantic_scholar_recommendations", "openalex"])
-        self.assertIn("next=add_recommended_source_config", format_radar_source_validation_plan(validation))
+        self.assertNotIn("unpaywall", checks)
+        self.assertIn("next=configure_blocked_sources", format_radar_source_validation_plan(validation))
         guidance = payload["source_validation_guidance"]
-        self.assertEqual(guidance["status"], "ready_with_warnings")
-        self.assertEqual(guidance["next_action"], "add_recommended_api_contact_or_keys")
-        self.assertEqual(guidance["warning_action_count"], 2)
+        self.assertEqual(guidance["status"], "blocked")
+        self.assertEqual(guidance["next_action"], "configure_required_source_inputs")
+        self.assertEqual(guidance["warning_action_count"], 0)
         self.assertEqual(guidance["api_key_action_count"], 1)
-        self.assertEqual(guidance["api_contact_action_count"], 1)
+        self.assertEqual(guidance["api_contact_action_count"], 0)
         self.assertEqual(guidance["recommended_live_validation_max_results"], 1)
         self.assertIn("live_max=1", format_radar_source_validation_guidance(guidance))
         guidance_actions = {action["source_id"]: action for action in guidance["actions"]}
@@ -442,8 +437,6 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             guidance_actions["semantic_scholar_recommendations"]["example_env"],
             "SEMANTIC_SCHOLAR_API_KEY=api-key",
         )
-        self.assertIn("RADAR_UNPAYWALL_EMAIL", guidance_actions["unpaywall"]["env_vars"])
-        self.assertEqual(guidance_actions["unpaywall"]["example_env"], "RADAR_UNPAYWALL_EMAIL=you@example.org")
         setup_env_block = format_radar_mvp_setup_env_block(
             {
                 "actions": [
@@ -451,7 +444,6 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                         "details": {
                             "example_env": [
                                 guidance_actions["semantic_scholar_recommendations"]["example_env"],
-                                guidance_actions["unpaywall"]["example_env"],
                             ]
                         }
                     }
@@ -463,7 +455,6 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [
                 "MVP setup env block:",
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "RADAR_UNPAYWALL_EMAIL=you@example.org",
             ],
         )
         setup_actions = radar_mvp_setup_action_plan(
@@ -471,17 +462,16 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             source_validation_guidance=guidance,
         )
         self.assertEqual(setup_actions["setup_env_block"]["status"], "available")
-        self.assertEqual(setup_actions["setup_env_block"]["line_count"], 2)
+        self.assertEqual(setup_actions["setup_env_block"]["line_count"], 1)
         self.assertEqual(
             setup_actions["setup_env_block"]["lines"],
             [
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "RADAR_UNPAYWALL_EMAIL=you@example.org",
             ],
         )
         self.assertEqual(
             setup_actions["setup_env_block"]["text"],
-            "SEMANTIC_SCHOLAR_API_KEY=api-key\nRADAR_UNPAYWALL_EMAIL=you@example.org",
+            "SEMANTIC_SCHOLAR_API_KEY=api-key",
         )
         self.assertEqual(format_radar_mvp_setup_env_block(setup_actions), setup_env_block)
         team_setup_actions = radar_mvp_setup_action_plan(
@@ -490,12 +480,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             source_validation_guidance=guidance,
         )
         team_env_vars = team_setup_actions["actions"][0]["details"]["env_vars"]
-        self.assertIn("RADAR_UNPAYWALL_EMAIL", team_env_vars)
-        self.assertIn("RADAR_SOURCE_CONTACT_EMAIL", team_env_vars)
+        self.assertEqual(team_env_vars, ["SEMANTIC_SCHOLAR_API_KEY"])
         self.assertNotIn("PERSONAL_RADAR_UNPAYWALL_EMAIL", team_env_vars)
         self.assertNotIn("PERSONAL_RADAR_SOURCE_CONTACT_EMAIL", team_env_vars)
         team_action_lines = format_radar_mvp_setup_action_plan(team_setup_actions)
-        self.assertIn("RADAR_UNPAYWALL_EMAIL", team_action_lines[1])
+        self.assertIn("SEMANTIC_SCHOLAR_API_KEY", team_action_lines[1])
         self.assertNotIn("PERSONAL_RADAR_UNPAYWALL_EMAIL", team_action_lines[1])
         personal_setup_actions = radar_mvp_setup_action_plan(
             product="personal",
@@ -503,15 +492,13 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             source_validation_guidance=guidance,
         )
         personal_env_vars = personal_setup_actions["actions"][0]["details"]["env_vars"]
-        self.assertIn("PERSONAL_RADAR_UNPAYWALL_EMAIL", personal_env_vars)
-        self.assertIn("PERSONAL_RADAR_SOURCE_CONTACT_EMAIL", personal_env_vars)
+        self.assertEqual(personal_env_vars, ["SEMANTIC_SCHOLAR_API_KEY"])
         self.assertNotIn("RADAR_UNPAYWALL_EMAIL", personal_env_vars)
         self.assertNotIn("RADAR_SOURCE_CONTACT_EMAIL", personal_env_vars)
         self.assertEqual(
             personal_setup_actions["setup_env_block"]["lines"],
             [
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "PERSONAL_RADAR_UNPAYWALL_EMAIL=you@example.org",
             ],
         )
         self.assertEqual(
@@ -519,13 +506,12 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [
                 "MVP setup env block:",
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "PERSONAL_RADAR_UNPAYWALL_EMAIL=you@example.org",
             ],
         )
         personal_env_file = format_radar_mvp_setup_env_file(personal_setup_actions, product="personal")
         self.assertIn("# Personal Literature Radar MVP local setup", personal_env_file)
         self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", personal_env_file)
-        self.assertIn("PERSONAL_RADAR_UNPAYWALL_EMAIL=you@example.org", personal_env_file)
+        self.assertNotIn("PERSONAL_RADAR_UNPAYWALL_EMAIL=you@example.org", personal_env_file)
         self.assertIn("# OPENROUTER_API_KEY=replace-with-openrouter-key", personal_env_file)
         missing_audit = radar_mvp_setup_env_audit(
             personal_setup_actions,
@@ -533,36 +519,34 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             environ={},
         )
         self.assertEqual(missing_audit["status"], "needs_action")
-        self.assertEqual(missing_audit["missing_count"], 2)
+        self.assertEqual(missing_audit["missing_count"], 1)
         self.assertEqual(missing_audit["placeholder_count"], 0)
         present_audit = radar_mvp_setup_env_audit(
             personal_setup_actions,
             product="personal",
             environ={
                 "SEMANTIC_SCHOLAR_API_KEY": "live-secret",
-                "PERSONAL_RADAR_UNPAYWALL_EMAIL": "researcher@example.edu",
             },
         )
         self.assertEqual(present_audit["status"], "ready")
-        self.assertEqual(present_audit["present_count"], 2)
-        self.assertIn("status=ready required=2 present=2", format_radar_mvp_setup_env_audit(present_audit))
+        self.assertEqual(present_audit["present_count"], 1)
+        self.assertIn("status=ready required=1 present=1", format_radar_mvp_setup_env_audit(present_audit))
         placeholder_audit = radar_mvp_setup_env_audit(
             personal_setup_actions,
             product="personal",
             environ={
                 "SEMANTIC_SCHOLAR_API_KEY": "api-key",
-                "PERSONAL_RADAR_UNPAYWALL_EMAIL": "you@example.org",
             },
         )
         self.assertEqual(placeholder_audit["status"], "needs_action")
-        self.assertEqual(placeholder_audit["placeholder_count"], 2)
+        self.assertEqual(placeholder_audit["placeholder_count"], 1)
         commands = radar_source_validation_command_guidance(
             product="team",
             source_validation_plan=validation,
             db_path="team/data/team_research.sqlite3",
             use_saved_defaults=True,
         )
-        self.assertEqual(commands["next_action"], "add_recommended_config_then_run_live_validation")
+        self.assertEqual(commands["next_action"], "configure_blocked_sources_before_live_validation")
         self.assertFalse(commands["dry_run"]["network"])
         self.assertTrue(commands["live"]["network"])
         self.assertIn("radar-validate-sources", commands["live"]["argv"])
@@ -622,9 +606,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
         action_messages = [action["message"] for action in guidance["actions"]]
         self.assertTrue(any("Semantic Scholar API key" in message for message in action_messages))
-        self.assertTrue(any("Unpaywall email/contact" in message for message in action_messages))
         self.assertTrue(any(line.startswith("Next: semantic_scholar_recommendations") for line in guidance["action_lines"]))
-        self.assertTrue(any("Unpaywall email/contact" in line for line in guidance["action_lines"]))
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
         self.assertEqual(payload["scoring_profile_summary"]["interest_count"], 2)
         self.assertEqual(
@@ -634,7 +616,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 {"keyword": "memory safety", "weight": 80},
             ],
         )
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["profile_count"], 9)
         selected = [option["id"] for option in payload["source_options"] if option["selected"]]
         self.assertEqual(selected, ["semantic_scholar_recommendations", "openalex"])
         self.assertEqual(payload["links"]["html"], "/radar")
@@ -648,7 +630,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             collection_config={},
         )
         guidance = payload["source_validation_guidance"]
-        self.assertEqual(guidance["api_contact_action_count"], 3)
+        self.assertEqual(guidance["api_contact_action_count"], 0)
+        self.assertEqual(guidance["api_key_action_count"], 1)
 
         team_setup_actions = radar_mvp_setup_action_plan(
             product="team",
@@ -659,22 +642,20 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             team_setup_actions["setup_env_block"]["lines"],
             [
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "RADAR_SOURCE_CONTACT_EMAIL=you@example.org",
             ],
         )
         team_action_lines = format_radar_mvp_setup_action_plan(team_setup_actions)
-        self.assertIn("env=SEMANTIC_SCHOLAR_API_KEY, RADAR_SOURCE_CONTACT_EMAIL", team_action_lines[1])
+        self.assertIn("env=SEMANTIC_SCHOLAR_API_KEY", team_action_lines[1])
         self.assertNotIn("RADAR_OPENALEX_MAILTO", team_action_lines[1])
         ready_audit = radar_mvp_setup_env_audit(
             team_setup_actions,
             product="team",
             environ={
                 "SEMANTIC_SCHOLAR_API_KEY": "live-secret",
-                "RADAR_SOURCE_CONTACT_EMAIL": "radar@example.org",
             },
         )
         self.assertEqual(ready_audit["status"], "ready")
-        self.assertEqual(ready_audit["required_count"], 2)
+        self.assertEqual(ready_audit["required_count"], 1)
 
         personal_setup_actions = radar_mvp_setup_action_plan(
             product="personal",
@@ -685,7 +666,6 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             personal_setup_actions["setup_env_block"]["lines"],
             [
                 "SEMANTIC_SCHOLAR_API_KEY=api-key",
-                "PERSONAL_RADAR_SOURCE_CONTACT_EMAIL=you@example.org",
             ],
         )
 
@@ -734,24 +714,22 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             {"latest_run": {"id": "run", "status": "succeeded", "freshness": {"status": "fresh"}}, "papers": []},
         )
         stages = {stage["id"]: stage for stage in readiness["stages"]}
-        self.assertEqual(readiness["next_action"], "add_required_source_config")
-        self.assertEqual(readiness["next_stage_id"], "primary_source_coverage")
-        self.assertEqual(stages["primary_source_coverage"]["next_action"], "add_required_source_config")
+        self.assertEqual(readiness["next_action"], "run_live_source_validation")
+        self.assertEqual(readiness["next_stage_id"], "live_source_validation")
+        self.assertEqual(stages["primary_source_coverage"]["next_action"], "keep_primary_sources")
         setup_actions = radar_mvp_setup_action_plan(
             mvp_readiness=readiness,
             primary_source_coverage=primary_coverage,
             source_validation_commands={"live": {"command": "validate --live", "network": True}},
         )
-        self.assertEqual(setup_actions["next_action"], "configure_primary_source_requirements")
-        self.assertEqual(setup_actions["actions"][0]["stage_id"], "primary_source_coverage")
+        self.assertEqual(setup_actions["next_action"], "run_live_source_validation")
+        self.assertEqual(setup_actions["actions"][0]["stage_id"], "live_source_validation")
         primary_actions = [
             action for action in setup_actions["actions"] if action["stage_id"] == "primary_source_coverage"
         ]
-        self.assertEqual(primary_actions[0]["id"], "configure_primary_source_requirements")
-        self.assertEqual(primary_actions[0]["source_ids"], ["unpaywall"])
-        self.assertEqual(primary_actions[0]["details"]["missing_config_primary_source_ids"], ["unpaywall"])
-        self.assertEqual(primary_actions[0]["details"]["missing_requirements"][0]["next_action"], "add_unpaywall_contact")
-        self.assertIn("missing_config=unpaywall", format_radar_primary_source_coverage(primary_coverage))
+        self.assertEqual(primary_actions, [])
+        self.assertEqual(primary_coverage["inactive_primary_source_ids"], ["unpaywall"])
+        self.assertNotIn("missing_config=unpaywall", format_radar_primary_source_coverage(primary_coverage))
         self.assertNotIn("missing_sources=unpaywall", format_radar_primary_source_coverage(primary_coverage))
 
     def test_builds_source_validation_result_from_plan_and_outcomes(self) -> None:
@@ -850,21 +828,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             [{"source_id": "crossref", "status": "succeeded", "sample_count": 1}],
             now=datetime(2026, 7, 1, 8, 20, tzinfo=timezone.utc),
         )
-        self.assertEqual(missing_recommended_result["status"], "partial")
-        self.assertEqual(missing_recommended_result["pending_source_ids"], ["unpaywall"])
-        self.assertEqual(
-            missing_recommended_result["result_guidance"]["category_counts"],
-            {"skipped_missing_recommended_config": 1},
-        )
-        self.assertTrue(
-            any("skipped_missing_recommended_config" in line for line in missing_recommended_result["result_guidance"]["action_lines"])
-        )
-        skipped_check = {
+        self.assertEqual(missing_recommended_result["status"], "succeeded")
+        self.assertEqual(missing_recommended_result["pending_source_ids"], [])
+        self.assertEqual(missing_recommended_result["result_guidance"]["category_counts"], {})
+        checks_by_source = {
             check["source_id"]: check
             for check in missing_recommended_result["checks"]
-        }["unpaywall"]
-        self.assertEqual(skipped_check["status"], "skipped")
-        self.assertIn("recommended source configuration", skipped_check["message"])
+        }
+        self.assertNotIn("unpaywall", checks_by_source)
+        self.assertEqual(checks_by_source["crossref"]["status"], "succeeded")
 
     def test_converts_source_stats_to_validation_results(self) -> None:
         results = radar_source_validation_results_from_stats(
@@ -927,10 +899,15 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
 
         self.assertEqual(summary["status"], "blocked")
         self.assertEqual(summary["blocked_source_ids"], ["semantic_scholar_recommendations"])
-        self.assertEqual(summary["warning_source_ids"], ["crossref"])
+        self.assertEqual(summary["warning_source_ids"], [])
         self.assertEqual(
             summary["missing_required"],
             [
+                {
+                    "source_id": "semantic_scholar_recommendations",
+                    "key": "semantic_scholar_api_key_configured",
+                    "label": "Semantic Scholar API key",
+                },
                 {
                     "source_id": "semantic_scholar_recommendations",
                     "key": "seed_paper_ids",
@@ -938,7 +915,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(summary["missing_recommended"][0]["key"], "crossref_mailto_configured")
+        self.assertEqual(summary["missing_recommended"], [])
 
         ready = radar_source_readiness_summary(
             ["semantic_scholar_recommendations", "openalex"],
@@ -958,12 +935,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             )
         )
         self.assertEqual(guidance["status"], "blocked")
-        self.assertEqual(guidance["blocked_action_count"], 1)
-        self.assertEqual(guidance["warning_action_count"], 3)
+        self.assertEqual(guidance["blocked_action_count"], 3)
+        self.assertEqual(guidance["warning_action_count"], 0)
         categories = [action["category"] for action in guidance["actions"]]
-        self.assertIn("required_config", categories)
         self.assertIn("api_key", categories)
-        self.assertIn("contact", categories)
+        self.assertIn("recommended_config", categories)
 
         author_guidance = radar_source_validation_guidance(
             radar_source_validation_plan(["semantic_scholar_authors"], {})
@@ -1076,8 +1052,8 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         )
 
         self.assertIn("## OA Enrichment", report)
-        self.assertIn("OA enrichment: provider=Unpaywall status=missing_recommended", report)
-        self.assertIn("Missing recommended: Unpaywall email/contact", report)
+        self.assertIn("OA enrichment: provider=Unpaywall status=optional", report)
+        self.assertNotIn("Missing recommended: Unpaywall email/contact", report)
 
     def test_blocked_source_skip_stat_keeps_missing_config_actionable(self) -> None:
         readiness = radar_source_blocked_readiness("semantic_scholar_recommendations", {})
@@ -1092,11 +1068,11 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
 
         self.assertEqual(stat["status"], "not_run")
         self.assertEqual(stat["skip_reason"], "missing_required_config")
-        self.assertEqual(stat["missing_required_config_keys"], ["seed_paper_ids"])
+        self.assertEqual(stat["missing_required_config_keys"], ["semantic_scholar_api_key_configured", "seed_paper_ids"])
         self.assertEqual(
             format_radar_source_stats([stat]),
             "semantic_scholar_recommendations: 0 not_run "
-            "(skip=missing_required_config, missing=seed_paper_ids)",
+            "(skip=missing_required_config, missing=semantic_scholar_api_key_configured, seed_paper_ids)",
         )
         report = append_radar_source_stats_to_report("# Radar", [stat])
         self.assertIn("missing required config", report)
@@ -2492,7 +2468,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(readiness["run_count"], 1)
         self.assertEqual(readiness["status_counts"], {"blocked": 1})
         self.assertEqual(readiness["blocked_source_ids"], ["semantic_scholar_recommendations"])
-        self.assertEqual(readiness["missing_required"][0]["key"], "seed_paper_ids")
+        self.assertEqual(readiness["missing_required"][0]["key"], "semantic_scholar_api_key_configured")
 
     def test_summarizes_context_pool_and_linked_recommendations(self) -> None:
         paper = create_radar_paper(
@@ -2543,29 +2519,51 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("sources=team-library=1, team-radar-watch=1", report)
 
     def test_dblp_venue_profiles_cover_required_conference_groups(self) -> None:
+        empty_summary = radar_dblp_venue_profile_selection_summary([])
+        self.assertEqual(empty_summary["status"], "empty")
+        self.assertEqual(empty_summary["profile_count"], 0)
         self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["security"])],
-            ["usenix_security", "ieee_sp", "acm_ccs", "ndss", "raid", "acsac"],
+            [
+                "usenix_security",
+                "ieee_sp",
+                "acm_ccs",
+                "ndss",
+                "raid",
+                "acsac",
+                "acns",
+                "asia_ccs",
+                "euro_sp",
+            ],
         )
         self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["systems"])],
-            ["osdi", "sosp", "eurosys", "usenix_atc", "asplos"],
+            ["osdi", "sosp", "eurosys", "usenix_atc", "asplos", "isca"],
         )
         self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["programming_languages_memory_safety"])],
             ["pldi", "oopsla", "popl", "ecoop"],
         )
         self.assertEqual(
+            [profile["id"] for profile in expand_dblp_venue_profiles(["pl_se"])],
+            ["pldi", "oopsla", "popl", "ecoop", "icse", "fse", "ase"],
+        )
+        self.assertEqual(
             [profile["id"] for profile in expand_dblp_venue_profiles(["software_engineering"])],
             ["icse", "fse", "ase"],
         )
         self.assertEqual([profile["id"] for profile in expand_dblp_venue_profiles(["acm_ccs"])], ["acm_ccs"])
+        official_page_profiles = {
+            profile["id"]: profile["official_accepted_page_configurable"]
+            for profile in radar_dblp_venue_profile_selection_summary(["acm_ccs", "ieee_sp"])["profiles"]
+        }
+        self.assertEqual(official_page_profiles, {"acm_ccs": True, "ieee_sp": True})
         dblp_summary = radar_dblp_venue_profile_selection_summary(["security", "pldi"])
         self.assertEqual(dblp_summary["status"], "ready")
-        self.assertEqual(dblp_summary["profile_count"], 7)
-        self.assertEqual(dblp_summary["groups"]["security"], 6)
-        self.assertEqual(dblp_summary["required_coverage"]["required_count"], 18)
-        self.assertEqual(dblp_summary["required_coverage"]["covered_count"], 7)
+        self.assertEqual(dblp_summary["profile_count"], 10)
+        self.assertEqual(dblp_summary["groups"]["security"], 9)
+        self.assertEqual(dblp_summary["required_coverage"]["required_count"], 22)
+        self.assertEqual(dblp_summary["required_coverage"]["covered_count"], 10)
         self.assertEqual(dblp_summary["required_coverage"]["groups"]["security"]["missing"], [])
         self.assertEqual(
             dblp_summary["required_coverage"]["groups"]["software_engineering"]["missing"],
@@ -2575,7 +2573,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
             ["security", "systems", "programming_languages_memory_safety", "software_engineering"]
         )
         self.assertTrue(full_summary["required_coverage"]["complete"])
-        self.assertEqual(full_summary["required_coverage"]["covered_count"], 18)
+        self.assertEqual(full_summary["required_coverage"]["covered_count"], 22)
         for group, required_names in CONFERENCE_SOURCE_GROUPS.items():
             self.assertEqual(full_summary["required_coverage"]["groups"][group]["covered"], required_names)
         self.assertIn("USENIX Security", [profile["name"] for profile in dblp_summary["profiles"]])
@@ -2583,6 +2581,53 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertEqual(openreview_summary["status"], "ready")
         self.assertGreaterEqual(openreview_summary["profile_count"], 3)
         self.assertIn("ICLR", [profile["name"] for profile in openreview_summary["profiles"]])
+
+    def test_official_accepted_pages_from_venue_profiles_uses_configured_profile_urls(self) -> None:
+        pages = official_accepted_pages_from_venue_profiles(
+            ["acm_ccs", "ieee_sp"],
+            year=2026,
+            environ={
+                "RADAR_ACM_CCS_2026_ACCEPTED_PAGE_URL": "https://ccs.example/accepted",
+                "RADAR_IEEE_SP_ACCEPTED_PAGE_URL": "https://sp.example/accepted",
+            },
+        )
+
+        self.assertEqual([page["source_id"] for page in pages], ["acm_ccs", "ieee_sp"])
+        by_source = {page["source_id"]: page for page in pages}
+        self.assertEqual(by_source["acm_ccs"]["venue"], "ACM CCS 2026")
+        self.assertEqual(by_source["acm_ccs"]["venue_profile_id"], "acm_ccs")
+        self.assertEqual(by_source["acm_ccs"]["venue_group"], "security")
+        self.assertEqual(by_source["acm_ccs"]["year"], 2026)
+        self.assertEqual(by_source["acm_ccs"]["page_url"], "https://ccs.example/accepted")
+        self.assertEqual(by_source["ieee_sp"]["venue"], "IEEE Symposium on Security and Privacy 2026")
+        self.assertEqual(by_source["ieee_sp"]["page_url"], "https://sp.example/accepted")
+
+    def test_official_accepted_pages_from_venue_profiles_preserves_manual_pages_once(self) -> None:
+        pages = official_accepted_pages_from_venue_profiles(
+            ["acm_ccs"],
+            year=2026,
+            configured_pages=[
+                {
+                    "source_id": "acm_ccs",
+                    "venue": "ACM CCS 2026",
+                    "year": 2026,
+                    "page_url": "https://ccs.example/accepted",
+                }
+            ],
+            environ={"RADAR_ACM_CCS_2026_ACCEPTED_PAGE_URL": "https://ccs.example/accepted"},
+        )
+
+        self.assertEqual(
+            pages,
+            [
+                {
+                    "source_id": "acm_ccs",
+                    "venue": "ACM CCS 2026",
+                    "year": 2026,
+                    "page_url": "https://ccs.example/accepted",
+                }
+            ],
+        )
 
     def test_builds_venue_coverage_summary_from_profile_source_records(self) -> None:
         ccs_paper = create_radar_paper(
@@ -4396,7 +4441,7 @@ class SharedLiteratureRadarCoreTest(unittest.TestCase):
         self.assertIn("`context_linking`: succeeded=1", brief)
         self.assertIn("`recommendation_report`: succeeded=1", brief)
         self.assertIn("OA Enrichment", brief)
-        self.assertIn("statuses=missing_recommended=1", brief)
+        self.assertIn("statuses=optional=1", brief)
         self.assertIn("sources=dblp", brief)
         self.assertIn("Source Readiness", brief)
         self.assertIn("statuses=blocked=1", brief)

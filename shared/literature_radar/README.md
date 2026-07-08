@@ -39,12 +39,13 @@ source readiness, `primary_source_coverage`, a no-network
 read-only trend-signal options into one contract that product surfaces can
 expose before running collectors. Primary-source coverage checks whether the
 current selection covers the objective's required source families: arXiv, DBLP,
-Semantic Scholar, OpenAlex, Crossref, OpenReview, USENIX Security, NDSS, and
-Unpaywall OA enrichment. This is separate from source validation: coverage says
-whether the required families are represented, while validation says whether
+OpenAlex, Crossref, OpenReview, USENIX Security, NDSS, and enabled optional
+families such as Semantic Scholar or Unpaywall OA enrichment. Semantic Scholar
+is considered enabled only when an API key is configured. This is separate from
+source validation: coverage says whether the required families are represented, while validation says whether
 the selected checks are ready to run. The validation plan turns
-selected API/RSS/accepted-page sources plus required/recommended config into a
-live-check checklist while recording `network_performed=false`; actual source
+selected API/RSS/accepted-page sources plus required config and optional
+metadata into a live-check checklist while recording `network_performed=false`; actual source
 calls remain owned by the run command. The shared core also provides
 `build_radar_source_validation_result(...)` and
 `radar_source_validation_results_from_stats(...)` so Team and Personal
@@ -52,8 +53,8 @@ validation commands can fold collector outcomes into one status summary with
 failed, blocked, skipped, pending, and succeeded checks without changing the
 preflight contract. The same preflight payload includes
 `source_validation_guidance`, a compact operator checklist for required source
-inputs, recommended Semantic Scholar API keys, OpenAlex/Crossref/Unpaywall
-contact metadata, and the default one-sample live-validation limit. Trend
+inputs, required Semantic Scholar API keys for Semantic Scholar sources,
+optional contact metadata, and the default one-sample live-validation limit. Trend
 signals are listed separately from runnable collectors until their collectors
 are implemented.
 Live validation results also carry `result_guidance`, which classifies failures
@@ -61,8 +62,9 @@ such as rate limits, transient service-unavailable responses, auth/access
 errors, network failures, parser/response-shape issues, blocked configuration,
 skipped samples, and successful-but-empty zero-sample responses into concrete
 next actions. When live validation was attempted but a planned source has no
-collector result because recommended setup is missing, the result records that
-source as `skipped` instead of leaving it as a dry-run-style `not_run`.
+collector result because required or optional setup prevents a call, the result
+records that source as `skipped` instead of leaving it as a dry-run-style
+`not_run`.
 `format_radar_source_validation_result_actions(...)` turns those structured
 actions into compact text lines for CLI/status output, and shared guidance
 payloads include the same lines under `action_lines` for scripts and dashboards.
@@ -108,9 +110,10 @@ library, watched-paper, or comment-derived context informed a run. The initial a
 Semantic Scholar, OpenAlex, Crossref, and OpenReview collectors use public
 metadata APIs and return product-neutral radar paper records. Semantic Scholar
 also supports seed-paper recommendation expansion through the official
-Recommendations API. Unpaywall enrichment adds legal OA status and PDF links for
-DOI-bearing papers without downloading files. Product adapters own scheduling,
-credentials, storage, and UI.
+Recommendations API, but product adapters should enable Semantic Scholar only
+when a real API key is configured. Unpaywall enrichment adds legal OA status and
+PDF links for DOI-bearing papers without downloading files. Product adapters
+own scheduling, credentials, storage, and UI.
 Every collected paper carries normalized `source_provenance` with source class,
 authoritative-metadata status, source URL, landing/DOI/arXiv/publisher/PDF
 links, OA status, license, and collection timestamp. When deduplication merges
@@ -152,6 +155,9 @@ metadata came from and which collector path found it.
 The DBLP/OpenAlex venue-profile settings summary also includes
 `required_coverage`, a manifest check against the configured security, systems,
 programming-languages/memory-safety, and software-engineering top-venue groups.
+The security and systems profiles include selectors such as `acm_ccs`,
+`ieee_sp`, `acns`, `acsac`, `asia_ccs`, `euro_sp`, `sosp`, `isca`, `osdi`, and
+`eurosys`.
 Personal and Team preflight outputs use that to show whether the current
 selectors cover all required top venues before a scheduled run spends API calls.
 Official accepted-paper page collectors share the same parser through
@@ -264,7 +270,7 @@ conservative: records with conflicting strong identifiers stay separate.
 MVP collectors should target:
 
 - arXiv API/RSS for `cs.CR`, `cs.PL`, `cs.SE`, `cs.AI`, `cs.LG`, `cs.CL`
-- Semantic Scholar API
+- Semantic Scholar API when an API key is configured
 - DBLP API
 - Crossref API
 - OpenReview API
@@ -336,9 +342,10 @@ Current implemented collectors:
 - `append_radar_oa_enrichment_to_report(...)` adds an `OA Enrichment` section
   to generated Markdown reports so legal OA/PDF readiness is visible alongside
   source readiness and coverage.
-- `format_radar_oa_enrichment_actions(...)` renders the exact Unpaywall contact
-  setup action for Team and Personal settings/status text when DOI-bearing
-  sources are selected but legal OA/PDF enrichment is missing contact config.
+- `format_radar_oa_enrichment_actions(...)` renders the optional Unpaywall
+  contact setup action for Team and Personal settings/status text when
+  DOI-bearing sources are selected but legal OA/PDF enrichment has no contact
+  config.
 - Queue evidence readiness verifies that each recommendation has a
   reason-to-read, an existing-work/context relation, source links, provenance,
   and complete PDF policy. PDF policy is complete only when the recommendation
@@ -414,8 +421,8 @@ Current implemented collectors:
   recommendation evidence. It intentionally excludes full primary-source
   coverage, live-source validation coverage, backups, restore rehearsal, and
   operations evidence; those remain beta-hardening work. Source settings that
-  are runnable but missing recommended API/contact metadata pass the thin MVP
-  with warning evidence, because those fixes are beta-readiness work. Products
+  are runnable with optional contact metadata unset pass the thin MVP, because
+  those fixes are beta-readiness work. Products
   can opt into an additional queue-usefulness stage, which passes only after a
   reviewer records whether the latest daily queue was useful enough for review.
   The companion `radar_thin_mvp_gate_summary(...)` wraps that readiness payload
@@ -427,14 +434,12 @@ Current implemented collectors:
   misconfigured primary-source requirements, live-validation commands, and
   operations readiness into a compact `mvp_setup_actions` payload with command
   text and an `external_api` flag for actions such as live source validation.
-  When the selected source families are already present but Unpaywall/contact
-  setup is missing, the plan reports `configure_primary_source_requirements`
-  instead of telling operators to expand sources. Source metadata actions carry
-  `env_vars` and `example_env` hints such as `SEMANTIC_SCHOLAR_API_KEY=api-key`
-  or `RADAR_SOURCE_CONTACT_EMAIL=you@example.org`. When several selected
-  sources need the same contact metadata, the setup block prefers one shared
-  contact email while the structured action still records service-specific
-  aliases as accepted fallbacks. The JSON payload also exposes those
+  When selected Semantic Scholar source families are present but the API key is
+  missing, the plan reports `configure_primary_source_requirements` instead of
+  telling operators to expand sources. Source metadata actions carry `env_vars`
+  and `example_env` hints such as `SEMANTIC_SCHOLAR_API_KEY=api-key`. Optional
+  contact metadata can still be recorded for etiquette or enrichment, but it is
+  not a default readiness warning. The JSON payload also exposes those
   de-duplicated examples plus required backup-target placeholders as
   `setup_env_block.lines` and `setup_env_block.text`, and text status output
   renders the same examples as an `MVP setup env block` when present.

@@ -32,6 +32,7 @@ from team.literature_radar import (
     score_team_radar_paper,
     sort_radar_recommendations,
     team_radar_context_items,
+    TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS,
     team_radar_queue_review_context,
     team_radar_source_preset,
 )
@@ -221,10 +222,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIsNotNone(preset)
         self.assertIn("openreview_venues", DEFAULT_RADAR_SOURCES)
         self.assertIn("arxiv", preset["sources"])
-        self.assertIn("dblp_venues", preset["sources"])
+        self.assertNotIn("dblp_venues", preset["sources"])
+        self.assertIn("dblp_authors", preset["sources"])
         self.assertIn("openreview_venues", preset["sources"])
-        self.assertEqual(preset["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertEqual(preset["venue_profiles"], [])
         self.assertEqual(preset["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
+        self.assertEqual(preset["dblp_author_pids"], list(TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS))
 
         settings = apply_team_radar_source_preset(
             {
@@ -232,33 +235,100 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 "venue_profiles": [],
                 "openreview_venue_profiles": [],
                 "usenix_security_cycles": [],
+                "dblp_author_pids": [],
             },
             "team_security_daily",
         )
 
         self.assertEqual(settings["source_preset"], "team_security_daily")
-        self.assertEqual(settings["sources"], preset["sources"])
-        self.assertEqual(settings["venue_profiles"], ["security", "programming_languages_memory_safety"])
+        self.assertNotIn("semantic_scholar", settings["sources"])
+        self.assertEqual(
+            settings["sources"],
+            [
+                source
+                for source in preset["sources"]
+                if not source.startswith("semantic_scholar")
+            ],
+        )
+        self.assertEqual(settings["venue_profiles"], [])
         self.assertEqual(settings["openreview_venue_profiles"], ["iclr", "neurips", "icml"])
         self.assertEqual(settings["usenix_security_cycles"], [1])
+        self.assertEqual(settings["dblp_author_pids"], list(TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS))
+
+        keyed_settings = apply_team_radar_source_preset(
+            {"sources": [], "semantic_scholar_api_key_configured": True},
+            "team_security_daily",
+        )
+        self.assertIn("semantic_scholar", keyed_settings["sources"])
 
     def test_weekday_radar_source_plan_rotates_source_families(self) -> None:
-        monday = weekday_radar_source_plan("2026-07-06")
-        wednesday = weekday_radar_source_plan("2026-07-08")
-        friday = weekday_radar_source_plan("2026-07-10")
-        saturday = weekday_radar_source_plan("2026-07-11")
+        with mock.patch.dict("os.environ", {}, clear=True):
+            monday = weekday_radar_source_plan("2026-07-06")
+            tuesday = weekday_radar_source_plan("2026-07-07")
+            wednesday = weekday_radar_source_plan("2026-07-08")
+            thursday = weekday_radar_source_plan("2026-07-09")
+            friday = weekday_radar_source_plan("2026-07-10")
+            saturday = weekday_radar_source_plan("2026-07-11")
+            sunday = weekday_radar_source_plan("2026-07-12")
 
-        self.assertEqual(monday["id"], "monday_preprints")
-        self.assertEqual(monday["sources"], ["arxiv"])
-        self.assertEqual(wednesday["sources"], ["dblp", "dblp_venues", "openalex_venues"])
-        self.assertEqual(wednesday["venue_profiles"], ["security", "systems", "programming_languages_memory_safety"])
-        self.assertEqual(friday["sources"], ["usenix_security", "ndss"])
-        self.assertEqual(saturday["sources"], ["semantic_scholar_recommendations", "semantic_scholar_citations", "semantic_scholar_references"])
+        self.assertEqual(monday["id"], "monday_ccs_ndss")
+        self.assertEqual(monday["sources"], ["ndss", "openalex_venues"])
+        self.assertEqual(monday["venue_profiles"], ["acm_ccs", "ndss"])
+        self.assertEqual(tuesday["sources"], ["usenix_security", "openalex_venues"])
+        self.assertEqual(tuesday["venue_profiles"], ["usenix_security", "ieee_sp"])
+        self.assertEqual(wednesday["sources"], ["openalex_venues"])
+        self.assertEqual(
+            wednesday["venue_profiles"],
+            [
+                "raid",
+                "acsac",
+                "acns",
+                "asia_ccs",
+                "euro_sp",
+                "systems",
+                "programming_languages_memory_safety",
+                "software_engineering",
+            ],
+        )
+        self.assertEqual(thursday["sources"], ["arxiv", "crossref"])
+        self.assertEqual(friday["sources"], ["curated_research_pages"])
+        self.assertEqual(friday["curated_research_pages"], ["https://research.nvidia.com/publications"])
+        self.assertEqual(saturday["id"], "saturday_author_expansion")
+        self.assertEqual(saturday["sources"], ["dblp_authors"])
+        self.assertEqual(saturday["dblp_author_pids"], list(TEAM_RADAR_DEFAULT_DBLP_AUTHOR_PIDS))
+        self.assertEqual(sunday["sources"], ["openreview_venues", "dblp", "openalex", "crossref"])
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "SEMANTIC_SCHOLAR_API_KEY": "real-key",
+                "RADAR_SEED_PAPER_IDS": "seed-positive",
+                "RADAR_OPENALEX_AUTHOR_IDS": "A123",
+            },
+            clear=True,
+        ):
+            keyed_saturday = weekday_radar_source_plan("2026-07-11")
+        self.assertEqual(
+            keyed_saturday["sources"],
+            [
+                "dblp_authors",
+                "openalex_authors",
+                "semantic_scholar_recommendations",
+                "semantic_scholar_citations",
+                "semantic_scholar_references",
+            ],
+        )
+        self.assertEqual(keyed_saturday["seed_paper_ids"], ["seed-positive"])
+        self.assertEqual(keyed_saturday["openalex_author_ids"], ["A123"])
 
         env_text = format_env_exports(friday)
         self.assertIn("export RADAR_USE_SAVED_DEFAULTS=0", env_text)
         self.assertIn("export RADAR_SOURCE_PRESET=''", env_text)
-        self.assertIn("export RADAR_SOURCES='usenix_security ndss'", env_text)
+        self.assertIn("export RADAR_SOURCES=curated_research_pages", env_text)
+        self.assertIn("export RADAR_CURATED_RESEARCH_PAGES=https://research.nvidia.com/publications", env_text)
+        self.assertIn("export RADAR_PUBLIC_SITE_REQUEST_INTERVAL_SECONDS=3", env_text)
+        saturday_env_text = format_env_exports(saturday)
+        self.assertIn("export RADAR_DBLP_AUTHOR_PIDS='31/1273 02/5804 151/4037'", saturday_env_text)
+        self.assertIn("export RADAR_CURATED_RESEARCH_PAGES=''", saturday_env_text)
 
     def test_radar_reset_current_data_dry_run_and_confirmed_delete(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -743,7 +813,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(stat["source_id"], "semantic_scholar_recommendations")
             self.assertEqual(stat["status"], "not_run")
             self.assertEqual(stat["skip_reason"], "missing_required_config")
-            self.assertEqual(stat["missing_required_config_keys"], ["seed_paper_ids"])
+            self.assertEqual(stat["missing_required_config_keys"], ["semantic_scholar_api_key_configured", "seed_paper_ids"])
             self.assertIn("status=blocked", result["report"])
             self.assertIn("## Source Policy", result["report"])
             self.assertIn("Missing: `semantic_scholar_recommendations`", result["report"])
@@ -1722,6 +1792,103 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             paper_history = database.get_literature_radar_paper(paper["dedupe_key"])
             self.assertEqual(paper_history["source_ids"], ["dblp", "dblp_venues"])
 
+    def test_run_team_literature_radar_adds_official_pages_for_configured_venue_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="official_accepted_pages",
+                source_paper_id="official_accepted_pages:acm-ccs-2026",
+                title="Official CCS Memory Safety",
+                abstract="Memory safety and system security.",
+                year=2026,
+                venue="ACM CCS 2026",
+                links={"landing": "https://ccs.example/accepted#official-ccs-memory-safety"},
+                source_record={
+                    "source_id": "official_accepted_pages",
+                    "configured_source_id": "acm_ccs",
+                    "venue_profile_id": "acm_ccs",
+                    "venue_group": "security",
+                    "source_page": "https://ccs.example/accepted",
+                },
+            )
+            with mock.patch.dict(
+                "os.environ",
+                {"RADAR_ACM_CCS_2026_ACCEPTED_PAGE_URL": "https://ccs.example/accepted"},
+                clear=False,
+            ):
+                with mock.patch(
+                    "team.literature_radar.collect_dblp_venue_publications",
+                    return_value=[],
+                ) as dblp_venues:
+                    with mock.patch(
+                        "team.literature_radar.collect_configured_official_accepted_pages",
+                        return_value=[paper],
+                    ) as official_pages:
+                        result = run_team_literature_radar(
+                            database,
+                            sources=["dblp_venues"],
+                            query_terms=["memory safety"],
+                            max_results=2,
+                            recommendation_limit=1,
+                            conference_year=2026,
+                            dblp_venue_profiles=["acm_ccs"],
+                        )
+
+            self.assertEqual(result["sources"], ["dblp_venues", "official_accepted_pages"])
+            dblp_venues.assert_called_once()
+            official_pages.assert_called_once()
+            self.assertEqual(
+                official_pages.call_args.args[0],
+                [
+                    {
+                        "source_id": "acm_ccs",
+                        "venue_profile_id": "acm_ccs",
+                        "venue_group": "security",
+                        "venue": "ACM CCS 2026",
+                        "year": 2026,
+                        "page_url": "https://ccs.example/accepted",
+                    }
+                ],
+            )
+            config = result["run"]["collection_config"]
+            self.assertEqual(config["official_accepted_pages"], official_pages.call_args.args[0])
+            self.assertEqual(result["collected_count"], 1)
+            self.assertEqual(result["recommendation_count"], 1)
+
+    def test_run_team_literature_radar_collects_curated_research_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            paper = create_radar_paper(
+                source_id="curated_research_pages",
+                source_paper_id="https://research.example.org/paper",
+                title="Capability-Oriented Kernel Isolation for Secure Systems",
+                abstract="System security and kernel isolation.",
+                links={"landing": "https://research.example.org/paper"},
+            )
+            with mock.patch(
+                "team.literature_radar.collect_curated_research_pages",
+                return_value=[paper],
+            ) as curated_pages:
+                result = run_team_literature_radar(
+                    database,
+                    sources=["curated_research_pages"],
+                    query_terms=["system security"],
+                    max_results=2,
+                    recommendation_limit=1,
+                    curated_research_pages=["https://research.example.org/publications"],
+                )
+
+            curated_pages.assert_called_once_with(
+                ["https://research.example.org/publications"],
+                max_results=2,
+                now=None,
+            )
+            self.assertEqual(result["sources"], ["curated_research_pages"])
+            self.assertEqual(result["run"]["collection_config"]["curated_research_pages"], [
+                "https://research.example.org/publications"
+            ])
+            self.assertEqual(result["collected_count"], 1)
+
     def test_run_team_literature_radar_collects_dblp_author_publications(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
@@ -2067,6 +2234,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
             env = {
+                "SEMANTIC_SCHOLAR_API_KEY": "real-test-key",
                 "RADAR_SEED_PAPER_IDS": "seed-positive-1 seed-positive-2",
                 "RADAR_NEGATIVE_SEED_PAPER_IDS": "seed-negative-1,seed-negative-2",
                 "RADAR_AUTHOR_IDS": "s2-author-1 s2-author-2",
@@ -2134,6 +2302,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
             env = {
+                "SEMANTIC_SCHOLAR_API_KEY": "real-test-key",
                 "RADAR_SEED_PAPER_IDS": "seed-positive",
                 "RADAR_AUTHOR_IDS": "s2-author",
                 "RADAR_DBLP_AUTHOR_PIDS": "12/3456",
@@ -2148,7 +2317,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                         with mock.patch("team.literature_radar.collect_semantic_scholar_author_papers", return_value=[]) as semantic_authors:
                             with mock.patch("team.literature_radar.collect_dblp_author_publications", return_value=[]) as dblp_authors:
                                 with mock.patch("team.literature_radar.collect_openalex_author_works", return_value=[]) as openalex_authors:
-                                    with mock.patch("team.literature_radar.collect_dblp_venue_publications", return_value=[]) as dblp_venues:
+                                    with mock.patch("team.literature_radar.collect_openalex_venue_publications", return_value=[]) as openalex_venues:
                                         with mock.patch("team.literature_radar.collect_openreview_notes", return_value=[]) as openreview:
                                             with mock.patch(
                                                 "team.literature_radar.collect_openreview_venue_submissions",
@@ -2170,7 +2339,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 "semantic_scholar_authors",
                 "dblp_authors",
                 "openalex_authors",
-                "dblp_venues",
+                "openalex_venues",
                 "openreview",
                 "openreview_venues",
             ],
@@ -2179,7 +2348,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         semantic_authors.assert_called_once()
         dblp_authors.assert_called_once()
         openalex_authors.assert_called_once()
-        dblp_venues.assert_called_once()
+        openalex_venues.assert_called_once()
         openreview.assert_called_once()
         openreview_venues.assert_called_once()
         config = result["run"]["collection_config"]
@@ -2523,9 +2692,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(queue_result["latest_run"]["health_action"]["severity"], "warning")
             self.assertEqual(
                 queue_result["daily_source_health"]["next_action"],
-                "run_saved_defaults_and_configure_primary_sources",
+                "run_saved_source_defaults",
             )
-            self.assertEqual(queue_result["daily_source_health"]["source_ids"], ["unpaywall"])
+            self.assertEqual(
+                queue_result["daily_source_health"]["source_ids"],
+                ["dblp", "openalex", "crossref", "openreview", "usenix_security", "ndss"],
+            )
             self.assertEqual(queue_result["daily_source_health"]["primary_source_coverage_status"], "partial")
             self.assertEqual(queue_result["latest_run"]["recommendation_count"], 1)
             direct_queue = build_team_literature_radar_queue_payload(
@@ -2801,11 +2973,11 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(brief["queue"]["daily_guidance"]["next_action"], brief["queue"]["triage_summary"]["top_action"])
             self.assertEqual(
                 brief["daily_source_health"]["next_action"],
-                "run_saved_defaults_and_configure_primary_sources",
+                "run_saved_source_defaults",
             )
             self.assertEqual(
                 brief["queue"]["daily_source_health"]["next_action"],
-                "run_saved_defaults_and_configure_primary_sources",
+                "run_saved_source_defaults",
             )
             self.assertEqual(brief["daily_workflow"]["current_step_ids"], [])
             self.assertEqual(brief["queue"]["daily_workflow"]["current_step_ids"], [])
@@ -3193,6 +3365,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                             "1",
                             "--usenix-cycle",
                             "2",
+                            "--curated-research-page",
+                            "https://research.example.org/publications",
                             "--official-accepted-page",
                             "ieee_sp | IEEE Symposium on Security and Privacy 2026 | 2026 | https://www.ieee-security.org/accepted.html",
                             "--json",
@@ -3201,7 +3375,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             runner.assert_called_once()
-            self.assertEqual(runner.call_args.kwargs["sources"], ["arxiv"])
+            self.assertEqual(
+                runner.call_args.kwargs["sources"],
+                ["arxiv", "curated_research_pages", "official_accepted_pages"],
+            )
             self.assertEqual(runner.call_args.kwargs["query_terms"], ["memory safety"])
             self.assertEqual(runner.call_args.kwargs["max_results"], 2)
             self.assertEqual(runner.call_args.kwargs["recommendation_limit"], 1)
@@ -3223,6 +3400,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                     }
                 ],
             )
+            self.assertEqual(
+                runner.call_args.kwargs["curated_research_pages"],
+                ["https://research.example.org/publications"],
+            )
             self.assertFalse(runner.call_args.kwargs["import_results"])
             self.assertIsNone(runner.call_args.kwargs["semantic_scholar_api_key"])
             self.assertEqual(runner.call_args.kwargs["dblp_author_pids"], ["65/9612"])
@@ -3240,6 +3421,61 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertEqual(runner.call_args.kwargs["conference_year"], 2026)
             self.assertEqual(runner.call_args.kwargs["usenix_security_cycles"], [1, 2])
             self.assertEqual(json.loads(stdout.getvalue())["recommendation_count"], 1)
+
+    def test_cli_radar_run_adds_official_pages_from_configured_venue_profile_url(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "research.sqlite3"
+            fake_result = {
+                "run_id": "radarrun_official_profile_url",
+                "sources": ["dblp_venues", "official_accepted_pages"],
+                "query_terms": ["memory safety"],
+                "collected_count": 0,
+                "recommendation_count": 0,
+                "imported_count": 0,
+                "recommendations": [],
+                "imported": [],
+                "report": "# Radar\n",
+            }
+            stdout = io.StringIO()
+            with mock.patch.dict(
+                "os.environ",
+                {"RADAR_ACM_CCS_2026_ACCEPTED_PAGE_URL": "https://ccs.example/accepted"},
+                clear=False,
+            ):
+                with mock.patch("team.research_cli.run_team_literature_radar", return_value=fake_result) as runner:
+                    with contextlib.redirect_stdout(stdout):
+                        code = research_cli.main(
+                            [
+                                "radar-run",
+                                "--db-path",
+                                str(db_path),
+                                "--source",
+                                "dblp_venues",
+                                "--venue-profile",
+                                "acm_ccs",
+                                "--conference-year",
+                                "2026",
+                                "--json",
+                            ]
+                        )
+
+            self.assertEqual(code, 0)
+            runner.assert_called_once()
+            self.assertEqual(runner.call_args.kwargs["sources"], ["dblp_venues", "official_accepted_pages"])
+            self.assertEqual(
+                runner.call_args.kwargs["official_accepted_pages"],
+                [
+                    {
+                        "source_id": "acm_ccs",
+                        "venue_profile_id": "acm_ccs",
+                        "venue_group": "security",
+                        "venue": "ACM CCS 2026",
+                        "year": 2026,
+                        "page_url": "https://ccs.example/accepted",
+                    }
+                ],
+            )
+            self.assertEqual(json.loads(stdout.getvalue())["run_id"], "radarrun_official_profile_url")
 
     def test_cli_radar_run_can_use_saved_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3436,7 +3672,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(
             payload["settings"]["sources"],
-            ["semantic_scholar_recommendations", "openreview", "openalex", "dblp_venues", "openreview_venues"],
+            ["semantic_scholar_recommendations", "openreview", "openalex", "openalex_venues", "openreview_venues"],
         )
         self.assertEqual(payload["source_readiness"]["status"], "blocked")
         self.assertEqual(payload["source_readiness"]["blocked_source_ids"], ["semantic_scholar_recommendations", "openreview"])
@@ -3444,10 +3680,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["oa_enrichment"]["status"], "ready")
         self.assertTrue(payload["oa_enrichment"]["configured"])
         self.assertEqual(payload["primary_source_coverage"]["status"], "partial")
-        self.assertEqual(payload["primary_source_coverage"]["covered_count"], 5)
+        self.assertEqual(payload["primary_source_coverage"]["covered_count"], 4)
         self.assertEqual(
             payload["primary_source_coverage"]["missing_primary_source_ids"],
-            ["arxiv", "crossref", "usenix_security", "ndss"],
+            ["arxiv", "dblp", "crossref", "usenix_security", "ndss"],
         )
         self.assertEqual(payload["source_validation_plan"]["status"], "blocked")
         self.assertEqual(payload["source_validation_plan"]["next_action"], "configure_blocked_sources")
@@ -3459,8 +3695,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["scoring_profile"]["type"], "team_interests")
         self.assertEqual(payload["scoring_profile"]["profile_version_id"], payload["interest_profile_version"]["id"])
         self.assertEqual(payload["scoring_profile"]["profile_hash"], payload["interest_profile_version"]["profile_hash"])
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 5)
-        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["missing_count"], 13)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["covered_count"], 6)
+        self.assertEqual(payload["venue_profile_summary"]["dblp_openalex"]["required_coverage"]["missing_count"], 16)
         self.assertIn(
             {"keyword": "agentic security", "weight": 90},
             payload["scoring_profile_summary"]["top_interests"],
@@ -3474,7 +3710,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(text_code, 0)
         text = text_stdout.getvalue()
         self.assertIn("Team Literature Radar Settings", text)
-        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, DBLP Venues, OpenReview Venues", text)
+        self.assertIn("Sources: Semantic Scholar Seeds, OpenReview, OpenAlex, OpenAlex Venues, OpenReview Venues", text)
         self.assertIn("Scoring: Team Interests", text)
         self.assertIn("Interest profile version: id=team-interest-profile-version_", text)
         self.assertIn("agentic security=90", text)
@@ -3482,12 +3718,12 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn("agentic security=90; matches AI security, LLM security", text)
         self.assertIn("dampens generic AI application", text)
         self.assertIn("Venue profiles:", text)
-        self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +1 more (top venues 5/18)", text)
+        self.assertIn("DBLP/OpenAlex: OSDI, SOSP, EuroSys, USENIX ATC; +2 more (top venues 6/22)", text)
         self.assertIn("OpenReview: ICLR", text)
         self.assertIn("OA enrichment: provider=Unpaywall status=ready configured=yes", text)
         self.assertIn("Source policy:", text)
         self.assertIn("Primary source coverage:", text)
-        self.assertIn("covered=5/9", text)
+        self.assertIn("covered=4/9", text)
         self.assertIn("Source readiness:", text)
         self.assertIn("status=blocked", text)
         self.assertIn("missing required for semantic_scholar_recommendations", text)
@@ -3505,10 +3741,10 @@ class TeamLiteratureRadarTest(unittest.TestCase):
                 "semantic_scholar",
                 "openalex",
                 "crossref",
-                "dblp_venues",
                 "openreview_venues",
                 "usenix_security",
                 "ndss",
+                "dblp_authors",
             ],
         )
         self.assertEqual(preset_payload["source_readiness"]["status"], "ready")
@@ -3528,7 +3764,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(placeholder_key_code, 0)
         placeholder_key_payload = json.loads(placeholder_key_stdout.getvalue())
         self.assertFalse(placeholder_key_payload["settings"]["semantic_scholar_api_key_configured"])
-        self.assertEqual(placeholder_key_payload["source_readiness"]["status"], "ready_with_warnings")
+        self.assertEqual(placeholder_key_payload["source_readiness"]["status"], "blocked")
         self.assertEqual(product_env_code, 0)
         product_env_payload = json.loads(product_env_stdout.getvalue())
         self.assertTrue(product_env_payload["collection_config"]["openalex_mailto_configured"])
@@ -3539,11 +3775,9 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             source_env_payload["settings"]["sources"],
             [
                 "arxiv",
-                "semantic_scholar_recommendations",
-                "semantic_scholar_authors",
                 "dblp_authors",
                 "openalex_authors",
-                "dblp_venues",
+                "openalex_venues",
                 "openreview",
                 "openreview_venues",
             ],
@@ -3600,12 +3834,8 @@ class TeamLiteratureRadarTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         text = stdout.getvalue()
-        self.assertIn("OA enrichment: provider=Unpaywall status=missing_recommended configured=no", text)
-        self.assertIn(
-            "Next: unpaywall / contact / add_unpaywall_contact - "
-            "Set RADAR_UNPAYWALL_EMAIL, UNPAYWALL_EMAIL, or RADAR_SOURCE_CONTACT_EMAIL",
-            text,
-        )
+        self.assertIn("OA enrichment: provider=Unpaywall status=optional configured=no", text)
+        self.assertNotIn("Next: unpaywall / contact / add_unpaywall_contact", text)
 
     def test_cli_radar_status_setup_env_prints_local_setup_fragment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3619,14 +3849,15 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(code, 0)
         text = stdout.getvalue()
         self.assertIn("# Team Literature Radar MVP local setup", text)
-        self.assertIn("SEMANTIC_SCHOLAR_API_KEY=api-key", text)
-        self.assertIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", text)
+        self.assertIn("# Source API/contact metadata: no missing examples reported by current readiness.", text)
+        self.assertNotIn("SEMANTIC_SCHOLAR_API_KEY=api-key", text)
+        self.assertNotIn("RADAR_SOURCE_CONTACT_EMAIL=you@example.org", text)
         self.assertIn("RADAR_BACKUP_TARGETS=/absolute/path/to/team-radar-backups", text)
         self.assertIn("# OPENROUTER_API_KEY=replace-with-openrouter-key", text)
         self.assertIn(
             "# python team/research_cli.py radar-validate-sources --db-path "
             f"{db_path} --use-saved-defaults --source arxiv --source dblp "
-            "--source semantic_scholar --source openalex --source crossref "
+            "--source openalex --source crossref "
             "--source openreview_venues --source usenix_security --source ndss "
             "--arxiv-category cs.CR --arxiv-category cs.PL --arxiv-category cs.SE "
             "--arxiv-category cs.AI --arxiv-category cs.LG --arxiv-category cs.CL --json",
@@ -3635,7 +3866,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertIn(
             "# python team/research_cli.py radar-validate-sources --db-path "
             f"{db_path} --use-saved-defaults --source arxiv --source dblp "
-            "--source semantic_scholar --source openalex --source crossref "
+            "--source openalex --source crossref "
             "--source openreview_venues --source usenix_security --source ndss "
             "--arxiv-category cs.CR --arxiv-category cs.PL --arxiv-category cs.SE "
             "--arxiv-category cs.AI --arxiv-category cs.LG --arxiv-category cs.CL "

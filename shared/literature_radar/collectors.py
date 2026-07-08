@@ -8,11 +8,17 @@ Personal or Team storage.
 from __future__ import annotations
 
 import json
+import os
+import random
 import re
+import tempfile
+import time
 from datetime import datetime, timezone
+from http.client import RemoteDisconnected
 from typing import Any, Callable
 from html.parser import HTMLParser
-from urllib.parse import quote, quote_plus, urlencode, urljoin
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, quote_plus, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -23,6 +29,7 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
 DBLP_PERSON_URL = "https://dblp.org/pid"
 DBLP_PUBLICATION_SEARCH_URL = "https://dblp.org/search/publ/api"
+DBLP_VENUE_PAGE_URL = "https://dblp.org/db/conf"
 OPENALEX_SOURCES_URL = "https://api.openalex.org/sources"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 OPENREVIEW_NOTES_URL = "https://api.openreview.net/notes"
@@ -34,6 +41,7 @@ SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommen
 UNPAYWALL_API_URL = "https://api.unpaywall.org/v2"
 USENIX_BASE_URL = "https://www.usenix.org"
 NDSS_BASE_URL = "https://www.ndss-symposium.org"
+DEFAULT_CURATED_RESEARCH_PAGES = ["https://research.nvidia.com/publications"]
 OPENALEX_SELECT_FIELDS = [
     "id",
     "ids",
@@ -145,9 +153,35 @@ SEMANTIC_SCHOLAR_RELATED_PAPER_KEYS = {
 }
 DEFAULT_ARXIV_CATEGORIES = ["cs.CR", "cs.PL", "cs.SE", "cs.AI", "cs.LG", "cs.CL"]
 DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_RETRY_TOTAL = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_RETRY_AFTER_MAX_SECONDS = 30.0
+DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
+DEFAULT_RATE_LIMIT_COOLDOWN_MAX_SECONDS = 21600.0
+DEFAULT_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+DEFAULT_HOST_MIN_INTERVAL_SECONDS = {
+    "dblp.org": 1.0,
+    "api.openalex.org": 0.5,
+    "usenix.org": 2.0,
+    "ndss-symposium.org": 2.0,
+    "ieee-security.org": 2.0,
+    "research.nvidia.com": 3.0,
+}
+DEFAULT_HOST_DELAY_JITTER_RATIO = 0.25
+DEFAULT_USER_AGENT = "AI-Side-Brain-Literature-Radar/0.1"
+DEFAULT_RATE_LIMIT_CACHE_PATH = os.path.join(
+    tempfile.gettempdir(),
+    "ai-side-brain-radar-source-rate-limits.json",
+)
+_HOST_LAST_REQUEST_AT: dict[str, float] = {}
+_HOST_RATE_LIMIT_UNTIL: dict[str, float] = {}
 
 Fetcher = Callable[[str], bytes]
 PostFetcher = Callable[[str, bytes, dict[str, str]], bytes]
+
+
+class RateLimitDeferredError(RuntimeError):
+    """Raised when a host is in a rate-limit cooldown window."""
 
 
 def fetch_url(
@@ -155,12 +189,25 @@ def fetch_url(
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     headers: dict[str, str] | None = None,
+    retry_total: int | None = None,
+    backoff_seconds: float | None = None,
+    retry_status_codes: set[int] | None = None,
+    use_host_pacing: bool = True,
+    opener: Callable[..., Any] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    now_func: Callable[[], float] = time.monotonic,
 ) -> bytes:
-    request_headers = {"User-Agent": "AI-Side-Brain-Literature-Radar/0.1"}
-    request_headers.update(headers or {})
-    request = Request(url, headers=request_headers)
-    with urlopen(request, timeout=timeout) as response:
-        return response.read()
+    return fetch_http_request(
+        Request(url, headers=radar_request_headers(headers)),
+        timeout=timeout,
+        retry_total=retry_total,
+        backoff_seconds=backoff_seconds,
+        retry_status_codes=retry_status_codes,
+        use_host_pacing=use_host_pacing,
+        opener=opener,
+        sleeper=sleeper,
+        now_func=now_func,
+    )
 
 
 def fetch_json_post(
@@ -169,16 +216,295 @@ def fetch_json_post(
     headers: dict[str, str],
     *,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    retry_total: int | None = None,
+    backoff_seconds: float | None = None,
+    retry_status_codes: set[int] | None = None,
+    use_host_pacing: bool = True,
+    opener: Callable[..., Any] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    now_func: Callable[[], float] = time.monotonic,
 ) -> bytes:
     request_headers = {
-        "User-Agent": "AI-Side-Brain-Literature-Radar/0.1",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
     request_headers.update(headers)
-    request = Request(url, data=body, headers=request_headers, method="POST")
-    with urlopen(request, timeout=timeout) as response:
-        return response.read()
+    request = Request(url, data=body, headers=radar_request_headers(request_headers), method="POST")
+    return fetch_http_request(
+        request,
+        timeout=timeout,
+        retry_total=retry_total,
+        backoff_seconds=backoff_seconds,
+        retry_status_codes=retry_status_codes,
+        use_host_pacing=use_host_pacing,
+        opener=opener,
+        sleeper=sleeper,
+        now_func=now_func,
+    )
+
+
+def radar_request_headers(headers: dict[str, str] | None = None) -> dict[str, str]:
+    request_headers = {
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Accept": "application/json, application/xml, text/xml, text/html;q=0.9, */*;q=0.8",
+    }
+    request_headers.update(headers or {})
+    return request_headers
+
+
+def fetch_http_request(
+    request: Request,
+    *,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    retry_total: int | None = None,
+    backoff_seconds: float | None = None,
+    retry_status_codes: set[int] | None = None,
+    use_host_pacing: bool = True,
+    opener: Callable[..., Any] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    now_func: Callable[[], float] = time.monotonic,
+) -> bytes:
+    attempts = max(1, int(retry_total if retry_total is not None else env_int("RADAR_SOURCE_RETRY_TOTAL", DEFAULT_RETRY_TOTAL)))
+    retry_codes = retry_status_codes or DEFAULT_RETRY_STATUS_CODES
+    selected_backoff = float(
+        backoff_seconds
+        if backoff_seconds is not None
+        else env_float("RADAR_SOURCE_RETRY_BACKOFF_SECONDS", DEFAULT_RETRY_BACKOFF_SECONDS)
+    )
+    selected_opener = opener or urlopen
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        raise_if_host_rate_limited(request.full_url, now_func=now_func)
+        if use_host_pacing:
+            apply_host_request_pacing(request.full_url, sleeper=sleeper, now_func=now_func)
+        try:
+            with selected_opener(request, timeout=timeout) as response:
+                return response.read()
+        except HTTPError as error:
+            last_error = error
+            if error.code == 429 and should_defer_rate_limited_retry(error):
+                record_host_rate_limit(request.full_url, error, now_func=now_func)
+                raise RateLimitDeferredError(rate_limit_deferred_message(request.full_url, error)) from error
+            if error.code not in retry_codes or attempt >= attempts:
+                if error.code == 429:
+                    record_host_rate_limit(request.full_url, error, now_func=now_func)
+                raise
+            sleeper(http_retry_delay_seconds(error, attempt=attempt, backoff_seconds=selected_backoff))
+        except (URLError, TimeoutError, RemoteDisconnected, ConnectionResetError, ConnectionAbortedError) as error:
+            last_error = error
+            if attempt >= attempts:
+                raise
+            sleeper(http_retry_delay_seconds(error, attempt=attempt, backoff_seconds=selected_backoff))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("HTTP fetch failed without a response or exception.")
+
+
+def apply_host_request_pacing(
+    url: str,
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
+    now_func: Callable[[], float] = time.monotonic,
+) -> None:
+    host = normalized_request_host(url)
+    interval = host_min_interval_seconds(host)
+    if interval <= 0:
+        return
+    now = now_func()
+    previous = _HOST_LAST_REQUEST_AT.get(host)
+    if previous is not None:
+        wait_seconds = previous + interval - now
+        if wait_seconds > 0:
+            sleeper(wait_seconds + random.uniform(0, interval * DEFAULT_HOST_DELAY_JITTER_RATIO))
+            now = now_func()
+    _HOST_LAST_REQUEST_AT[host] = now
+
+
+def raise_if_host_rate_limited(url: str, *, now_func: Callable[[], float] = time.monotonic) -> None:
+    host = normalized_request_host(url)
+    if not host:
+        return
+    load_persistent_host_rate_limit(host, now_func=now_func)
+    rate_limited_until = _HOST_RATE_LIMIT_UNTIL.get(host)
+    if rate_limited_until is None:
+        return
+    now = now_func()
+    if now >= rate_limited_until:
+        _HOST_RATE_LIMIT_UNTIL.pop(host, None)
+        return
+    wait_seconds = max(0.0, rate_limited_until - now)
+    raise RateLimitDeferredError(
+        f"HTTP Error 429: Too Many Requests for {host}; source is in local rate-limit cooldown "
+        f"for another {wait_seconds:.1f}s."
+    )
+
+
+def record_host_rate_limit(
+    url: str,
+    error: Exception,
+    *,
+    now_func: Callable[[], float] = time.monotonic,
+) -> None:
+    host = normalized_request_host(url)
+    if not host:
+        return
+    retry_after = http_retry_after_seconds(error)
+    if retry_after is None:
+        cooldown = env_float("RADAR_SOURCE_RATE_LIMIT_COOLDOWN_SECONDS", DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS)
+    else:
+        cooldown = min(
+            retry_after,
+            env_float("RADAR_SOURCE_RATE_LIMIT_COOLDOWN_MAX_SECONDS", DEFAULT_RATE_LIMIT_COOLDOWN_MAX_SECONDS),
+        )
+    if cooldown <= 0:
+        return
+    rate_limited_until = max(_HOST_RATE_LIMIT_UNTIL.get(host, 0.0), now_func() + cooldown)
+    _HOST_RATE_LIMIT_UNTIL[host] = rate_limited_until
+    persist_host_rate_limit(host, cooldown_seconds=cooldown)
+
+
+def source_rate_limit_cache_path() -> str:
+    configured = os.environ.get("RADAR_SOURCE_RATE_LIMIT_CACHE_PATH")
+    if configured is not None:
+        return configured.strip()
+    return DEFAULT_RATE_LIMIT_CACHE_PATH
+
+
+def load_persistent_host_rate_limit(
+    host: str,
+    *,
+    now_func: Callable[[], float] = time.monotonic,
+) -> None:
+    payload = read_rate_limit_cache()
+    record = payload.get(host)
+    if not isinstance(record, dict):
+        return
+    try:
+        wall_until = float(record.get("wall_until") or 0.0)
+    except (TypeError, ValueError):
+        return
+    remaining = wall_until - time.time()
+    if remaining <= 0:
+        return
+    _HOST_RATE_LIMIT_UNTIL[host] = max(_HOST_RATE_LIMIT_UNTIL.get(host, 0.0), now_func() + remaining)
+
+
+def persist_host_rate_limit(host: str, *, cooldown_seconds: float) -> None:
+    cache_path = source_rate_limit_cache_path()
+    if not cache_path:
+        return
+    payload = read_rate_limit_cache()
+    payload[host] = {
+        "host": host,
+        "wall_until": time.time() + max(0.0, cooldown_seconds),
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    write_rate_limit_cache(cache_path, payload)
+
+
+def read_rate_limit_cache() -> dict[str, Any]:
+    cache_path = source_rate_limit_cache_path()
+    if not cache_path or not os.path.exists(cache_path):
+        return {}
+    try:
+        with open(cache_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_rate_limit_cache(cache_path: str, payload: dict[str, Any]) -> None:
+    directory = os.path.dirname(cache_path)
+    try:
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        temp_path = f"{cache_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+        os.replace(temp_path, cache_path)
+    except OSError:
+        return
+
+
+def normalized_request_host(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def host_min_interval_seconds(host: str) -> float:
+    if not host:
+        return 0.0
+    if host == "dblp.org":
+        return env_float("RADAR_DBLP_REQUEST_INTERVAL_SECONDS", DEFAULT_HOST_MIN_INTERVAL_SECONDS["dblp.org"])
+    if host == "api.openalex.org":
+        return env_float(
+            "RADAR_OPENALEX_REQUEST_INTERVAL_SECONDS",
+            DEFAULT_HOST_MIN_INTERVAL_SECONDS["api.openalex.org"],
+        )
+    if host in DEFAULT_HOST_MIN_INTERVAL_SECONDS:
+        return env_float("RADAR_PUBLIC_SITE_REQUEST_INTERVAL_SECONDS", DEFAULT_HOST_MIN_INTERVAL_SECONDS[host])
+    return env_float("RADAR_SOURCE_REQUEST_INTERVAL_SECONDS", 0.0)
+
+
+def http_retry_delay_seconds(error: Exception, *, attempt: int, backoff_seconds: float) -> float:
+    retry_after = http_retry_after_seconds(error)
+    if retry_after is not None:
+        return min(retry_after, max(0.0, retry_after_max_seconds()))
+    base_delay = max(0.0, backoff_seconds) * (2 ** max(0, attempt - 1))
+    if base_delay <= 0:
+        return 0.0
+    return base_delay + random.uniform(0, base_delay * DEFAULT_HOST_DELAY_JITTER_RATIO)
+
+
+def should_defer_rate_limited_retry(error: Exception) -> bool:
+    retry_after = http_retry_after_seconds(error)
+    return retry_after is not None and retry_after > retry_after_max_seconds()
+
+
+def retry_after_max_seconds() -> float:
+    return env_float("RADAR_SOURCE_RETRY_AFTER_MAX_SECONDS", DEFAULT_RETRY_AFTER_MAX_SECONDS)
+
+
+def rate_limit_deferred_message(url: str, error: Exception) -> str:
+    host = normalized_request_host(url) or "source"
+    retry_after = http_retry_after_seconds(error)
+    retry_after_text = f"{retry_after:.1f}s" if retry_after is not None else "the provider cooldown"
+    return (
+        f"HTTP Error 429: Too Many Requests for {host}; retry-after {retry_after_text} "
+        f"exceeds local wait cap {retry_after_max_seconds():.1f}s, so this run deferred the source."
+    )
+
+
+def http_retry_after_seconds(error: Exception) -> float | None:
+    headers = getattr(error, "headers", None)
+    value = headers.get("Retry-After") if headers is not None else None
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(str(value).strip()))
+    except ValueError:
+        return None
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def env_list(name: str) -> list[str]:
+    return [part for part in re.split(r"[\s,]+", os.environ.get(name, "").strip()) if part]
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
 
 
 def collect_arxiv(
@@ -550,6 +876,168 @@ def collect_configured_official_accepted_pages(
     return papers
 
 
+def collect_curated_research_pages(
+    pages: list[str] | None,
+    *,
+    max_results: int = 25,
+    fetcher: Fetcher | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Collect link-level candidates from team-curated publication pages.
+
+    This intentionally fetches only the configured page itself. It does not
+    crawl linked pages, because scheduled public-site collection must stay
+    polite and predictable.
+    """
+    selected_pages = normalize_curated_research_pages(pages)
+    selected_fetcher = fetcher or fetch_url
+    papers: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    per_page_limit = max(1, min(max_results, env_int("RADAR_CURATED_RESEARCH_PAGE_MAX_RESULTS", 20)))
+    total_limit = max(1, int(max_results or 25))
+    for page_url in selected_pages:
+        content = selected_fetcher(page_url)
+        for paper in parse_curated_research_page(
+            content,
+            page_url=page_url,
+            max_results=per_page_limit,
+            collected_at=now,
+        ):
+            key = str(paper.get("dedupe_key") or paper.get("title") or "")
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            papers.append(paper)
+            if len(papers) >= total_limit:
+                return papers
+    return papers
+
+
+def normalize_curated_research_pages(pages: list[str] | None) -> list[str]:
+    selected_pages = list(pages or env_list("RADAR_CURATED_RESEARCH_PAGES") or DEFAULT_CURATED_RESEARCH_PAGES)
+    normalized = []
+    for page in selected_pages:
+        page_url = normalize_spaces(str(page or ""))
+        if not page_url or not re.match(r"^https?://", page_url, flags=re.IGNORECASE):
+            continue
+        if page_url not in normalized:
+            normalized.append(page_url)
+    return normalized
+
+
+def parse_curated_research_page(
+    content: bytes | str,
+    *,
+    page_url: str,
+    max_results: int = 25,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    parser = CuratedResearchPageHTMLParser()
+    parser.feed(content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content)
+    papers = []
+    seen_titles = set()
+    for index, link in enumerate(parser.links):
+        if len(papers) >= max(1, max_results):
+            break
+        title = normalize_curated_research_title(link.get("text") or "")
+        if not curated_research_title_candidate(title):
+            continue
+        title_key = normalize_selector(title)
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        landing_url = urljoin(page_url, link.get("href") or "")
+        source_paper_id = landing_url or f"{page_url}#{index}"
+        papers.append(
+            create_radar_paper(
+                source_id="curated_research_pages",
+                source_paper_id=source_paper_id,
+                title=title,
+                abstract=f"Discovered from a team-curated research publication page: {page_url}",
+                links={"landing": landing_url or page_url, "source_page": page_url},
+                discovered_at=collected_at,
+                source_record={
+                    "source_id": "curated_research_pages",
+                    "source_paper_id": source_paper_id,
+                    "source_page": page_url,
+                    "source_host": normalized_request_host(page_url),
+                    "authoritative_metadata": False,
+                },
+            )
+        )
+    return papers
+
+
+class CuratedResearchPageHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[dict[str, str]] = []
+        self._anchor: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        attrs_dict = {key.lower(): value or "" for key, value in attrs}
+        href = attrs_dict.get("href") or ""
+        if href:
+            self._anchor = {"href": href, "parts": []}
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._anchor is None:
+            return
+        text = normalize_spaces(" ".join(self._anchor.get("parts") or []))
+        if text:
+            self.links.append({"href": self._anchor.get("href") or "", "text": text})
+        self._anchor = None
+
+    def handle_data(self, data: str) -> None:
+        if self._anchor is not None:
+            text = normalize_spaces(data)
+            if text:
+                self._anchor["parts"].append(text)
+
+
+def normalize_curated_research_title(value: str) -> str:
+    return normalize_spaces(re.sub(r"\s+", " ", value).strip(" \t\r\n-|"))
+
+
+def curated_research_title_candidate(title: str) -> bool:
+    if not title or len(title) < 12 or len(title) > 220:
+        return False
+    lowered = title.lower()
+    blocked_exact = {
+        "publications",
+        "research",
+        "careers",
+        "contact",
+        "privacy policy",
+        "terms of use",
+        "learn more",
+        "read more",
+        "view all",
+        "next",
+        "previous",
+    }
+    if lowered in blocked_exact:
+        return False
+    blocked_fragments = [
+        "cookie",
+        "privacy",
+        "subscribe",
+        "newsletter",
+        "login",
+        "sign in",
+        "download pdf",
+        "view publication",
+        "all publications",
+        "publication type",
+        "research area",
+    ]
+    if any(fragment in lowered for fragment in blocked_fragments):
+        return False
+    return any(character.isalpha() for character in title) and len(title.split()) >= 3
+
+
 def normalize_official_accepted_page_configs(
     pages: list[dict[str, Any]] | None,
     *,
@@ -822,12 +1310,16 @@ def collect_dblp_venue_publications(
     selected_profiles = expand_dblp_venue_profiles(venue_profiles)
     papers = []
     selected_year = year or (now or datetime.now(timezone.utc)).year
+    selected_fetcher = fetcher or fetch_url
     seen_keys = set()
     for profile in selected_profiles:
-        query = dblp_venue_profile_query(profile, selected_year)
-        url = build_dblp_publication_search_url(query=query, max_results=max_results)
-        content = (fetcher or fetch_url)(url)
-        candidates = parse_dblp_publication_search(content, query_url=url, collected_at=now)
+        candidates = collect_dblp_venue_profile_candidates(
+            profile=profile,
+            year=selected_year,
+            max_results=max_results,
+            fetcher=selected_fetcher,
+            now=now,
+        )
         for paper in candidates:
             if not dblp_paper_matches_venue_profile(paper, profile, selected_year):
                 continue
@@ -835,14 +1327,60 @@ def collect_dblp_venue_publications(
             if key in seen_keys:
                 continue
             seen_keys.add(key)
-            papers.append(annotate_dblp_venue_paper(paper, profile=profile, year=selected_year, query_url=url))
+            papers.append(paper)
     return papers
+
+
+def collect_dblp_venue_profile_candidates(
+    *,
+    profile: dict[str, Any],
+    year: int,
+    max_results: int,
+    fetcher: Fetcher,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    page_url = build_dblp_venue_page_url(profile=profile, year=year)
+    if page_url:
+        try:
+            content = fetcher(page_url)
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+            return []
+        return parse_dblp_venue_page(
+            content,
+            profile=profile,
+            year=year,
+            page_url=page_url,
+            max_results=max_results,
+            collected_at=now,
+        )
+    query = dblp_venue_profile_query(profile, year)
+    url = build_dblp_publication_search_url(query=query, max_results=max_results)
+    content = fetcher(url)
+    candidates = parse_dblp_publication_search(content, query_url=url, collected_at=now)
+    return [
+        annotate_dblp_venue_paper(paper, profile=profile, year=year, query_url=url)
+        for paper in candidates
+    ]
 
 
 def dblp_venue_profile_query(profile: dict[str, Any], year: int) -> str:
     terms = [str(term) for term in profile.get("query_terms") or [] if str(term).strip()]
     term = terms[0] if terms else str(profile.get("name") or profile.get("id") or "")
     return f"{term} {int(year)}"
+
+
+def build_dblp_venue_page_url(*, profile: dict[str, Any], year: int) -> str:
+    conf_path = normalize_dblp_url_part(profile.get("dblp_conf_path") or "")
+    conf_key = normalize_dblp_url_part(profile.get("dblp_conf_key") or conf_path)
+    if not conf_path or not conf_key:
+        return ""
+    return f"{DBLP_VENUE_PAGE_URL}/{conf_path}/{conf_key}{int(year)}.html"
+
+
+def normalize_dblp_url_part(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "", str(value or "").strip().lower())
 
 
 def build_dblp_publication_search_url(*, query: str, max_results: int = 50) -> str:
@@ -1035,6 +1573,107 @@ def dblp_publication_landing_url(key: str, url_value: str) -> str:
     return urljoin("https://dblp.org/", url_value.lstrip("/"))
 
 
+def parse_dblp_venue_page(
+    content: bytes | str,
+    *,
+    profile: dict[str, Any],
+    year: int,
+    page_url: str,
+    max_results: int = 50,
+    collected_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    parser = DBLPVenueHTMLParser()
+    parser.feed(content.decode("utf-8", errors="ignore") if isinstance(content, bytes) else content)
+    papers = []
+    for index, record in enumerate(parser.records):
+        if len(papers) >= max(1, max_results):
+            break
+        title = normalize_spaces(record.get("title") or "")
+        if not title:
+            continue
+        landing_url = urljoin(page_url, record.get("href") or "")
+        source_paper_id = landing_url or f"{profile.get('id') or 'venue'}:{int(year)}:{index}"
+        paper = create_radar_paper(
+            source_id="dblp",
+            source_paper_id=source_paper_id,
+            title=title,
+            authors=record.get("authors") or [],
+            year=int(year),
+            venue=str(profile.get("name") or ""),
+            links={"landing": landing_url or page_url, "source_page": page_url},
+            discovered_at=collected_at,
+            source_record={
+                "source_id": "dblp",
+                "source_paper_id": source_paper_id,
+                "query_url": page_url,
+                "type": "Conference and Workshop Papers",
+                "venue": str(profile.get("name") or ""),
+            },
+        )
+        papers.append(annotate_dblp_venue_paper(paper, profile=profile, year=year, query_url=page_url))
+    return papers
+
+
+class DBLPVenueHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[dict[str, Any]] = []
+        self._record: dict[str, Any] | None = None
+        self._field = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        selected_tag = tag.lower()
+        attrs_dict = {key.lower(): value or "" for key, value in attrs}
+        classes = set((attrs_dict.get("class") or "").split())
+        if selected_tag == "cite" and "data" in classes:
+            self._record = {"title_parts": [], "authors": [], "href": ""}
+            self._field = ""
+            return
+        if self._record is None:
+            return
+        if selected_tag == "span" and "title" in classes:
+            self._field = "title"
+            return
+        if selected_tag == "span" and attrs_dict.get("itemprop") == "name":
+            self._field = "author"
+            return
+        if selected_tag == "a" and attrs_dict.get("href") and not self._record.get("href"):
+            self._record["href"] = attrs_dict["href"]
+
+    def handle_endtag(self, tag: str) -> None:
+        selected_tag = tag.lower()
+        if self._record is None:
+            return
+        if selected_tag == "span":
+            self._field = ""
+            return
+        if selected_tag == "cite":
+            title = normalize_spaces(" ".join(self._record.get("title_parts") or []))
+            if title:
+                self.records.append(
+                    {
+                        "title": title,
+                        "authors": list(self._record.get("authors") or []),
+                        "href": self._record.get("href") or "",
+                    }
+                )
+            self._record = None
+            self._field = ""
+
+    def handle_data(self, data: str) -> None:
+        if self._record is None or not self._field:
+            return
+        text = normalize_spaces(data)
+        if not text:
+            return
+        if self._field == "title":
+            self._record["title_parts"].append(text)
+        elif self._field == "author":
+            authors = self._record.setdefault("authors", [])
+            if text not in authors:
+                authors.append(text)
+
+
 def dblp_paper_matches_venue_profile(paper: dict[str, Any], profile: dict[str, Any], year: int) -> bool:
     if int_or_none(paper.get("year")) != int(year):
         return False
@@ -1145,6 +1784,7 @@ def collect_openalex_venue_publications(
     selected_profiles = expand_dblp_venue_profiles(venue_profiles)
     selected_year = year or (now or datetime.now(timezone.utc)).year
     selected_fetcher = fetcher or fetch_url
+    scan_limit = max(max_results, 10)
     papers = []
     seen_source_ids = set()
     seen_paper_keys = set()
@@ -1168,7 +1808,7 @@ def collect_openalex_venue_publications(
                 works_url = build_openalex_venue_works_url(
                     source_id=source_id,
                     year=selected_year,
-                    max_results=max_results,
+                    max_results=scan_limit,
                     mailto=mailto,
                 )
                 candidates = parse_openalex_works(
@@ -1177,6 +1817,8 @@ def collect_openalex_venue_publications(
                     collected_at=now,
                 )
                 for paper in candidates:
+                    if not openalex_venue_work_is_candidate_paper(paper, profile):
+                        continue
                     key = paper.get("dedupe_key")
                     if key in seen_paper_keys:
                         continue
@@ -1263,10 +1905,11 @@ def build_openalex_venue_works_url(
     page: int = 1,
     mailto: str | None = None,
     select_fields: list[str] | None = None,
+    source_filter: str = "locations.source.id",
 ) -> str:
     selected_source_id = openalex_id_from_url(source_id)
     filters = [
-        f"primary_location.source.id:{selected_source_id}",
+        f"{source_filter}:{selected_source_id}",
         f"publication_year:{int(year)}",
     ]
     params = {
@@ -1396,6 +2039,20 @@ def openalex_source_matches_profile(source: dict[str, Any], profile: dict[str, A
         return False
     aliases = [normalize_venue_match_text(alias) for alias in openalex_venue_profile_aliases(profile)]
     return any(alias == source_name or alias in source_name or source_name in alias for alias in aliases if alias)
+
+
+def openalex_venue_work_is_candidate_paper(paper: dict[str, Any], profile: dict[str, Any]) -> bool:
+    source_records = paper.get("source_records") if isinstance(paper.get("source_records"), list) else []
+    source_record = next((record for record in source_records if isinstance(record, dict)), {})
+    work_type = normalize_selector(source_record.get("type") or "")
+    if work_type in {"book", "paratext"}:
+        return False
+    title = normalize_venue_match_text(paper.get("title") or "")
+    if title.startswith("proceedings of "):
+        aliases = [normalize_venue_match_text(alias) for alias in openalex_venue_profile_aliases(profile)]
+        if any(alias and alias in title for alias in aliases):
+            return False
+    return True
 
 
 def annotate_openalex_venue_paper(

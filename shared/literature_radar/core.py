@@ -230,6 +230,15 @@ SOURCE_REGISTRY: list[dict[str, Any]] = [
         "mvp_collector": True,
     },
     {
+        "id": "curated_research_pages",
+        "name": "Curated research publication pages",
+        "access": "public_web_page",
+        "source_class": "curated_research_page",
+        "authoritative_metadata": False,
+        "primary_role": "team_curated_lab_publication_pages",
+        "mvp_collector": True,
+    },
+    {
         "id": "openreview",
         "name": "OpenReview",
         "access": "api",
@@ -358,25 +367,30 @@ RADAR_SOURCE_PRESET_ALIASES = {
     "team_security_daily": "security_memory_agentic_daily",
 }
 RADAR_SOURCE_REQUIRED_CONFIG: dict[str, list[tuple[str, str]]] = {
+    "curated_research_pages": [("curated_research_pages", "curated publication page URL")],
     "dblp_authors": [("dblp_author_pids", "DBLP author PID")],
-    "semantic_scholar_authors": [("semantic_scholar_author_ids", "Semantic Scholar author ID")],
-    "semantic_scholar_citations": [("seed_paper_ids", "Semantic Scholar seed paper ID")],
-    "semantic_scholar_references": [("seed_paper_ids", "Semantic Scholar seed paper ID")],
-    "semantic_scholar_recommendations": [("seed_paper_ids", "Semantic Scholar positive seed paper ID")],
+    "semantic_scholar": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
+    "semantic_scholar_authors": [
+        ("semantic_scholar_api_key_configured", "Semantic Scholar API key"),
+        ("semantic_scholar_author_ids", "Semantic Scholar author ID"),
+    ],
+    "semantic_scholar_citations": [
+        ("semantic_scholar_api_key_configured", "Semantic Scholar API key"),
+        ("seed_paper_ids", "Semantic Scholar seed paper ID"),
+    ],
+    "semantic_scholar_references": [
+        ("semantic_scholar_api_key_configured", "Semantic Scholar API key"),
+        ("seed_paper_ids", "Semantic Scholar seed paper ID"),
+    ],
+    "semantic_scholar_recommendations": [
+        ("semantic_scholar_api_key_configured", "Semantic Scholar API key"),
+        ("seed_paper_ids", "Semantic Scholar positive seed paper ID"),
+    ],
     "openalex_authors": [("openalex_author_ids", "OpenAlex author ID")],
     "openreview": [("openreview_invitations", "OpenReview invitation ID")],
     "official_accepted_pages": [("official_accepted_pages", "official accepted-paper page")],
 }
 RADAR_SOURCE_RECOMMENDED_CONFIG: dict[str, list[tuple[str, str]]] = {
-    "semantic_scholar": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
-    "semantic_scholar_authors": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
-    "semantic_scholar_citations": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
-    "semantic_scholar_references": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
-    "semantic_scholar_recommendations": [("semantic_scholar_api_key_configured", "Semantic Scholar API key")],
-    "openalex": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
-    "openalex_authors": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
-    "openalex_venues": [("openalex_mailto_configured", "OpenAlex mailto/contact")],
-    "crossref": [("crossref_mailto_configured", "Crossref mailto/contact")],
 }
 RADAR_SOURCE_CONFIG_ENV_HINTS: dict[str, list[str]] = {
     "semantic_scholar_api_key_configured": ["SEMANTIC_SCHOLAR_API_KEY"],
@@ -409,6 +423,7 @@ RADAR_SOURCE_CONFIG_ENV_HINTS: dict[str, list[str]] = {
     ],
     "dblp_author_pids": ["RADAR_DBLP_AUTHOR_PIDS", "PERSONAL_RADAR_DBLP_AUTHOR_PIDS"],
     "openreview_invitations": ["RADAR_OPENREVIEW_INVITATIONS", "PERSONAL_RADAR_OPENREVIEW_INVITATIONS"],
+    "curated_research_pages": ["RADAR_CURATED_RESEARCH_PAGES", "PERSONAL_RADAR_CURATED_RESEARCH_PAGES"],
     "official_accepted_pages": [
         "RADAR_OFFICIAL_ACCEPTED_PAGES",
         "PERSONAL_RADAR_OFFICIAL_ACCEPTED_PAGES",
@@ -493,10 +508,26 @@ RADAR_PRIMARY_SOURCE_COVERAGE_REQUIREMENTS: list[dict[str, Any]] = [
 ]
 
 CONFERENCE_SOURCE_GROUPS: dict[str, list[str]] = {
-    "security": ["USENIX Security", "IEEE S&P", "ACM CCS", "NDSS", "RAID", "ACSAC"],
-    "systems": ["OSDI", "SOSP", "EuroSys", "USENIX ATC", "ASPLOS"],
+    "security": [
+        "USENIX Security",
+        "IEEE S&P",
+        "ACM CCS",
+        "NDSS",
+        "RAID",
+        "ACSAC",
+        "ACNS",
+        "ACM AsiaCCS",
+        "EuroS&P",
+    ],
+    "systems": ["OSDI", "SOSP", "EuroSys", "USENIX ATC", "ASPLOS", "ISCA"],
     "programming_languages_memory_safety": ["PLDI", "OOPSLA", "POPL", "ECOOP"],
     "software_engineering": ["ICSE", "FSE", "ASE"],
+}
+
+CONFERENCE_SOURCE_GROUP_ALIASES: dict[str, list[str]] = {
+    "pl": ["programming_languages_memory_safety"],
+    "pl_se": ["programming_languages_memory_safety", "software_engineering"],
+    "se": ["software_engineering"],
 }
 
 DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
@@ -506,6 +537,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["USENIX Security Symposium", "USENIX Security"],
         "query_terms": ["USENIX Security"],
+        "dblp_conf_path": "uss",
+        "dblp_conf_key": "uss",
     },
     {
         "id": "ieee_sp",
@@ -513,6 +546,12 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["IEEE Symposium on Security and Privacy", "S&P", "IEEE S&P"],
         "query_terms": ["IEEE Symposium on Security and Privacy"],
+        "dblp_conf_path": "sp",
+        "dblp_conf_key": "sp",
+        "official_accepted_page_env_vars": [
+            "RADAR_IEEE_SP_{year}_ACCEPTED_PAGE_URL",
+            "RADAR_IEEE_SP_ACCEPTED_PAGE_URL",
+        ],
     },
     {
         "id": "acm_ccs",
@@ -520,6 +559,12 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["CCS", "ACM Conference on Computer and Communications Security"],
         "query_terms": ["ACM CCS", "CCS"],
+        "dblp_conf_path": "ccs",
+        "dblp_conf_key": "ccs",
+        "official_accepted_page_env_vars": [
+            "RADAR_ACM_CCS_{year}_ACCEPTED_PAGE_URL",
+            "RADAR_ACM_CCS_ACCEPTED_PAGE_URL",
+        ],
     },
     {
         "id": "ndss",
@@ -527,6 +572,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["NDSS"],
         "query_terms": ["NDSS"],
+        "dblp_conf_path": "ndss",
+        "dblp_conf_key": "ndss",
     },
     {
         "id": "raid",
@@ -534,6 +581,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["RAID"],
         "query_terms": ["RAID"],
+        "dblp_conf_path": "raid",
+        "dblp_conf_key": "raid",
     },
     {
         "id": "acsac",
@@ -541,6 +590,45 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "security",
         "dblp_venues": ["ACSAC", "Annual Computer Security Applications Conference"],
         "query_terms": ["ACSAC"],
+        "dblp_conf_path": "acsac",
+        "dblp_conf_key": "acsac",
+    },
+    {
+        "id": "acns",
+        "name": "ACNS",
+        "group": "security",
+        "dblp_venues": ["ACNS", "Applied Cryptography and Network Security"],
+        "query_terms": ["ACNS"],
+        "dblp_conf_path": "acns",
+        "dblp_conf_key": "acns",
+    },
+    {
+        "id": "asia_ccs",
+        "name": "ACM AsiaCCS",
+        "group": "security",
+        "dblp_venues": [
+            "AsiaCCS",
+            "Asia CCS",
+            "ASIACCS",
+            "ACM Asia Conference on Computer and Communications Security",
+        ],
+        "query_terms": ["AsiaCCS", "ACM AsiaCCS"],
+        "dblp_conf_path": "asiaccs",
+        "dblp_conf_key": "asiaccs",
+    },
+    {
+        "id": "euro_sp",
+        "name": "EuroS&P",
+        "group": "security",
+        "dblp_venues": [
+            "EuroS&P",
+            "Euro S&P",
+            "IEEE European Symposium on Security and Privacy",
+            "European Symposium on Security and Privacy",
+        ],
+        "query_terms": ["IEEE European Symposium on Security and Privacy", "EuroS&P"],
+        "dblp_conf_path": "eurosp",
+        "dblp_conf_key": "eurosp",
     },
     {
         "id": "osdi",
@@ -548,6 +636,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "systems",
         "dblp_venues": ["OSDI"],
         "query_terms": ["OSDI"],
+        "dblp_conf_path": "osdi",
+        "dblp_conf_key": "osdi",
     },
     {
         "id": "sosp",
@@ -555,6 +645,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "systems",
         "dblp_venues": ["SOSP"],
         "query_terms": ["SOSP"],
+        "dblp_conf_path": "sosp",
+        "dblp_conf_key": "sosp",
     },
     {
         "id": "eurosys",
@@ -562,6 +654,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "systems",
         "dblp_venues": ["EuroSys"],
         "query_terms": ["EuroSys"],
+        "dblp_conf_path": "eurosys",
+        "dblp_conf_key": "eurosys",
     },
     {
         "id": "usenix_atc",
@@ -569,6 +663,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "systems",
         "dblp_venues": ["USENIX Annual Technical Conference", "USENIX ATC"],
         "query_terms": ["USENIX ATC"],
+        "dblp_conf_path": "usenix",
+        "dblp_conf_key": "usenix",
     },
     {
         "id": "asplos",
@@ -576,6 +672,17 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "systems",
         "dblp_venues": ["ASPLOS"],
         "query_terms": ["ASPLOS"],
+        "dblp_conf_path": "asplos",
+        "dblp_conf_key": "asplos",
+    },
+    {
+        "id": "isca",
+        "name": "ISCA",
+        "group": "systems",
+        "dblp_venues": ["ISCA", "International Symposium on Computer Architecture"],
+        "query_terms": ["ISCA"],
+        "dblp_conf_path": "isca",
+        "dblp_conf_key": "isca",
     },
     {
         "id": "pldi",
@@ -583,6 +690,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "programming_languages_memory_safety",
         "dblp_venues": ["PLDI"],
         "query_terms": ["PLDI"],
+        "dblp_conf_path": "pldi",
+        "dblp_conf_key": "pldi",
     },
     {
         "id": "oopsla",
@@ -590,6 +699,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "programming_languages_memory_safety",
         "dblp_venues": ["OOPSLA"],
         "query_terms": ["OOPSLA"],
+        "dblp_conf_path": "oopsla",
+        "dblp_conf_key": "oopsla",
     },
     {
         "id": "popl",
@@ -597,6 +708,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "programming_languages_memory_safety",
         "dblp_venues": ["POPL"],
         "query_terms": ["POPL"],
+        "dblp_conf_path": "popl",
+        "dblp_conf_key": "popl",
     },
     {
         "id": "ecoop",
@@ -604,6 +717,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "programming_languages_memory_safety",
         "dblp_venues": ["ECOOP"],
         "query_terms": ["ECOOP"],
+        "dblp_conf_path": "ecoop",
+        "dblp_conf_key": "ecoop",
     },
     {
         "id": "icse",
@@ -611,6 +726,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "software_engineering",
         "dblp_venues": ["ICSE"],
         "query_terms": ["ICSE"],
+        "dblp_conf_path": "icse",
+        "dblp_conf_key": "icse",
     },
     {
         "id": "fse",
@@ -618,6 +735,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "software_engineering",
         "dblp_venues": ["FSE", "ESEC/SIGSOFT FSE"],
         "query_terms": ["FSE"],
+        "dblp_conf_path": "sigsoft",
+        "dblp_conf_key": "fse",
     },
     {
         "id": "ase",
@@ -625,6 +744,8 @@ DBLP_VENUE_PROFILES: list[dict[str, Any]] = [
         "group": "software_engineering",
         "dblp_venues": ["ASE"],
         "query_terms": ["ASE"],
+        "dblp_conf_path": "ase",
+        "dblp_conf_key": "ase",
     },
 ]
 
@@ -721,6 +842,7 @@ RADAR_SOURCE_LABELS: dict[str, str] = {
     "openalex_authors": "OpenAlex Authors",
     "openalex_venues": "OpenAlex Venues",
     "crossref": "Crossref",
+    "curated_research_pages": "Curated Research Pages",
     "openreview": "OpenReview",
     "openreview_venues": "OpenReview Venues",
     "usenix_security": "USENIX Security",
@@ -1139,17 +1261,24 @@ def radar_primary_source_coverage_summary(
                 next_action = "ready"
                 message = "Unpaywall is configured for DOI-bearing source enrichment."
             elif matched_source_ids:
-                status = "missing_config"
-                next_action = "add_unpaywall_contact"
-                message = "Add Unpaywall email/contact so DOI-bearing candidates can get legal OA/PDF checks."
+                status = "optional_config"
+                next_action = "optional_unpaywall_contact"
+                message = "Optional: add Unpaywall email/contact for richer legal OA/PDF checks."
             else:
-                status = "missing_sources"
-                next_action = "select_doi_metadata_source"
-                message = "Select a DOI-bearing metadata source before Unpaywall can enrich candidates."
+                status = "optional"
+                next_action = "ready"
+                message = "Unpaywall enrichment is optional until DOI-bearing metadata sources are selected."
         elif matched_source_ids:
             status = "covered"
             next_action = "ready"
             message = f"{requirement['label']} coverage is selected."
+        elif (
+            requirement_id == "semantic_scholar"
+            and not radar_config_value_present(config.get("semantic_scholar_api_key_configured"))
+        ):
+            status = "disabled"
+            next_action = "configure_semantic_scholar_key_to_enable"
+            message = "Semantic Scholar is disabled until a Semantic Scholar API key is configured."
         else:
             status = "missing"
             next_action = "add_primary_source_family"
@@ -1167,8 +1296,18 @@ def radar_primary_source_coverage_summary(
                 "message": message,
             }
         )
-    covered = [requirement for requirement in requirements if requirement["status"] == "covered"]
-    missing = [requirement for requirement in requirements if requirement["status"] != "covered"]
+    active_requirements = [
+        requirement
+        for requirement in requirements
+        if requirement["status"] not in {"disabled", "optional", "optional_config"}
+    ]
+    covered = [requirement for requirement in active_requirements if requirement["status"] == "covered"]
+    missing = [requirement for requirement in active_requirements if requirement["status"] != "covered"]
+    inactive = [
+        requirement
+        for requirement in requirements
+        if requirement["status"] in {"disabled", "optional", "optional_config"}
+    ]
     if not selected_sources:
         status = "empty"
         next_action = "select_primary_sources"
@@ -1184,7 +1323,7 @@ def radar_primary_source_coverage_summary(
     return {
         "status": status,
         "next_action": next_action,
-        "required_count": len(requirements),
+        "required_count": len(active_requirements),
         "covered_count": len(covered),
         "missing_count": len(missing),
         "covered_primary_source_ids": [requirement["id"] for requirement in covered],
@@ -1192,6 +1331,7 @@ def radar_primary_source_coverage_summary(
         "missing_config_primary_source_ids": [
             requirement["id"] for requirement in missing if requirement["status"] == "missing_config"
         ],
+        "inactive_primary_source_ids": [requirement["id"] for requirement in inactive],
         "selected_source_ids": selected_sources,
         "requirements": requirements,
     }
@@ -3786,6 +3926,8 @@ def radar_oa_validation_check(oa_enrichment: dict[str, Any]) -> dict[str, Any] |
     )
     if not relevant_sources:
         return None
+    if str(oa_enrichment.get("status") or "") == "optional":
+        return None
     configured = bool(oa_enrichment.get("configured"))
     return {
         "source_id": "unpaywall",
@@ -4127,13 +4269,14 @@ def radar_source_validation_guidance_actions(check: dict[str, Any]) -> list[dict
             continue
         name = str(entry.get("label") or entry.get("key") or "required setting")
         key = str(entry.get("key") or "")
+        category = radar_source_validation_guidance_category(source_id, key)
         env_vars = radar_source_config_env_vars(key)
         actions.append(
             {
                 "source_id": source_id,
                 "label": label,
                 "severity": "error",
-                "category": "required_config",
+                "category": category,
                 "key": key,
                 "next_action": "configure_required_source_input",
                 "message": f"Configure {name} before running live validation for {label}.",
@@ -4680,7 +4823,7 @@ def radar_oa_enrichment_summary(
     elif configured:
         status = "ready"
     else:
-        status = "missing_recommended"
+        status = "optional"
     return {
         "provider": "unpaywall",
         "label": policy["name"],
@@ -4689,7 +4832,7 @@ def radar_oa_enrichment_summary(
         "configured": configured,
         "relevant_source_ids": relevant_source_ids,
         "recommended_config": []
-        if configured or not relevant_source_ids
+        if configured or not relevant_source_ids or status == "optional"
         else [{"key": "unpaywall_email_configured", "label": "Unpaywall email/contact"}],
         "purpose": "legal OA/PDF URL and license enrichment for DOI-bearing candidates",
     }
@@ -4800,8 +4943,17 @@ def radar_profile_weight_value(value: Any) -> int:
 
 def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
     selected_selectors = [str(selector).strip() for selector in selectors or [] if str(selector).strip()]
+    if not selected_selectors:
+        return {
+            "status": "empty",
+            "selectors": [],
+            "profile_count": 0,
+            "groups": {},
+            "profiles": [],
+            "required_coverage": radar_required_conference_coverage_summary([]),
+        }
     try:
-        profiles = expand_dblp_venue_profiles(selected_selectors or None)
+        profiles = expand_dblp_venue_profiles(selected_selectors)
     except ValueError as error:
         return {
             "status": "invalid",
@@ -4824,6 +4976,7 @@ def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str,
                 "group": group,
                 "dblp_venues": list(profile.get("dblp_venues") or []),
                 "query_terms": list(profile.get("query_terms") or []),
+                "official_accepted_page_configurable": bool(profile.get("official_accepted_page_env_vars")),
             }
         )
     return {
@@ -4834,6 +4987,76 @@ def radar_dblp_venue_profile_selection_summary(selectors: list[str] | tuple[str,
         "profiles": profile_records,
         "required_coverage": radar_required_conference_coverage_summary(profile_records),
     }
+
+
+def official_accepted_pages_from_venue_profiles(
+    selectors: list[str] | tuple[str, ...] | None,
+    *,
+    year: int,
+    configured_pages: list[dict[str, Any]] | None = None,
+    environ: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = [dict(page) for page in configured_pages or [] if isinstance(page, dict)]
+    if not selectors:
+        return dedupe_official_accepted_pages(pages)
+    env = environ if environ is not None else os.environ
+    for profile in expand_dblp_venue_profiles(list(selectors)):
+        page_url = official_accepted_page_url_for_profile(profile, year=year, environ=env)
+        if not page_url:
+            continue
+        pages.append(
+            {
+                "source_id": str(profile.get("id") or ""),
+                "venue_profile_id": str(profile.get("id") or ""),
+                "venue_group": str(profile.get("group") or ""),
+                "venue": f"{profile.get('name') or profile.get('id')} {int(year)}",
+                "year": int(year),
+                "page_url": page_url,
+            }
+        )
+    return dedupe_official_accepted_pages(pages)
+
+
+def official_accepted_page_url_for_profile(
+    profile: dict[str, Any],
+    *,
+    year: int,
+    environ: dict[str, str],
+) -> str:
+    for template in profile.get("official_accepted_page_env_vars") or []:
+        env_name = str(template or "").format(year=int(year))
+        page_url = str(environ.get(env_name) or "").strip()
+        if page_url:
+            return page_url
+    by_year = profile.get("official_accepted_page_urls_by_year")
+    if isinstance(by_year, dict):
+        page_url = str(by_year.get(str(int(year))) or by_year.get(int(year)) or "").strip()
+        if page_url:
+            return page_url
+    template = str(profile.get("official_accepted_page_url_template") or "").strip()
+    if template:
+        return template.format(year=int(year), short_year=str(int(year))[-2:])
+    return ""
+
+
+def dedupe_official_accepted_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        source_id = normalize_selector(str(page.get("source_id") or page.get("id") or ""))
+        try:
+            year = str(int(page.get("year") or 0))
+        except (TypeError, ValueError):
+            year = str(page.get("year") or "")
+        page_url = str(page.get("page_url") or page.get("url") or page.get("source_url") or "").strip()
+        key = (source_id, year, page_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(page))
+    return deduped
 
 
 def radar_required_conference_coverage_summary(profiles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -5039,7 +5262,16 @@ def expand_dblp_venue_profiles(selectors: list[str] | None = None) -> list[dict[
         return profiles
     selected = []
     seen_ids = set()
-    normalized_selectors = [normalize_selector(selector) for selector in selectors if normalize_selector(selector)]
+    normalized_selectors = []
+    group_aliases = {
+        normalize_selector(alias): [normalize_selector(group) for group in groups]
+        for alias, groups in CONFERENCE_SOURCE_GROUP_ALIASES.items()
+    }
+    for selector in selectors:
+        normalized = normalize_selector(selector)
+        if not normalized:
+            continue
+        normalized_selectors.extend(group_aliases.get(normalized) or [normalized])
     groups = {normalize_selector(group) for group in CONFERENCE_SOURCE_GROUPS}
     for selector in normalized_selectors:
         matching_profiles = []
@@ -8848,6 +9080,7 @@ def radar_brief_collection_config_text(config: dict[str, Any]) -> str:
         ("dblp_venue_profiles", "venues"),
         ("openreview_venue_profiles", "openreview"),
         ("usenix_security_cycles", "usenix_cycles"),
+        ("curated_research_pages", "curated_pages"),
     ):
         values = config.get(key)
         if isinstance(values, list) and values:
