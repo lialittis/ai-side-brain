@@ -65,6 +65,9 @@ Open:
 http://127.0.0.1:8790
 ```
 
+For reversible SSH tunnel or LAN access from another machine, see
+[Easy LAN Deployment](docs/EASY_LAN_DEPLOYMENT.md).
+
 The local MVP runs shared source intake, OpenRouter AI analysis when configured, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation.
 
 Team Literature Radar imports product-neutral radar recommendations from `shared/literature_radar/` into the same Team Research library. See [Literature Radar](docs/LITERATURE_RADAR.md).
