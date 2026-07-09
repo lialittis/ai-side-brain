@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import re
+import signal
+import threading
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -138,13 +141,20 @@ class OpenRouterClient:
 
         try:
             with urllib_request.urlopen(request, timeout=self.config.timeout_seconds) as response:
-                envelope = json.loads(response.read().decode("utf-8"))
+                with response_read_deadline(self.config.timeout_seconds):
+                    envelope = json.loads(response.read().decode("utf-8"))
         except urllib_error.HTTPError as error:
             message = error.read().decode("utf-8", errors="replace")
             detail = summarize_openrouter_error(message)
             raise OpenRouterError(f"OpenRouter request failed with HTTP {error.code}: {detail}") from error
         except urllib_error.URLError as error:
             raise OpenRouterError(f"OpenRouter request failed: {error.reason}") from error
+        except TimeoutError as error:
+            raise OpenRouterError(
+                f"OpenRouter request timed out after {self.config.timeout_seconds} seconds."
+            ) from error
+        except OSError as error:
+            raise OpenRouterError(f"OpenRouter request failed while reading response: {error}") from error
         except json.JSONDecodeError as error:
             raise OpenRouterError("OpenRouter response envelope was not valid JSON.") from error
 
@@ -162,10 +172,16 @@ class OpenRouterClient:
         return headers
 
     def _extract_json_content(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
+            detail = summarize_openrouter_error(json.dumps(envelope, ensure_ascii=False))
+            raise OpenRouterError(f"OpenRouter returned an error envelope: {detail}")
         try:
             content = envelope["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
-            raise OpenRouterError("OpenRouter response did not contain choices[0].message.content.") from error
+            detail = summarize_openrouter_envelope(envelope)
+            raise OpenRouterError(
+                f"OpenRouter response did not contain choices[0].message.content. {detail}"
+            ) from error
 
         if isinstance(content, list):
             content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
@@ -217,6 +233,33 @@ def summarize_openrouter_error(message: str) -> str:
     return truncate_error_detail("; ".join(parts) or message)
 
 
+def summarize_openrouter_envelope(envelope: Any) -> str:
+    if not isinstance(envelope, dict):
+        return f"envelope_type={type(envelope).__name__}"
+
+    parts = []
+    for key in ("id", "model"):
+        value = string_value(envelope.get(key))
+        if value:
+            parts.append(f"{key}={value}")
+
+    choices = envelope.get("choices")
+    if isinstance(choices, list):
+        parts.append(f"choices_count={len(choices)}")
+        if choices and isinstance(choices[0], dict):
+            first_choice = choices[0]
+            finish_reason = string_value(first_choice.get("finish_reason"))
+            if finish_reason:
+                parts.append(f"finish_reason={finish_reason}")
+            message = first_choice.get("message")
+            if isinstance(message, dict):
+                parts.append(f"message_keys={','.join(sorted(str(key) for key in message.keys()))}")
+    else:
+        parts.append(f"keys={','.join(sorted(str(key) for key in envelope.keys()))}")
+
+    return truncate_error_detail(" ".join(parts))
+
+
 def raw_error_message(raw: Any) -> str:
     if not isinstance(raw, str) or not raw.strip():
         return ""
@@ -239,3 +282,26 @@ def truncate_error_detail(value: str) -> str:
     if len(text) <= MAX_ERROR_DETAIL_LENGTH:
         return text
     return f"{text[:MAX_ERROR_DETAIL_LENGTH]}..."
+
+
+@contextmanager
+def response_read_deadline(timeout_seconds: int):
+    if timeout_seconds <= 0 or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+
+    def raise_timeout(signum: int, frame: Any) -> None:
+        raise TimeoutError("OpenRouter response read deadline exceeded.")
+
+    signal.signal(signal.SIGALRM, raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])

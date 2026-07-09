@@ -24,6 +24,17 @@ class FakeHTTPResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+class TimeoutHTTPResponse:
+    def __enter__(self) -> "TimeoutHTTPResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        raise TimeoutError("timed out")
+
+
 class FakeHTTPErrorBody:
     def __init__(self, payload: dict[str, object]) -> None:
         self.payload = payload
@@ -102,6 +113,59 @@ class OpenRouterClientTest(unittest.TestCase):
         self.assertIn("provider=Azure", message)
         self.assertIn("Invalid schema", message)
         self.assertNotIn("very long parsed PDF text", message)
+
+    def test_error_envelope_with_http_200_is_summarized(self) -> None:
+        config = OpenRouterConfig(api_key="test-key", model="test/model")
+        client = OpenRouterClient(config)
+        envelope = {"error": {"message": "Provider returned error", "code": 400}}
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeHTTPResponse(envelope)):
+            with self.assertRaises(OpenRouterError) as context:
+                client.chat_completion(
+                    messages=[{"role": "user", "content": "hello"}],
+                    response_schema={"type": "object", "properties": {}},
+                    schema_name="test_schema",
+                )
+
+        message = str(context.exception)
+        self.assertIn("error envelope", message)
+        self.assertIn("Provider returned error", message)
+
+    def test_malformed_success_envelope_includes_safe_diagnostics(self) -> None:
+        config = OpenRouterConfig(api_key="test-key", model="test/model")
+        client = OpenRouterClient(config)
+        envelope = {
+            "id": "gen-123",
+            "model": "provider/model",
+            "choices": [{"finish_reason": "error", "message": {"refusal": "blocked"}}],
+        }
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeHTTPResponse(envelope)):
+            with self.assertRaises(OpenRouterError) as context:
+                client.chat_completion(
+                    messages=[{"role": "user", "content": "hello"}],
+                    response_schema={"type": "object", "properties": {}},
+                    schema_name="test_schema",
+                )
+
+        message = str(context.exception)
+        self.assertIn("choices[0].message.content", message)
+        self.assertIn("finish_reason=error", message)
+        self.assertIn("message_keys=refusal", message)
+
+    def test_response_read_timeout_is_normalized(self) -> None:
+        config = OpenRouterConfig(api_key="test-key", model="test/model", timeout_seconds=7)
+        client = OpenRouterClient(config)
+
+        with mock.patch("urllib.request.urlopen", return_value=TimeoutHTTPResponse()):
+            with self.assertRaises(OpenRouterError) as context:
+                client.chat_completion(
+                    messages=[{"role": "user", "content": "hello"}],
+                    response_schema={"type": "object", "properties": {}},
+                    schema_name="test_schema",
+                )
+
+        self.assertIn("timed out after 7 seconds", str(context.exception))
 
     def test_default_config_reads_dotenv_without_overriding_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

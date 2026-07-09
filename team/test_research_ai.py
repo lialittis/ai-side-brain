@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from shared.ai.openrouter import OpenRouterClient, OpenRouterConfig
+from shared.ai.openrouter import OpenRouterClient, OpenRouterConfig, OpenRouterError
 from shared.literature_radar import create_radar_paper
 from shared.research import topic_profile_by_id
 from team.literature_radar import import_radar_recommendation
@@ -417,6 +417,92 @@ class TeamResearchAITest(unittest.TestCase):
         self.assertEqual(enriched["ai_enrichment"]["fallback"]["from_source_kind"], "radar_pdf_url")
         self.assertEqual(enriched["scoring"]["source"], "ai_enrichment")
         self.assertEqual(enriched["scoring"]["score"], 88.0)
+
+    def test_radar_ai_enrichment_retries_metadata_only_when_pdf_response_is_malformed(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00423",
+            title="Radar Candidate With Malformed PDF AI Response",
+            abstract="Memory safety and system security for Radar AI enrichment.",
+            year=2026,
+            identifiers={"arxiv_id": "2601.00423"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00423"},
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        recommendation = {
+            "paper": paper,
+            "scoring": {"score": 82, "label": "highly_relevant", "paper_id": paper["id"]},
+            "why_relevant": "Local radar scoring matched memory safety.",
+        }
+        client = SequentialOpenRouterClient(
+            [
+                OpenRouterError(
+                    "OpenRouter response did not contain choices[0].message.content. "
+                    "choices_count=1 finish_reason=error message_keys=refusal"
+                ),
+                ai_response(),
+            ]
+        )
+
+        enriched = enrich_radar_recommendations_with_ai(
+            [recommendation],
+            client=client,
+            tag_catalog=[],
+            limit=1,
+            min_score=1,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertIsNotNone(client.calls[0]["plugins"])
+        self.assertIsNone(client.calls[1]["plugins"])
+        retry_prompt = client.calls[1]["messages"][1]["content"][0]["text"]
+        self.assertIn('"source_kind": "radar_pdf_url_metadata_fallback"', retry_prompt)
+        self.assertEqual(enriched["ai_enrichment"]["status"], "succeeded")
+        self.assertTrue(enriched["ai_enrichment"]["fallback"]["used"])
+        self.assertIn("choices[0].message.content", enriched["ai_enrichment"]["fallback"]["reason"])
+
+    def test_radar_ai_enrichment_retries_metadata_only_when_pdf_request_is_too_large(self) -> None:
+        paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00424",
+            title="Radar Candidate With Large PDF Request",
+            abstract="Memory safety and system security for Radar AI enrichment.",
+            year=2026,
+            identifiers={"arxiv_id": "2601.00424"},
+            links={"arxiv": "https://arxiv.org/abs/2601.00424"},
+            discovered_at=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        recommendation = {
+            "paper": paper,
+            "scoring": {"score": 82, "label": "highly_relevant", "paper_id": paper["id"]},
+            "why_relevant": "Local radar scoring matched memory safety.",
+        }
+        client = SequentialOpenRouterClient(
+            [
+                OpenRouterError(
+                    "OpenRouter request failed with HTTP 400: Content-Length 7785644 exceeds "
+                    "5242880 byte limit; code=400"
+                ),
+                ai_response(),
+            ]
+        )
+
+        enriched = enrich_radar_recommendations_with_ai(
+            [recommendation],
+            client=client,
+            tag_catalog=[],
+            limit=1,
+            min_score=1,
+            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )[0]
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertIsNotNone(client.calls[0]["plugins"])
+        self.assertIsNone(client.calls[1]["plugins"])
+        self.assertEqual(enriched["ai_enrichment"]["status"], "succeeded")
+        self.assertTrue(enriched["ai_enrichment"]["fallback"]["used"])
+        self.assertIn("Content-Length", enriched["ai_enrichment"]["fallback"]["reason"])
 
     def test_legacy_unsupported_non_pdf_link_records_pending_unsupported_link(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

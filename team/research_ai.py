@@ -446,7 +446,18 @@ def should_retry_radar_ai_as_metadata_only(error: Exception, analysis_input: Ana
     message = str(error).lower()
     if "failed to parse" in message and "pdf" in message:
         return True
-    return "file-parser" in message and "pdf" in message
+    if "file-parser" in message and "pdf" in message:
+        return True
+    if "choices[0].message.content" in message:
+        return True
+    if "content-length" in message and "exceeds" in message:
+        return True
+    return "timed out" in message and analysis_input.source_kind in {
+        "radar_cached_pdf",
+        "radar_pdf_url",
+        "uploaded_pdf",
+        "pdf_url",
+    }
 
 
 def radar_recommendation_analysis_bundle(

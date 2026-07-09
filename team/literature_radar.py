@@ -115,7 +115,7 @@ TEAM_RADAR_SETTINGS_KEY = "literature_radar_defaults"
 TEAM_RADAR_DEFAULT_PDF_CACHE_DIR = (
     Path(__file__).resolve().parents[1] / "team" / "data" / "literature-radar-pdfs"
 )
-RADAR_DEFAULT_AI_ENRICH_LIMIT = 5
+RADAR_DEFAULT_AI_ENRICH_LIMIT = 10
 RADAR_DEFAULT_AI_ENRICH_MIN_SCORE = 35
 TEAM_RADAR_SOURCE_CONTACT_ENV = "RADAR_SOURCE_CONTACT_EMAIL"
 TEAM_RADAR_DISCUSSION_STOP_WORDS = {"team", "interests", "context", "attention"}
@@ -495,17 +495,35 @@ def run_team_literature_radar(
                 query_terms=selected_terms,
                 now=now,
             )
+        recommendations = apply_team_radar_selection_model(recommendations, now=now)
+        recommendations = sort_radar_recommendations(recommendations)
         if ai_enrich:
-            recommendations = enrich_radar_recommendations_with_ai(
-                recommendations,
+            tag_catalog = database.list_tag_catalog()
+            ai_scope_size = len(recommendations) if ai_enrich_limit is None else max(
+                recommendation_limit,
+                max(0, int(ai_enrich_limit)),
+            )
+            ai_scope = recommendations[:ai_scope_size]
+            remainder = recommendations[ai_scope_size:]
+            enriched_scope = enrich_radar_recommendations_with_ai(
+                ai_scope,
                 client=ai_client,
-                tag_catalog=database.list_tag_catalog(),
+                tag_catalog=tag_catalog,
                 topic_id=str(TEAM_RADAR_TOPIC_PROFILE["id"]),
                 limit=ai_enrich_limit,
                 min_score=ai_enrich_min_score,
                 now=now,
             )
-        recommendations = apply_team_radar_selection_model(recommendations, now=now)
+            recommendations = apply_team_radar_selection_model([*enriched_scope, *remainder], now=now)
+            recommendations = enrich_visible_radar_ai_gaps(
+                recommendations,
+                client=ai_client,
+                tag_catalog=tag_catalog,
+                topic_id=str(TEAM_RADAR_TOPIC_PROFILE["id"]),
+                visible_limit=recommendation_limit,
+                min_score=ai_enrich_min_score,
+                now=now,
+            )
         recommendations = sort_radar_recommendations(recommendations)[:recommendation_limit]
         recommendations = add_recommendation_attention_summaries(recommendations, now=now)
         if import_results:
@@ -661,6 +679,102 @@ def apply_team_radar_selection_model(
             }
         )
     return selected
+
+
+def enrich_visible_radar_ai_gaps(
+    recommendations: list[dict[str, Any]],
+    *,
+    client: Any | None,
+    tag_catalog: list[dict[str, Any]],
+    topic_id: str,
+    visible_limit: int,
+    min_score: int | None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    current = sort_radar_recommendations(recommendations)
+    enriched_keys: set[str] = set()
+    for _ in range(max(0, int(visible_limit))):
+        gap = first_visible_ai_gap(current, visible_limit=visible_limit, min_score=min_score, seen_keys=enriched_keys)
+        if gap is None:
+            return current
+        key = radar_recommendation_identity(gap)
+        enriched_keys.add(key)
+        enriched = enrich_radar_recommendations_with_ai(
+            [gap],
+            client=client,
+            tag_catalog=tag_catalog,
+            topic_id=topic_id,
+            limit=1,
+            min_score=min_score,
+            now=now,
+        )[0]
+        current = replace_radar_recommendation(current, enriched, key=key)
+        current = apply_team_radar_selection_model(current, now=now)
+        current = sort_radar_recommendations(current)
+    return current
+
+
+def first_visible_ai_gap(
+    recommendations: list[dict[str, Any]],
+    *,
+    visible_limit: int,
+    min_score: int | None,
+    seen_keys: set[str],
+) -> dict[str, Any] | None:
+    minimum_score = None if min_score is None else max(0, min(100, int(min_score)))
+    for recommendation in recommendations[: max(0, int(visible_limit))]:
+        key = radar_recommendation_identity(recommendation)
+        if key in seen_keys or radar_recommendation_has_ai_enrichment(recommendation):
+            continue
+        if minimum_score is not None and radar_recommendation_score(recommendation) < minimum_score:
+            continue
+        return recommendation
+    return None
+
+
+def radar_recommendation_has_ai_enrichment(recommendation: dict[str, Any]) -> bool:
+    ai = recommendation.get("ai_enrichment") if isinstance(recommendation.get("ai_enrichment"), dict) else {}
+    return ai.get("status") == "succeeded"
+
+
+def replace_radar_recommendation(
+    recommendations: list[dict[str, Any]],
+    replacement: dict[str, Any],
+    *,
+    key: str,
+) -> list[dict[str, Any]]:
+    replaced = False
+    updated = []
+    for recommendation in recommendations:
+        if not replaced and radar_recommendation_identity(recommendation) == key:
+            updated.append(replacement)
+            replaced = True
+        else:
+            updated.append(recommendation)
+    if not replaced:
+        updated.append(replacement)
+    return updated
+
+
+def radar_recommendation_identity(recommendation: dict[str, Any]) -> str:
+    paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else recommendation
+    for value in (
+        paper.get("dedupe_key"),
+        paper.get("id"),
+        paper.get("source_paper_id"),
+        paper.get("title"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return str(id(recommendation))
+
+
+def newest_succeeded_literature_radar_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for run in runs:
+        if str(run.get("status") or "") == "succeeded":
+            return run
+    return None
 
 
 def build_team_radar_selection(
@@ -1040,8 +1154,8 @@ def build_team_literature_radar_queue_payload(
     selected_limit = max(1, int(limit))
     selected_recent_days = max(0, int(recent_days or 0))
     counts = database.literature_radar_paper_review_counts()
-    latest_runs = database.list_literature_radar_runs(limit=1)
-    latest_run = latest_runs[0] if latest_runs else None
+    latest_runs = database.list_literature_radar_runs(limit=10)
+    latest_run = newest_succeeded_literature_radar_run(latest_runs) or (latest_runs[0] if latest_runs else None)
     selected_now = now or radar_reference_time_from_run(latest_run)
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
@@ -1221,7 +1335,8 @@ def build_team_literature_radar_brief_payload(
     selected_queue_recent_days = max(0, int(queue_recent_days or 0))
     review_counts = database.literature_radar_paper_review_counts()
     runs = database.list_literature_radar_runs(limit=selected_run_limit)
-    selected_now = now or radar_reference_time_from_run(runs[0] if runs else None) or datetime.now(timezone.utc)
+    latest_run = newest_succeeded_literature_radar_run(runs) or (runs[0] if runs else None)
+    selected_now = now or radar_reference_time_from_run(latest_run) or datetime.now(timezone.utc)
     queue = build_radar_review_queue(
         database.list_literature_radar_papers(limit=None),
         limit=selected_limit,
@@ -1252,7 +1367,7 @@ def build_team_literature_radar_brief_payload(
     )
     top_triage_summary = radar_triage_summary(top_recommendations)
     latest_run_summary = team_literature_radar_run_summary(
-        runs[0] if runs else None,
+        latest_run,
         now=selected_now,
         freshness_max_age_hours=freshness_max_age_hours,
     ) or {}

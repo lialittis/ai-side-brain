@@ -2869,6 +2869,8 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("Unreviewed Radar History Paper", latest_html)
             self.assertIn("Watchable Memory Safety Radar Paper", latest_html)
             self.assertIn("today-paper-card", latest_html)
+            self.assertIn("New in latest run", latest_html)
+            self.assertIn("Saved follow-up", latest_html)
             self.assertIn("Stored queue signal for daily radar review.", latest_html)
             self.assertIn("<strong>Connects to:</strong> Strong match for system security.", latest_html)
             self.assertIn("<strong>Related work:</strong> Related to existing context: Security baseline.", latest_html)
@@ -3128,7 +3130,10 @@ class TeamResearchWebTest(unittest.TestCase):
 
             self.assertIn("Older Higher Priority Radar Paper", latest_html)
             self.assertNotIn("Recent Lower Priority Radar Paper", latest_html)
-            self.assertIn("Showing 1 unhandled worth-reading paper from 1 new high-signal paper.", latest_html)
+            self.assertIn("Showing 1 unhandled worth-reading paper from 1 older unhandled paper.", latest_html)
+            self.assertIn("Still unhandled", latest_html)
+            self.assertIn("first seen 2026-07-01", latest_html)
+            self.assertNotIn("New in latest run", latest_html)
 
     def test_today_page_hides_low_signal_new_radar_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1262,6 +1262,12 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
       gap: 4px;
       min-width: 0;
     }}
+    .today-card-meta {{
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }}
     .today-paper-title {{
       margin: 0;
       font-size: 17px;
@@ -5619,6 +5625,14 @@ def display_radar_datetime(value: str) -> str:
     return f"{date_part} {time_part[:5]}"
 
 
+def display_radar_short_date(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
+    if match:
+        return match.group(1)
+    return display_radar_datetime(text)
+
+
 def relevance_pill(label: str | None) -> str:
     value = label or "unknown"
     css = "good" if value == "highly_relevant" else "warn" if value == "possibly_relevant" else ""
@@ -5677,7 +5691,7 @@ def render_today_page(
       </div>
       {render_today_update_note(latest_run)}
     </section>
-    {render_today_feed(records, review_filter=selected_review, queue_window=queue_window)}
+    {render_today_feed(records, review_filter=selected_review, queue_window=queue_window, latest_run=latest_run)}
     {render_empty_today(records, counts)}
     """
     return page("Papers", body, active="latest")
@@ -5697,7 +5711,19 @@ def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit
     saved_records = watch_queue.get("papers") if isinstance(watch_queue.get("papers"), list) else []
     high_signal_new = [record for record in unreviewed_records if today_record_worth_attention(record)]
     selected_records = latest_stack_records(high_signal_new, saved_records)
-    selected_new_count = sum(1 for record in selected_records if radar_history_review_status(record) != "watch")
+    latest_run = payload.get("latest_run") if isinstance(payload.get("latest_run"), dict) else {}
+    selected_new_count = sum(
+        1
+        for record in selected_records
+        if radar_history_review_status(record) != "watch"
+        and today_record_from_latest_run(record, latest_run)
+    )
+    selected_unhandled_backlog_count = sum(
+        1
+        for record in selected_records
+        if radar_history_review_status(record) != "watch"
+        and not today_record_from_latest_run(record, latest_run)
+    )
     selected_saved_count = sum(1 for record in selected_records if radar_history_review_status(record) == "watch")
     mode = "latest" if selected_records else "empty"
     visible_records = selected_records[:selected_limit]
@@ -5711,6 +5737,7 @@ def build_today_radar_selection_payload(database: TeamResearchDatabase, *, limit
         "stack_count": len(selected_records),
         "new_active_count": len(unreviewed_records),
         "new_high_signal_count": selected_new_count,
+        "unhandled_backlog_count": selected_unhandled_backlog_count,
         "saved_active_count": selected_saved_count,
         "thresholds": {
             "ai_min_score": TODAY_AI_MIN_SCORE,
@@ -5787,6 +5814,14 @@ def today_has_ai_support(record: dict[str, Any]) -> bool:
     return source == "ai_enrichment"
 
 
+def today_record_from_latest_run(record: dict[str, Any], latest_run: dict[str, Any] | None) -> bool:
+    if not isinstance(latest_run, dict) or not latest_run:
+        return False
+    latest_seen = str(record.get("latest_seen_at") or "").strip()
+    run_seen = str(latest_run.get("completed_at") or latest_run.get("started_at") or "").strip()
+    return bool(latest_seen and run_seen and latest_seen == run_seen)
+
+
 def radar_today_status_line(
     counts: dict[str, Any],
     visible_count: int,
@@ -5810,6 +5845,7 @@ def radar_today_status_line(
     active_count = selection_count("active_count", 0)
     new_active_count = selection_count("new_active_count", counts.get("unreviewed"))
     new_high_signal_count = selection_count("new_high_signal_count", visible_count)
+    unhandled_backlog_count = selection_count("unhandled_backlog_count", 0)
     saved_active_count = selection_count("saved_active_count", counts.get("watch"))
     if visible_count and not mode:
         return (
@@ -5826,6 +5862,11 @@ def radar_today_status_line(
         if saved_active_count:
             source_parts.append(
                 f"{saved_active_count} saved follow-up{'' if saved_active_count == 1 else 's'}"
+            )
+        if unhandled_backlog_count:
+            source_parts.append(
+                f"{unhandled_backlog_count} older unhandled paper"
+                f"{'' if unhandled_backlog_count == 1 else 's'}"
             )
         source_text = " and ".join(source_parts) if source_parts else "active Radar papers"
         return (
@@ -6034,11 +6075,17 @@ def render_today_feed(
     *,
     review_filter: str,
     queue_window: dict[str, int | str] | None = None,
+    latest_run: dict[str, Any] | None = None,
 ) -> str:
     if not records:
         return ""
     items = "".join(
-        render_today_paper_card(record, review_filter=review_filter, queue_window=queue_window)
+        render_today_paper_card(
+            record,
+            review_filter=review_filter,
+            queue_window=queue_window,
+            latest_run=latest_run,
+        )
         for record in records
     )
     return f"""
@@ -6053,6 +6100,7 @@ def render_today_paper_card(
     *,
     review_filter: str,
     queue_window: dict[str, int | str] | None = None,
+    latest_run: dict[str, Any] | None = None,
 ) -> str:
     review = radar_review_from_record(record)
     summary = today_research_summary(record)
@@ -6072,11 +6120,15 @@ def render_today_paper_card(
         queue_window=queue_window,
     )
     status = member_review_status_label(str(review.get("status") or "unreviewed"))
+    recency = render_today_recency_pills(record, latest_run)
     title = html_escape(record.get("title") or "Untitled radar paper")
     return f"""
     <article class="today-paper-card">
       <div class="today-paper-head">
-        <div class="muted">{html_escape(status)}</div>
+        <div class="today-card-meta">
+          <span class="pill">{html_escape(status)}</span>
+          {recency}
+        </div>
         <h3 class="today-paper-title">{title}</h3>
       </div>
       {f'<p class="today-paper-summary">{html_escape(summary)}</p>' if summary else ''}
@@ -6088,6 +6140,25 @@ def render_today_paper_card(
       </div>
     </article>
     """
+
+
+def render_today_recency_pills(record: dict[str, Any], latest_run: dict[str, Any] | None = None) -> str:
+    if radar_history_review_status(record) == "watch":
+        first_seen = display_radar_short_date(str(record.get("first_seen_at") or ""))
+        detail = f" · first seen {first_seen}" if first_seen else ""
+        return f'<span class="pill good">Saved follow-up{html_escape(detail)}</span>'
+    if today_record_from_latest_run(record, latest_run):
+        return '<span class="pill good">New in latest run</span>'
+    first_seen = display_radar_short_date(str(record.get("first_seen_at") or ""))
+    latest_seen = display_radar_short_date(str(record.get("latest_seen_at") or ""))
+    detail = ""
+    if first_seen and latest_seen and first_seen != latest_seen:
+        detail = f" · first seen {first_seen}; last seen {latest_seen}"
+    elif first_seen:
+        detail = f" · first seen {first_seen}"
+    elif latest_seen:
+        detail = f" · last seen {latest_seen}"
+    return f'<span class="pill warn">Still unhandled{html_escape(detail)}</span>'
 
 
 def today_research_summary(record: dict[str, Any]) -> str:

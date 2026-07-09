@@ -27,6 +27,7 @@ from team.literature_radar import (
     apply_team_radar_source_preset,
     build_team_literature_radar_brief_payload,
     build_team_literature_radar_queue_payload,
+    enrich_visible_radar_ai_gaps,
     import_radar_recommendation,
     run_team_literature_radar,
     score_team_radar_paper,
@@ -719,6 +720,153 @@ class TeamLiteratureRadarTest(unittest.TestCase):
             self.assertTrue(stored_run["collection_config"]["ai_enrich"])
             self.assertEqual(stored_run["collection_config"]["ai_enrich_limit"], 1)
             self.assertEqual(stored_run["collection_config"]["ai_enrich_min_score"], 1)
+
+    def test_run_team_literature_radar_spends_ai_budget_on_final_shortlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = TeamResearchDatabase(Path(temp_dir) / "research.sqlite3")
+            low = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00334",
+                title="Low Local Priority Before Final Selection",
+                abstract="Peripheral systems paper.",
+                identifiers={"arxiv_id": "2601.00334"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00334"},
+            )
+            high = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id="2601.00335",
+                title="High Final Shortlist Priority",
+                abstract="Memory safety and system security for final radar selection.",
+                identifiers={"arxiv_id": "2601.00335"},
+                links={"arxiv": "https://arxiv.org/abs/2601.00335"},
+            )
+            low_recommendation = {
+                "paper": low,
+                "scoring": {"score": 20, "label": "low_relevance", "paper_id": low["id"]},
+                "why_relevant": "Low local match.",
+                "recommended_action": "skip",
+                "summary": {},
+            }
+            high_recommendation = {
+                "paper": high,
+                "scoring": {"score": 96, "label": "highly_relevant", "paper_id": high["id"]},
+                "why_relevant": "High local match.",
+                "recommended_action": "review_today",
+                "summary": {},
+            }
+            enriched_titles: list[str] = []
+
+            def fake_enrich(recommendations: list[dict[str, object]], **kwargs: object) -> list[dict[str, object]]:
+                enriched_titles.extend(str((item.get("paper") or {}).get("title")) for item in recommendations)
+                return [
+                    {
+                        **item,
+                        "ai_enrichment": {
+                            "status": "succeeded",
+                            "screening": {
+                                "score": 90,
+                                "label": "highly_relevant",
+                                "reasons": ["AI enriched final shortlist."],
+                                "confidence": "high",
+                            },
+                        },
+                    }
+                    for item in recommendations
+                ]
+
+            with mock.patch("team.literature_radar.collect_arxiv", return_value=[low, high]):
+                with mock.patch(
+                    "team.literature_radar.recommend_papers",
+                    return_value=[low_recommendation, high_recommendation],
+                ):
+                    with mock.patch("team.literature_radar.enrich_radar_recommendations_with_ai", side_effect=fake_enrich):
+                        result = run_team_literature_radar(
+                            database,
+                            sources=["arxiv"],
+                            query_terms=["memory safety"],
+                            max_results=2,
+                            recommendation_limit=1,
+                            ai_enrich=True,
+                            ai_enrich_limit=1,
+                            ai_enrich_min_score=1,
+                            now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+                        )
+
+            self.assertEqual(enriched_titles, ["High Final Shortlist Priority"])
+            self.assertEqual(result["recommendations"][0]["paper"]["title"], "High Final Shortlist Priority")
+
+    def test_enrich_visible_radar_ai_gaps_covers_post_ai_reranked_visible_cards(self) -> None:
+        enriched_top = []
+        for index in range(3):
+            paper = create_radar_paper(
+                source_id="arxiv",
+                source_paper_id=f"2601.0043{index}",
+                title=f"Already AI Enriched {index}",
+                abstract="Memory safety and system security.",
+                identifiers={"arxiv_id": f"2601.0043{index}"},
+            )
+            enriched_top.append(
+                {
+                    "paper": paper,
+                    "scoring": {"score": 80 - index, "label": "highly_relevant", "paper_id": paper["id"]},
+                    "ai_enrichment": {
+                        "status": "succeeded",
+                        "screening": {
+                            "score": 80 - index,
+                            "label": "highly_relevant",
+                            "reasons": ["AI says useful."],
+                            "confidence": "high",
+                        },
+                    },
+                }
+            )
+        gap_paper = create_radar_paper(
+            source_id="arxiv",
+            source_paper_id="2601.00440",
+            title="Post AI Reranked Gap",
+            abstract="Agent security and vulnerability detection.",
+            identifiers={"arxiv_id": "2601.00440"},
+        )
+        visible_gap = {
+            "paper": gap_paper,
+            "scoring": {"score": 77, "label": "highly_relevant", "paper_id": gap_paper["id"]},
+        }
+        calls: list[str] = []
+
+        def fake_enrich(recommendations: list[dict[str, object]], **kwargs: object) -> list[dict[str, object]]:
+            enriched = []
+            for recommendation in recommendations:
+                paper = recommendation.get("paper") if isinstance(recommendation.get("paper"), dict) else {}
+                calls.append(str(paper.get("title")))
+                enriched.append(
+                    {
+                        **recommendation,
+                        "ai_enrichment": {
+                            "status": "succeeded",
+                            "screening": {
+                                "score": 85,
+                                "label": "highly_relevant",
+                                "reasons": ["Recovered final visible card."],
+                                "confidence": "high",
+                            },
+                        },
+                    }
+                )
+            return enriched
+
+        with mock.patch("team.literature_radar.enrich_radar_recommendations_with_ai", side_effect=fake_enrich):
+            result = enrich_visible_radar_ai_gaps(
+                [*enriched_top, visible_gap],
+                client=None,
+                tag_catalog=[],
+                topic_id="team-literature-radar",
+                visible_limit=4,
+                min_score=35,
+                now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(calls, ["Post AI Reranked Gap"])
+        self.assertTrue(all(item.get("ai_enrichment", {}).get("status") == "succeeded" for item in result[:4]))
 
     def test_run_team_literature_radar_uses_configured_arxiv_categories(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4199,7 +4347,7 @@ class TeamLiteratureRadarTest(unittest.TestCase):
         self.assertEqual(payload["operations_readiness"]["missing_required_scripts"], [])
         self.assertEqual(payload["operations_readiness"]["non_executable_scripts"], [])
         self.assertEqual(payload["schema_migrations"]["status"], "current")
-        self.assertEqual(payload["schema_migrations"]["current_version"], 5)
+        self.assertEqual(payload["schema_migrations"]["current_version"], 6)
         self.assertEqual(payload["schema_migrations"]["pending_count"], 0)
         self.assertEqual(payload["guardrail_readiness"]["product"], "team")
         self.assertEqual(payload["guardrail_readiness"]["status"], "ready")
