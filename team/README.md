@@ -65,8 +65,12 @@ Open:
 http://127.0.0.1:8790
 ```
 
-For reversible SSH tunnel or LAN access from another machine, see
-[Easy LAN Deployment](docs/EASY_LAN_DEPLOYMENT.md).
+For day-to-day start/stop commands, see
+[Operations Quick Guide](docs/OPERATIONS_QUICK_GUIDE.md). For reversible SSH
+tunnel, HTTPS reverse proxy, Tailscale, or LAN access from another machine, see
+[Easy LAN Deployment](docs/EASY_LAN_DEPLOYMENT.md),
+[HTTPS Reverse Proxy](docs/HTTPS_REVERSE_PROXY.md), and
+[Tailscale Deployment](docs/TAILSCALE_DEPLOYMENT.md).
 
 The local MVP runs shared source intake, OpenRouter AI analysis when configured, research-card generation, relevance screening, Team review-state creation, explicit acceptance into a project library, and basic Markdown brief generation.
 

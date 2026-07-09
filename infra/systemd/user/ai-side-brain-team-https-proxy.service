@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Side-Brain Team HTTPS Reverse Proxy
+Documentation=file:%h/workspace/ai-side-brain/team/docs/HTTPS_REVERSE_PROXY.md
+After=network.target ai-side-brain-team-research-web.service
+Wants=ai-side-brain-team-research-web.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/ai-side-brain
+ExecStart=%h/workspace/ai-side-brain/team/scripts/serve_https_proxy.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
