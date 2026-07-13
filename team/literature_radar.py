@@ -2675,7 +2675,7 @@ def import_radar_recommendation(
         result.item["id"],
         project_id=project_id,
         actor=actor,
-        reason=f"Imported by Literature Radar at {iso_timestamp(selected_now)}.",
+        reason=radar_library_import_reason(paper, recommendation, now=selected_now),
         now=selected_now,
     )
     screening = database.apply_team_interest_relevance(result.item["id"], now=selected_now)
@@ -2711,6 +2711,7 @@ def import_radar_paper_record(
     *,
     project_id: str = DEFAULT_LIBRARY_PROJECT_ID,
     actor: str = "team-member",
+    analyze: bool = True,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     paper_record = database.get_literature_radar_paper(dedupe_key)
@@ -2747,7 +2748,7 @@ def import_radar_paper_record(
         recommendation,
         project_id=project_id,
         actor=actor,
-        analyze=True,
+        analyze=analyze,
         now=now,
     )
     import_result["dedupe_key"] = dedupe_key
@@ -2758,6 +2759,35 @@ def import_radar_paper_record(
         now=now,
     )
     return import_result
+
+
+def radar_library_import_reason(
+    paper: dict[str, Any],
+    recommendation: dict[str, Any],
+    *,
+    now: datetime,
+) -> str:
+    scoring = recommendation.get("scoring") if isinstance(recommendation.get("scoring"), dict) else {}
+    parts = [f"Added from Papers stack at {iso_timestamp(now)}."]
+    score = scoring.get("score")
+    label = scoring.get("label")
+    score_parts = []
+    if score is not None:
+        try:
+            score_parts.append(f"score {int(float(score))}")
+        except (TypeError, ValueError):
+            score_parts.append(f"score {score}")
+    if label:
+        score_parts.append(str(label).replace("_", " "))
+    if score_parts:
+        parts.append("Relevance: " + ", ".join(score_parts) + ".")
+    matched = scoring.get("matched_positive_keywords") or []
+    if matched:
+        parts.append("Matched: " + ", ".join(str(value) for value in matched[:6]) + ".")
+    source = paper.get("source_id") or paper_source_provenance(paper).get("source_id")
+    if source:
+        parts.append(f"Source: {source}.")
+    return " ".join(parts)
 
 
 def import_literature_radar_queue(

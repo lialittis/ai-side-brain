@@ -1600,6 +1600,14 @@ def page(title: str, body: str, *, active: str = "papers") -> str:
         }});
       }});
     }});
+    document.querySelectorAll("form[data-submit-label]").forEach(function (form) {{
+      form.addEventListener("submit", function () {{
+        form.querySelectorAll("button[type='submit']").forEach(function (button) {{
+          button.disabled = true;
+          button.textContent = form.getAttribute("data-submit-label") || "Saving...";
+        }});
+      }});
+    }});
     document.querySelectorAll("[data-file-drop]").forEach(function (dropzone) {{
       var input = document.getElementById(dropzone.getAttribute("data-file-input") || "");
       if (!input) {{
@@ -4551,12 +4559,12 @@ def render_radar_paper_import_control(
             return f'<a class="button" href="{html_escape(href)}">In Library</a>'
         return f'<a class="button" href="/library?notice={quote(f"In library: {imported_item_id}")}">In Library</a>'
     return f"""
-    <form class="inline-form" method="post" action="/radar/papers/import">
+    <form class="inline-form" method="post" action="/radar/papers/import" data-submit-label="Adding...">
       <input type="hidden" name="dedupe_key" value="{html_escape(record.get("dedupe_key") or "")}">
       <input type="hidden" name="review_filter" value="{html_escape(clean_radar_review_filter(review_filter))}">
       <input type="hidden" name="return_to" value="{html_escape(return_to)}">
       {render_radar_queue_hidden_inputs(queue_window)}
-      <button class="mini-button primary" type="submit">Add to Library</button>
+      <button class="mini-button primary" type="submit" title="Save this paper to the Team Library and queue AI analysis.">Add to Library</button>
     </form>
     """
 
@@ -9163,7 +9171,26 @@ def recover_paper(database: TeamResearchDatabase, fields: dict[str, str]) -> str
     return item_id
 
 
+def radar_import_notice(import_result: dict[str, Any], ai_run: dict[str, Any] | None = None) -> str:
+    item_id = str(import_result.get("item_id") or "")
+    if import_result.get("status") == "existing":
+        return f"Already in library: {item_id}."
+    if ai_run:
+        status = str(ai_run.get("status") or "queued").replace("_", " ")
+        return f"Added {item_id} to the library. AI analysis {status}."
+    return f"Added {item_id} to the library."
+
+
 def import_radar_recommendation_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    return str(import_radar_recommendation_to_library_result(database, fields)["item_id"])
+
+
+def import_radar_recommendation_to_library_result(
+    database: TeamResearchDatabase,
+    fields: dict[str, str],
+    *,
+    analyze: bool = True,
+) -> dict[str, Any]:
     run_id = required_field(fields, "run_id")
     dedupe_key = required_field(fields, "dedupe_key")
     recommendation_record = next(
@@ -9180,7 +9207,7 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
         database,
         recommendation_record.get("recommendation") or {},
         actor=fields.get("actor") or "team-member",
-        analyze=True,
+        analyze=analyze,
     )
     import_result["dedupe_key"] = dedupe_key
     database.mark_literature_radar_recommendation_imported(
@@ -9189,17 +9216,27 @@ def import_radar_recommendation_to_library(database: TeamResearchDatabase, field
         import_result,
         actor=fields.get("actor") or "team-member",
     )
-    return str(import_result["item_id"])
+    return import_result
 
 
 def import_radar_paper_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> str:
+    return str(import_radar_paper_to_library_result(database, fields)["item_id"])
+
+
+def import_radar_paper_to_library_result(
+    database: TeamResearchDatabase,
+    fields: dict[str, str],
+    *,
+    analyze: bool = True,
+) -> dict[str, Any]:
     dedupe_key = required_field(fields, "dedupe_key")
     import_result = import_radar_paper_record(
         database,
         dedupe_key,
         actor=fields.get("actor") or "team-member",
+        analyze=analyze,
     )
-    return str(import_result["item_id"])
+    return import_result
 
 
 def import_radar_queue_to_library(database: TeamResearchDatabase, fields: dict[str, str]) -> dict[str, Any]:
@@ -9882,16 +9919,24 @@ class ResearchWebHandler(BaseHTTPRequestHandler):
                 notice = f"Added {item_id} to the library. AI analysis {ai_run.get('status', 'queued')}."
                 self.redirect(f"/library?notice={quote(notice)}")
             elif parsed.path == "/radar/import":
-                item_id = import_radar_recommendation_to_library(self.database, fields)
+                import_result = import_radar_recommendation_to_library_result(self.database, fields, analyze=False)
+                item_id = str(import_result["item_id"])
+                ai_run = None
+                if import_result.get("status") != "existing":
+                    ai_run = queue_paper_ai_analysis_from_web(self.database, item_id)
                 run_id = fields.get("run_id") or ""
-                notice = f"Added {item_id} to the library."
+                notice = radar_import_notice(import_result, ai_run)
                 if fields.get("return_to") == "brief":
                     self.redirect(radar_brief_path_from_fields(fields, notice=notice))
                 else:
                     self.redirect(f"/radar?run={quote(run_id, safe='')}&notice={quote(notice)}")
             elif parsed.path == "/radar/papers/import":
-                item_id = import_radar_paper_to_library(self.database, fields)
-                notice = f"Added {item_id} to the library."
+                import_result = import_radar_paper_to_library_result(self.database, fields, analyze=False)
+                item_id = str(import_result["item_id"])
+                ai_run = None
+                if import_result.get("status") != "existing":
+                    ai_run = queue_paper_ai_analysis_from_web(self.database, item_id)
+                notice = radar_import_notice(import_result, ai_run)
                 if fields.get("return_to") == "latest":
                     self.redirect(f"/?notice={quote(notice)}")
                 elif fields.get("return_to") == "queue":

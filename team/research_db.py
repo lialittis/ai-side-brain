@@ -601,7 +601,8 @@ class TeamResearchDatabase:
         )
         if reason:
             library_entry["reason"] = reason
-        library_entry["status"] = "candidate"
+            library_entry["import_reason"] = reason
+        library_entry["status"] = "useful"
 
         audit_events = [
             create_audit_event(
@@ -1548,7 +1549,7 @@ class TeamResearchDatabase:
                 )
                 restored_entry.update(
                     {
-                        "status": "candidate",
+                        "status": "useful",
                         "restored_by": actor,
                         "restored_at": timestamp,
                     }
@@ -1558,7 +1559,7 @@ class TeamResearchDatabase:
                 updated_entry = dict(entry)
                 updated_entry.update(
                     {
-                        "status": "candidate",
+                        "status": "useful",
                         "restored_by": actor,
                         "restored_at": timestamp,
                     }

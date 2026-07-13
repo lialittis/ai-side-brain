@@ -54,10 +54,11 @@ from team.research_web import (
     radar_queue_path_from_fields,
     radar_settings_from_fields,
     import_radar_recommendation_to_library,
-    import_radar_paper_to_library,
+    import_radar_paper_to_library_result,
     import_radar_queue_to_library,
     library_redirect_path,
     make_handler,
+    radar_import_notice,
     radar_queue_review_notice,
     review_radar_queue_usefulness,
     review_radar_paper,
@@ -1523,18 +1524,31 @@ class TeamResearchWebTest(unittest.TestCase):
             self.assertIn("PDF: arxiv_or_open_repository", papers_html)
             self.assertIn('action="/radar/papers"', papers_html)
             self.assertIn('action="/radar/papers/import"', papers_html)
+            self.assertIn('data-submit-label="Adding..."', papers_html)
+            self.assertIn("Save this paper to the Team Library and queue AI analysis.", papers_html)
 
-            with mock.patch("team.literature_radar.analyze_submitted_item", return_value={"status": "pending"}):
-                item_id = import_radar_paper_to_library(
+            with mock.patch("team.literature_radar.analyze_submitted_item", return_value={"status": "pending"}) as analyzer:
+                import_result = import_radar_paper_to_library_result(
                     database,
                     {
                         "dedupe_key": paper["dedupe_key"],
                         "actor": "alice",
                     },
+                    analyze=False,
                 )
+                analyzer.assert_not_called()
+            item_id = str(import_result["item_id"])
+            self.assertEqual(import_result["status"], "imported")
+            self.assertEqual(
+                radar_import_notice(import_result, {"status": "pending"}),
+                f"Added {item_id} to the library. AI analysis pending.",
+            )
 
             latest = database.list_latest_relevant_papers()
             self.assertEqual(latest[0]["item"]["id"], item_id)
+            self.assertEqual(latest[0]["library_entry"]["status"], "useful")
+            self.assertIn("Added from Papers stack", latest[0]["library_entry"]["import_reason"])
+            self.assertIn("Relevance:", latest[0]["library_entry"]["import_reason"])
             self.assertIn(
                 "Signal: A local summary for radar review.",
                 latest[0]["item"]["radar"]["recommendation"]["signal_lines"][0],
@@ -1546,6 +1560,17 @@ class TeamResearchWebTest(unittest.TestCase):
             imported_html = render_literature_radar_papers_page(database, limit=50)
             self.assertIn(f"Imported: {item_id}", imported_html)
             self.assertIn("In Library", imported_html)
+            self.assertNotIn('data-submit-label="Adding..."', imported_html)
+            existing_result = import_radar_paper_to_library_result(
+                database,
+                {
+                    "dedupe_key": paper["dedupe_key"],
+                    "actor": "alice",
+                },
+                analyze=False,
+            )
+            self.assertEqual(existing_result["status"], "existing")
+            self.assertEqual(radar_import_notice(existing_result), f"Already in library: {item_id}.")
             imported_brief_html = render_literature_radar_brief_page(
                 database,
                 days=7,
@@ -3922,7 +3947,7 @@ class TeamResearchWebTest(unittest.TestCase):
             recover_paper(database, {"item_id": item_id})
             recovered = database.get_bundle(item_id)
             self.assertEqual(recovered["team_record"]["review_status"], "accepted")
-            self.assertEqual(recovered["library_entries"][0]["status"], "candidate")
+            self.assertEqual(recovered["library_entries"][0]["status"], "useful")
 
     def test_recovery_expires_after_24_hours(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
